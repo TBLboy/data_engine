@@ -104,12 +104,12 @@ def _classify_object_role(object_scope: str, relative_key: str) -> str:
         if normalized == 'camera_info.json':
             return 'camera_info'
         if normalized.startswith('cameras/') and normalized.endswith('.mp4'):
-            if 'rgb' in normalized:
-                return 'camera_rgb_video'
             if 'depth' in normalized and 'colormap' in normalized:
                 return 'camera_depth_colormap_video'
             if 'depth' in normalized:
                 return 'camera_depth_video'
+            if 'rgb' in normalized or normalized.endswith('cam_top.mp4') or normalized.endswith('cam_left_wrist.mp4') or normalized.endswith('cam_right_wrist.mp4'):
+                return 'camera_rgb_video'
             if 'left' in normalized or 'right' in normalized:
                 return 'camera_aux_video'
         if normalized.endswith('.npy') and ('timestamp' in normalized or 'sync' in normalized):
@@ -199,37 +199,14 @@ def _upsert_discovered_prefix(
     record.last_seen_scan_id = scan_job_id
 
 
-def run_minio_scan(
+def _execute_minio_scan(
     db: Session,
     *,
-    bucket: str,
+    scan_job: ScanJob,
     operator: User,
-    scope: str = 'full',
-    minio_service: MinioService | None = None,
+    service: MinioService,
 ) -> ScanJob:
-    require_roles(operator, 'admin', 'qc_manager')
-    normalized_bucket = bucket.strip()
-    if not normalized_bucket:
-        raise ValueError('bucket 不能为空')
-
-    service = minio_service or get_minio_service()
-    scan_job = ScanJob(
-        id=_scan_job_id(normalized_bucket),
-        bucket=normalized_bucket,
-        scope=scope,
-        status='scanning',
-        total_prefixes=0,
-        confirmed_lists=0,
-        total_episodes=0,
-        new_episodes=0,
-        triggered_by=operator.id,
-        error_detail='',
-        started_at=_utcnow(),
-        finished_at=None,
-    )
-    db.add(scan_job)
-    db.flush()
-
+    normalized_bucket = scan_job.bucket.strip()
     try:
         prefix_info: dict[str, dict[str, object]] = defaultdict(lambda: {
             'children': set(),
@@ -288,6 +265,8 @@ def run_minio_scan(
 
         scan_job.total_prefixes = len(current_prefixes)
         scan_job.status = 'classifying'
+        db.commit()
+        db.refresh(scan_job)
 
         classification_rules = db.query(ClassificationRule).filter(ClassificationRule.is_active == True).order_by(
             ClassificationRule.priority.desc(),
@@ -503,6 +482,7 @@ def run_minio_scan(
             batch.episode_count = len(raw_episode_names | processed_episode_names)
             task_type.total_batches = db.query(Batch).filter(Batch.task_type_id == task_type.id).count()
             task_type.total_episodes = db.query(Episode).join(Batch, Episode.batch_id == Batch.id).filter(Batch.task_type_id == task_type.id).count()
+            db.commit()
 
         for list_record in db.query(ListRecord).filter(ListRecord.bucket == normalized_bucket).all():
             if list_record.id not in current_list_ids:
@@ -539,3 +519,57 @@ def run_minio_scan(
         db.commit()
         db.refresh(scan_job)
         raise
+
+
+def run_minio_scan(
+    db: Session,
+    *,
+    bucket: str,
+    operator: User,
+    scope: str = 'full',
+    minio_service: MinioService | None = None,
+) -> ScanJob:
+    require_roles(operator, 'admin', 'qc_manager')
+    normalized_bucket = bucket.strip()
+    if not normalized_bucket:
+        raise ValueError('bucket 不能为空')
+
+    service = minio_service or get_minio_service()
+    scan_job = ScanJob(
+        id=_scan_job_id(normalized_bucket),
+        bucket=normalized_bucket,
+        scope=scope,
+        status='scanning',
+        total_prefixes=0,
+        confirmed_lists=0,
+        total_episodes=0,
+        new_episodes=0,
+        triggered_by=operator.id,
+        error_detail='',
+        started_at=_utcnow(),
+        finished_at=None,
+    )
+    db.add(scan_job)
+    db.flush()
+    return _execute_minio_scan(db, scan_job=scan_job, operator=operator, service=service)
+
+
+def resume_minio_scan(
+    db: Session,
+    *,
+    scan_job_id: str,
+    operator: User,
+    minio_service: MinioService | None = None,
+) -> ScanJob:
+    require_roles(operator, 'admin', 'qc_manager')
+    scan_job = db.query(ScanJob).filter(ScanJob.id == scan_job_id).first()
+    if not scan_job:
+        raise ValueError('scan job 不存在')
+    scan_job.status = 'scanning'
+    scan_job.error_detail = ''
+    scan_job.started_at = _utcnow()
+    scan_job.finished_at = None
+    db.commit()
+    db.refresh(scan_job)
+    service = minio_service or get_minio_service()
+    return _execute_minio_scan(db, scan_job=scan_job, operator=operator, service=service)

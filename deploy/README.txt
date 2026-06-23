@@ -13,6 +13,8 @@ This compose stack is for internal LAN deployment of the V1 manual QC platform.
 - `backend`: FastAPI service
 - `db`: PostgreSQL business database with persistent Docker volume
 
+Long-running MinIO full scans can exceed the default nginx upstream timeout, so the bundled `frontend/nginx.conf` now sets 300s proxy timeouts for `/api/`.
+
 ## Object storage
 - PostgreSQL business data persists in volume `robot_qc_postgres`
 - Episode raw/processed artifacts are expected in MinIO; configure endpoint, bucket, and credentials through environment variables
@@ -61,8 +63,8 @@ docker compose -f software/deploy/docker-compose.yml up --build -d backend front
 ```
 
 ## Required environment changes before real deployment
-- Replace `SECRET_KEY=change-me-before-deploy`
-- Replace the sample PostgreSQL password in `docker-compose.yml`
+- Export `SECRET_KEY`, `POSTGRES_PASSWORD`, `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, and optionally `MINIO_DEFAULT_BUCKET` before `docker compose up`
+- Keep MinIO credentials out of the compose file; inject them from shell env, `.env`, or your secret manager
 - Set `SESSION_COOKIE_SECURE=true` when serving over HTTPS
 - Keep `APP_ENV=production` for deployed backend containers
 - Treat `alembic upgrade head` as a required release step before backend rollout

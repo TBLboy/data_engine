@@ -138,6 +138,20 @@ class MetricCardSchema(BaseModel):
     description: str
 
 
+class ManualQcMediaSchema(BaseModel):
+    objectId: str
+    role: str
+    label: str
+    variant: str
+    slot: str
+    mimeType: str
+    previewUrl: str
+    previewExpiresAt: str | None
+    refreshable: bool
+    downloadable: bool
+    sortOrder: int
+
+
 class TimelineSegmentSchema(BaseModel):
     start: int
     end: int
@@ -268,6 +282,22 @@ class ManualQcContextSchema(BaseModel):
     timelineSegments: list[TimelineSegmentSchema]
     revisions: list[QcRevisionSchema]
     reviewLock: ReviewLockSchema
+    media: list[ManualQcMediaSchema]
+
+
+class ManualQcMediaRefreshRequestSchema(BaseModel):
+    objectIds: list[str]
+
+
+class ManualQcMediaRefreshItemSchema(BaseModel):
+    objectId: str
+    previewUrl: str
+    previewExpiresAt: str | None
+    refreshable: bool
+
+
+class ManualQcMediaRefreshResponseSchema(BaseModel):
+    media: list[ManualQcMediaRefreshItemSchema]
 
 
 class DashboardPayloadSchema(BaseModel):

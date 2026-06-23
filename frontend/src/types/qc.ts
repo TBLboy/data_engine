@@ -107,6 +107,20 @@ export interface MetricCard {
   description: string
 }
 
+export interface ManualQcMedia {
+  objectId: string
+  role: string
+  label: string
+  variant: string
+  slot: string
+  mimeType: string
+  previewUrl: string
+  previewExpiresAt: string | null
+  refreshable: boolean
+  downloadable: boolean
+  sortOrder: number
+}
+
 export interface TimelineSegment {
   start: number
   end: number

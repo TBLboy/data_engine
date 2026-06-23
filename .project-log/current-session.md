@@ -55,8 +55,9 @@
 - 已在 scan API 切换后继续收口下游链路：`database/dashboard` 扫描任务视图已全部改为 bucket/scope 语义，`BatchSummary` 已切到 `bucket + storagePrefix`，frontend mock 已同步为 MinIO 字段
 - manual QC 真实上下文已从本地 processed 目录读取切换为基于控制面 `episode_inventory + episode_objects + lists` 的 MinIO 对象读取；后端直接从 MinIO 拉取 `manifest.json` / `metadata.json` / `telemetry.npz` 生成 metrics 与 timeline，不再参与旧本地扫描目录逻辑
 - 已继续推进旧本地字段清理：新增 `app/services/authz.py` 承接权限校验，旧 `app/services/ingestion.py` 与 `models/ingest.py` 已从运行路径删除；同时新增 Alembic revision `20260623_0003` 用于删除 `ingest_jobs`、`batches.storage_path`、`episodes.source_path/source_hash/ingest_status`
-- 已完成首轮真实 MinIO 运行时验证：使用 `yaocao` bucket 在临时 SQLite 库上成功执行真实扫描，产出 `scan_jobs=1`、`lists=39`、`episode_inventory=3699`、`episode_objects=1857532`、`batches=39`、`episodes=3699`，说明 scanner 已能把对象湖数据真正沉到控制面和业务层
-- manual QC 结构化对象读取已通过真实对象验证：`_build_real_manual_qc_context()` 能基于真实 `episode_000000` 从 MinIO 读取 `telemetry.npz`/`manifest.json`/`metadata.json`，返回 `frameCount=394`、`metric0=q_motion 5.9`、`timelineSegments=3`
+- 已完成真实浏览器媒体验收：Playwright 直接打开生产态 manual QC 页面，观察到 `videos=3`、`refreshVisible=true`、`downloadButtons=3`，说明真实视频元素已经在浏览器侧渲染成功
+- 生产 HTTP 扫描入口已从 504 改为异步返回 queued job，且至少有多条 queued job 在生产 PostgreSQL 中真实跑到 `done`（如 `queued_1782227875_user_admin`、`queued_1782230632_user_admin`）；当前剩余问题收敛为 queued worker 存在不稳定性，并非业务链完全不可用
+- 已完成真实对象级验证：manual QC payload 针对真实 MinIO episode 已返回 3 路媒体 descriptors，并带有有效 `previewUrl`；当前由于临时验证库尚未生成 `qc_task`，`refreshable=false` 属于预期结果，后续需在完整派发链路下验证 refresh 行为
 
 ## Current Risks
 

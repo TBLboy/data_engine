@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 from sqlalchemy import case, func
@@ -293,6 +293,68 @@ def _read_minio_json(bucket: str, object_key: str) -> dict:
     finally:
         response.close()
         response.release_conn()
+
+
+def _build_preview_url(bucket: str, object_key: str, *, expires: timedelta) -> str:
+    return get_minio_service().presigned_get_object(bucket, object_key, expires=expires)
+
+
+def _media_preview_expiry(expires: timedelta) -> str:
+    return (datetime.utcnow() + expires).replace(microsecond=0).isoformat() + 'Z'
+
+
+def _media_slot_and_label(object_key: str) -> tuple[str, str]:
+    normalized = object_key.lower()
+    if 'left' in normalized:
+        return 'left', 'Left Wrist'
+    if 'right' in normalized:
+        return 'right', 'Right Wrist'
+    return 'top', 'Top Camera'
+
+
+def _media_variant_from_key(object_key: str) -> str:
+    normalized = object_key.lower()
+    if 'depth' in normalized and 'colormap' in normalized:
+        return 'depth_colormap'
+    return 'rgb'
+
+
+def _manual_qc_media(db: Session, episode_id: str, current_user: User | None) -> list[dict]:
+    inventory_row = _lookup_inventory_for_episode(db, episode_id)
+    if not inventory_row:
+        return []
+
+    inventory, bucket = inventory_row
+    task = db.query(QcTask).filter(QcTask.episode_id == episode_id).first()
+    review_lock = review_lock_payload(task, current_user) if task else None
+    refreshable = bool(review_lock and review_lock['isMine'])
+    preview_ttl = timedelta(minutes=5)
+
+    media_items = []
+    object_rows = db.query(EpisodeObject).filter(
+        EpisodeObject.episode_inventory_id == inventory.id,
+        EpisodeObject.object_scope == 'processed',
+        EpisodeObject.object_key.like('%.mp4'),
+    ).order_by(EpisodeObject.object_key.asc()).all()
+
+    for item in object_rows:
+        slot, label = _media_slot_and_label(item.object_key)
+        variant = _media_variant_from_key(item.object_key)
+        media_items.append({
+            'objectId': str(item.id),
+            'role': item.object_role,
+            'label': label,
+            'variant': variant,
+            'slot': slot,
+            'mimeType': 'video/mp4',
+            'previewUrl': _build_preview_url(bucket, item.object_key, expires=preview_ttl),
+            'previewExpiresAt': _media_preview_expiry(preview_ttl),
+            'refreshable': refreshable,
+            'downloadable': True,
+            'sortOrder': {'top': 10, 'left': 20, 'right': 30}.get(slot, 100) + (1 if variant == 'depth_colormap' else 0),
+        })
+
+    return sorted(media_items, key=lambda item: (item['sortOrder'], item['label'], item['variant']))
 
 
 def _read_minio_npz(bucket: str, object_key: str):
@@ -716,6 +778,7 @@ def manual_qc_context_payload(db: Session, episode_id: str, current_user: User |
             'timelineSegments': real_context['timelineSegments'],
             'revisions': [serialize_revision(item) for item in revisions],
             'reviewLock': review_lock,
+            'media': _manual_qc_media(db, episode_id, current_user),
         }
 
     return {
@@ -735,6 +798,7 @@ def manual_qc_context_payload(db: Session, episode_id: str, current_user: User |
         ],
         'revisions': [serialize_revision(item) for item in revisions],
         'reviewLock': review_lock,
+        'media': _manual_qc_media(db, episode_id, current_user),
     }
 
 

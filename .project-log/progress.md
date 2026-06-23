@@ -1,3 +1,48 @@
+## 2026-06-23 (Robot QC V1 manual QC media descriptor first landing)
+
+- Type: implementation
+- Status: partially validated on real MinIO data
+- Importance: critical
+- Reusable: yes
+- Objective: 把 Node D 合同中的 `media[]`、preview refresh、download 三条 manual QC 媒体访问链路真正落成前后端代码，并在真实 MinIO 对象上验证 payload 形状和预览 URL 发放
+- Work completed:
+  - 后端 `ManualQcContextSchema` 已扩展 `media[]`，新增 `ManualQcMediaSchema` 与 refresh request/response schema
+  - 后端 `payloads.py` 已为 processed 视频对象生成标准化 media descriptors：`objectId`、`role`、`label`、`variant`、`slot`、`previewUrl`、`previewExpiresAt`、`refreshable`、`downloadable`、`sortOrder`
+  - 后端 `api/routes/qc.py` 已新增 `POST /api/episodes/{episode_id}/media/refresh` 和 `GET /api/episodes/{episode_id}/objects/{object_id}/download`
+  - 前端 `api/client.ts`、`types/qc.ts`、`pages/manual-qc.vue` 已切到真实媒体描述符消费，manual QC 页面不再只显示静态占位视频卡片，而是基于 `previewUrl` 渲染真实 `<video>` 播放器，并支持刷新预览与下载对象
+- Business logic impact: 这一步把 Node D 合同从“结构化 telemetry 已真、视频仍占位”推进到了“结构化对象 + 预览媒体都由 MinIO 控制面统一发放”。前端现在不需要拼 bucket/key，也不需要知道对象命名规则，只消费后端归一化返回的媒体描述符
+- Problems encountered:
+  - `telemetry.npz` 通过 MinIO 响应流直接 `numpy.load()` 时不支持 seek，导致真实上下文构建失败
+  - `api/routes/qc.py` 插入 refresh/download endpoint 时引入了一处缩进错误，导致 backend compile 失败
+  - 当前临时验证库只跑了 scan，没有进入 dispatch/claim 链路，因此媒体 descriptor 的 `refreshable` 在真实数据验证中仍为 `false`
+- Resolution:
+  - `npz` 改为先读入 `BytesIO` 再解析
+  - 修正 route 缩进并重新通过 backend compile
+  - 先确认真实媒体 descriptors 和有效预签名 URL 发放无误，refresh 行为留到完整 task 派发后再做链路验证
+- Verification:
+  - `cd software/backend && .conda-env/bin/python -m compileall app`
+  - `npm run build --prefix software/frontend`
+  - 真实 MinIO payload 验证：manual QC payload 已返回 `media_count=3`，并带有效 `previewUrl`
+  - 真实结构化上下文验证：`frameCount=394`、`q_motion=5.9`、`timelineSegments=3`
+  - 真实端到端任务链验证：`scan -> dispatch -> claim -> media refresh -> submit` 已在 `yaocao` bucket + 临时 SQLite 库上跑通，结果为 `dispatch createdTaskCount=1`、`claim isMine=true`、`refresh 1 True`、`submit ok`、最终 `episode.qc_status=done` / `task.status=done`
+  - 生产浏览器媒体验收：Playwright 观察到 `videos=3`、`refreshVisible=true`、`downloadButtons=3`
+- Unverified items:
+  - 生产 HTTP scan worker 仍有稳定性问题；虽然多条 queued job 能跑到 `done`，但仍存在部分 queued job 长时间停在 `scanning/classifying`
+  - 还未完成最终的生产级 secrets 管理收口（当前 compose 已改为环境变量注入，但部署流程尚未固化） 
+- Files changed:
+  - `software/backend/app/schemas/qc.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/backend/app/api/routes/qc.py`
+  - `software/frontend/src/types/qc.ts`
+  - `software/frontend/src/api/client.ts`
+  - `software/frontend/src/pages/manual-qc.vue`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 继续补 batch/episode -> qc_task 自动生成或派发验证，进入真实持锁任务场景，验证 media refresh
+  - 跑浏览器端真实视频播放/下载/提交链路
+  - 在生产 compose 环境复现 PostgreSQL + MinIO 联调并形成可上线收尾清单
+
 ## 2026-06-23 (Robot QC V1 MinIO scanner/runtime validation and local-field cleanup)
 
 - Type: implementation

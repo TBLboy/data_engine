@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
 import QcReasonPicker from '../components/QcReasonPicker.vue'
-import { claimManualQc, fetchManualQcContext, releaseManualQc, submitManualQc, type ManualQcContext } from '../api/client'
+import { claimManualQc, downloadManualQcObject, fetchManualQcContext, refreshManualQcMedia, releaseManualQc, submitManualQc, type ManualQcContext } from '../api/client'
 
 const route = useRoute()
 const router = useRouter()
@@ -12,14 +12,16 @@ const result = ref<'pass' | 'fail'>('pass')
 const primaryReason = ref('')
 const currentFrame = ref(426)
 const playing = ref(false)
-const depthMode = ref(false)
 const note = ref('')
 const loading = ref(true)
 const submitting = ref(false)
 const claiming = ref(false)
 const releasing = ref(false)
+const refreshingMedia = ref(false)
+const downloadingObjectId = ref('')
 const error = ref('')
 const payload = ref<ManualQcContext | null>(null)
+const selectedVariant = ref<'rgb' | 'depth_colormap'>('rgb')
 
 const episodeId = computed(() => String(route.params.id))
 const totalFrames = computed(() => payload.value?.episode.frameCount ?? 1269)
@@ -29,6 +31,8 @@ const timelineSegments = computed(() => payload.value?.timelineSegments ?? [])
 const qcRevisions = computed(() => payload.value?.revisions ?? [])
 const episode = computed(() => payload.value?.episode)
 const reviewLock = computed(() => payload.value?.reviewLock)
+const media = computed(() => payload.value?.media ?? [])
+const mediaByVariant = computed(() => media.value.filter((item) => item.variant === selectedVariant.value))
 const canSubmit = computed(() => Boolean(reviewLock.value?.isMine && !submitting.value))
 const lockTagType = computed(() => {
   if (reviewLock.value?.isMine) return 'success'
@@ -41,6 +45,16 @@ const lockLabel = computed(() => {
   return '当前无人认领'
 })
 
+const formatError = (err: unknown, fallback: string) => {
+  if (!(err instanceof Error)) return fallback
+  try {
+    const parsed = JSON.parse(err.message) as { detail?: string }
+    return parsed.detail || fallback
+  } catch {
+    return err.message || fallback
+  }
+}
+
 const loadContext = async () => {
   loading.value = true
   error.value = ''
@@ -48,9 +62,53 @@ const loadContext = async () => {
     payload.value = await fetchManualQcContext(episodeId.value)
     currentFrame.value = Math.min(426, totalFrames.value)
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '加载人工质检上下文失败'
+    error.value = formatError(err, '加载人工质检上下文失败')
   } finally {
     loading.value = false
+  }
+}
+
+const refreshMedia = async () => {
+  if (!payload.value) return
+  const objectIds = payload.value.media.filter((item) => item.refreshable).map((item) => item.objectId)
+  if (!objectIds.length) return
+  refreshingMedia.value = true
+  try {
+    const response = await refreshManualQcMedia(episodeId.value, { objectIds })
+    const refreshed = new Map(response.media.map((item) => [item.objectId, item]))
+    payload.value = {
+      ...payload.value,
+      media: payload.value.media.map((item) => {
+        const next = refreshed.get(item.objectId)
+        return next ? { ...item, ...next } : item
+      })
+    }
+    ElMessage.success('媒体预览已刷新')
+  } catch (err) {
+    ElMessage.error(formatError(err, '刷新媒体预览失败'))
+    await loadContext()
+  } finally {
+    refreshingMedia.value = false
+  }
+}
+
+const downloadMedia = async (objectId: string) => {
+  downloadingObjectId.value = objectId
+  try {
+    const blob = await downloadManualQcObject(episodeId.value, objectId)
+    const link = document.createElement('a')
+    const url = URL.createObjectURL(blob)
+    link.href = url
+    link.download = `${episodeId.value}-${objectId}.bin`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+    ElMessage.success('对象下载已开始')
+  } catch (err) {
+    ElMessage.error(formatError(err, '对象下载失败'))
+  } finally {
+    downloadingObjectId.value = ''
   }
 }
 
@@ -72,7 +130,7 @@ const claim = async () => {
     ElMessage.success('已认领当前质检任务')
     await loadContext()
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '认领任务失败')
+    ElMessage.error(formatError(err, '认领任务失败'))
     await loadContext()
   } finally {
     claiming.value = false
@@ -86,7 +144,7 @@ const release = async () => {
     ElMessage.success('已释放当前质检锁')
     await loadContext()
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '释放质检锁失败')
+    ElMessage.error(formatError(err, '释放质检锁失败'))
     await loadContext()
   } finally {
     releasing.value = false
@@ -123,7 +181,7 @@ const submit = async () => {
     await loadContext()
     router.push('/qc-history')
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '提交人工质检失败')
+    ElMessage.error(formatError(err, '提交人工质检失败'))
     await loadContext()
   } finally {
     submitting.value = false
@@ -161,25 +219,32 @@ const submit = async () => {
         <el-card shadow="never" class="qc-stage-card">
           <div class="qc-stage-header">
             <div class="stage-tabs">
-              <span class="active">RGB 三相机</span>
-              <span :class="{ active: depthMode }">Depth 辅助</span>
+              <span class="active">{{ selectedVariant === 'rgb' ? 'RGB 三相机' : 'Depth 辅助' }}</span>
               <span>Telemetry</span>
               <span>Reason Code</span>
             </div>
-            <el-switch v-model="depthMode" active-text="Depth Colormap" inactive-text="RGB Video" />
+            <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+              <el-radio-group v-model="selectedVariant" size="small">
+                <el-radio-button label="rgb" value="rgb">RGB Video</el-radio-button>
+                <el-radio-button label="depth_colormap" value="depth_colormap">Depth Colormap</el-radio-button>
+              </el-radio-group>
+              <el-button size="small" :loading="refreshingMedia" :disabled="!media.some((item) => item.refreshable)" @click="refreshMedia">刷新预览</el-button>
+            </div>
           </div>
 
           <div class="video-grid premium">
-            <div v-for="camera in ['Top Camera', 'Left Wrist', 'Right Wrist']" :key="camera" class="video-panel">
+            <div v-for="item in mediaByVariant" :key="item.objectId" class="video-panel">
               <div class="camera-label">
-                <span>{{ camera }}</span>
-                <b>{{ depthMode ? 'Depth Colormap' : 'RGB' }}</b>
+                <span>{{ item.label }}</span>
+                <b>{{ item.variant === 'depth_colormap' ? 'Depth Colormap' : 'RGB' }}</b>
               </div>
-              <div class="video-placeholder" :class="{ depth: depthMode }">
-                <span>{{ depthMode ? 'Depth Preview' : 'Synchronized Video' }}</span>
-                <small>frame {{ currentFrame }} · 30fps · 640×480</small>
+              <video class="video-placeholder" :class="{ depth: item.variant === 'depth_colormap' }" :src="item.previewUrl" controls playsinline preload="metadata" />
+              <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:8px; font-size:12px; color:#909399;">
+                <span>{{ item.slot }} · expires {{ item.previewExpiresAt || '--' }}</span>
+                <el-button link type="primary" :loading="downloadingObjectId === item.objectId" @click="downloadMedia(item.objectId)">下载对象</el-button>
               </div>
             </div>
+            <el-empty v-if="!mediaByVariant.length" description="当前无可播放媒体" />
           </div>
         </el-card>
 

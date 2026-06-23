@@ -7,6 +7,7 @@ import type {
   HistoryExportPayload,
   HistoryReportPayload,
   IngestJob,
+  ManualQcMedia,
   MetricCard,
   QcRevision,
   QcTask,
@@ -130,6 +131,22 @@ export interface ManualQcContext {
   timelineSegments: TimelineSegment[]
   revisions: QcRevision[]
   reviewLock: ReviewLock
+  media: ManualQcMedia[]
+}
+
+export interface ManualQcMediaRefreshRequest {
+  objectIds: string[]
+}
+
+export interface ManualQcMediaRefreshItem {
+  objectId: string
+  previewUrl: string
+  previewExpiresAt: string | null
+  refreshable: boolean
+}
+
+export interface ManualQcMediaRefreshResponse {
+  media: ManualQcMediaRefreshItem[]
 }
 
 export interface ManualQcClaimResponse {
@@ -238,6 +255,24 @@ export async function fetchHistoryExport(batchId = 'all', scope: 'report' | 'epi
 
 export async function fetchManualQcContext(episodeId: string) {
   return request<ManualQcContext>(`/episodes/${episodeId}/qc-context`)
+}
+
+export async function refreshManualQcMedia(episodeId: string, payload: ManualQcMediaRefreshRequest) {
+  return request<ManualQcMediaRefreshResponse>(`/episodes/${episodeId}/media/refresh`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export async function downloadManualQcObject(episodeId: string, objectId: string) {
+  const response = await fetch(`${API_BASE}/episodes/${episodeId}/objects/${objectId}/download`, {
+    credentials: 'include'
+  })
+  if (!response.ok) {
+    const message = await response.text()
+    throw new ApiError(response.status, message || `Request failed: ${response.status}`)
+  }
+  return response.blob()
 }
 
 export async function fetchDispatchPreview(batchId: string) {

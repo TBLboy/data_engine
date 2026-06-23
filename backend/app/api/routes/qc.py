@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.security import create_session_token, hash_password, verify_password, verify_session_token
-from app.models import AuditEvent, Batch, Episode, QcReviewRevision, QcTask, User
+from app.models import AuditEvent, Batch, Episode, EpisodeInventory, EpisodeObject, ListRecord, QcReviewRevision, QcTask, ScanJob, User
 from app.schemas.qc import (
     AccountListPayloadSchema,
     AccountSchema,
@@ -28,6 +30,8 @@ from app.schemas.qc import (
     LoginResponseSchema,
     ManualQcClaimResponseSchema,
     ManualQcContextSchema,
+    ManualQcMediaRefreshRequestSchema,
+    ManualQcMediaRefreshResponseSchema,
     ManualQcSubmitRequest,
     QcTaskSchema,
     ResetPasswordRequest,
@@ -36,7 +40,25 @@ from app.schemas.qc import (
     UpdateAccountStatusRequest,
 )
 from app.services.authz import require_roles
-from app.services.scanner import run_minio_scan
+from app.services.minio_client import get_minio_service
+from app.services.payloads import (
+    build_history_export_payload,
+    build_history_report_payload,
+    dashboard_payload,
+    database_payload,
+    dispatch_preview_payload,
+    history_payload,
+    home_payload,
+    manual_qc_context_payload,
+    review_lock_payload,
+    serialize_account,
+    serialize_ingest_job,
+    serialize_task,
+    serialize_user,
+    sync_batch_metrics,
+    task_pool_payload,
+)
+from app.services.scan_queue import process_scan_job
 
 router = APIRouter(prefix='/api', tags=['qc'])
 settings = get_settings()
@@ -310,21 +332,46 @@ def database(db: Session = Depends(get_db), _: User = Depends(get_current_user))
 @router.post('/database/scan', response_model=IngestJobSchema)
 def scan_database(
     payload: IngestScanRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    try:
-        job = run_minio_scan(
-            db,
-            bucket=payload.bucket,
-            scope=payload.scope,
-            operator=current_user,
-        )
-    except PermissionError as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return serialize_ingest_job(job)
+    require_roles(current_user, 'admin', 'qc_manager')
+    bucket = payload.bucket.strip()
+    if not bucket:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='bucket 不能为空')
+
+    existing_scan = db.query(ScanJob).filter(
+        ScanJob.bucket == bucket,
+        ScanJob.status.in_(['scanning', 'classifying']),
+    ).order_by(ScanJob.started_at.desc()).first()
+    if existing_scan:
+        return serialize_ingest_job(existing_scan)
+
+    scan_job = ScanJob(
+        id=f'queued_{int(datetime.utcnow().timestamp())}_{current_user.id}',
+        bucket=bucket,
+        scope=payload.scope,
+        status='scanning',
+        total_prefixes=0,
+        confirmed_lists=0,
+        total_episodes=0,
+        new_episodes=0,
+        triggered_by=current_user.id,
+        error_detail='queued',
+        started_at=datetime.utcnow(),
+        finished_at=None,
+    )
+    db.add(scan_job)
+    db.commit()
+    db.refresh(scan_job)
+
+    background_tasks.add_task(
+        process_scan_job,
+        scan_job.id,
+        current_user.id,
+    )
+    return serialize_ingest_job(scan_job)
 
 
 @router.get('/task-pool', response_model=TaskPoolPayloadSchema)
@@ -369,6 +416,80 @@ def manual_qc_context(episode_id: str, db: Session = Depends(get_db), current_us
     if not episode:
         raise HTTPException(status_code=404, detail='Episode not found')
     return manual_qc_context_payload(db, episode_id, current_user)
+
+
+def _get_episode_inventory_object_or_404(db: Session, episode_id: str, object_id: str) -> tuple[EpisodeObject, EpisodeInventory]:
+    episode_object = db.query(EpisodeObject).filter(EpisodeObject.id == int(object_id)).first()
+    if not episode_object:
+        raise HTTPException(status_code=404, detail='Object not found')
+    inventory = db.query(EpisodeInventory).filter(EpisodeInventory.id == episode_object.episode_inventory_id).first()
+    if not inventory:
+        raise HTTPException(status_code=404, detail='Episode inventory not found')
+    if inventory.ingested_episode_id != episode_id and inventory.episode_id_from_manifest != episode_id and inventory.episode_name != episode_id:
+        raise HTTPException(status_code=404, detail='Object does not belong to episode')
+    return episode_object, inventory
+
+
+def _media_refreshable(task: QcTask | None, current_user: User) -> bool:
+    if not task:
+        return False
+    lock_payload = review_lock_payload(task, current_user)
+    return bool(lock_payload['isMine'])
+
+
+@router.post('/episodes/{episode_id}/media/refresh', response_model=ManualQcMediaRefreshResponseSchema)
+def refresh_manual_qc_media(
+    episode_id: str,
+    payload: ManualQcMediaRefreshRequestSchema,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail='Episode not found')
+
+    task = db.query(QcTask).filter(QcTask.episode_id == episode_id).first()
+    if not _media_refreshable(task, current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='当前未持有审核锁，不能刷新媒体预览')
+
+    media = []
+    preview_ttl = timedelta(minutes=5)
+    minio_service = get_minio_service()
+    for object_id in payload.objectIds:
+        episode_object, inventory = _get_episode_inventory_object_or_404(db, episode_id, object_id)
+        if not episode_object.object_key.endswith('.mp4'):
+            continue
+        list_record = db.query(ListRecord).filter(ListRecord.id == inventory.list_id).one()
+        media.append({
+            'objectId': str(episode_object.id),
+            'previewUrl': minio_service.presigned_get_object(list_record.bucket, episode_object.object_key, expires=preview_ttl),
+            'previewExpiresAt': (datetime.utcnow() + preview_ttl).replace(microsecond=0).isoformat() + 'Z',
+            'refreshable': True,
+        })
+
+    return {'media': media}
+
+
+@router.get('/episodes/{episode_id}/objects/{object_id}/download')
+def download_episode_object(
+    episode_id: str,
+    object_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail='Episode not found')
+
+    episode_object, inventory = _get_episode_inventory_object_or_404(db, episode_id, object_id)
+    list_record = db.query(ListRecord).filter(ListRecord.id == inventory.list_id).one()
+    response = get_minio_service().get_object(list_record.bucket, episode_object.object_key)
+    filename = episode_object.object_key.rsplit('/', 1)[-1]
+    return StreamingResponse(
+        response,
+        media_type='application/octet-stream',
+        headers={'Content-Disposition': f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
 
 
 @router.get('/qc/batches/{batch_id}/dispatch-preview', response_model=DispatchPreviewSchema)
