@@ -2,43 +2,36 @@
 
 ## Last Updated
 
-- 2026-06-22
+- 2026-06-23
 
 ## Current Objective
 
-- 已完成抽检派发业务逻辑修订，下一步进入后端服务实现，并按新派发模型同步前端语义。
+- 完善 MinIO 数据湖控制面业务逻辑：扫描器算法、对象映射、episode 状态推进、QC 就绪检查与分类规则
+- 将成熟的 MinIO 业务规则落地到 software 目录，转入代码实现阶段
 
 ## Current Business Logic Position
 
-- Main path: V1.0 Manual QC Platform
-- Current node: Dispatch strategy finalized
-- Current edge: Business logic → Backend implementation
-- Active branch: 默认百分比抽检，可选全量派发
+- Main path: A → B1 + B2 + B3 → C → F → D → E
+- Current node: F（业务规则已闭环，可交接 Node D）
+- Current edge: F → D（基于控制面方案的 QC 改造）
+- Node F 完成项：6 表控制面 schema、全层级递归扫描算法、episode 三层状态推进、object_role/qc_ready 清单、classification_rules 种子策略与真实 basename 首版盘点、manual QC 对象访问混合协议、Node D API 合同收口
 
 ## Completed This Session
 
-- 将任务派发策略定稿为”默认百分比抽检，可选全量派发”
-- 更新 `.project-log/requirements.md`
-- 更新 `.project-log/business-logic/constraints.md`
-- 更新 `.project-log/business-logic/edges.md`
-- 更新 `.project-log/business-logic/main.md`
-- 补齐 dispatch-plan / dispatch-preview 接口、候选池/任务池分离、样本统计口径、V1.0 最小交付标准
-- 完成前端抽检派发语义对齐：
-  - `types/qc.ts` 新增 `DispatchMode`、`DispatchPreview`，扩展 `BatchSummary`/`QcTask` 字段
-  - `api/mock.ts` 按新字段重构所有批次和任务数据
-  - `pages/dashboard.vue` 重写为候选总量/已抽中样本/样本完成率/抽检覆盖率口径
-  - `pages/task-pool.vue` 新增派发计划区（模式切换 + 比例输入 + 候选池预览）
-  - `npm run build` 通过
+- 将 root `.project-log/business-logic/` 中已成熟的 MinIO control-plane 业务逻辑整体迁移到 `software/.project-log/business-logic/`
+- migrated: `control-plane-schema-v1.md`, `decision-records.md`, `main.md`, `edges.md`, `nodes.md`, `graph.md`, `open-questions.md`, `constraints.md`
+- 修复 graph.md 中 `node.md` 为 `nodes.md` 的 typo
+- 验证所有 8 个迁移文件与 root 源文件完全一致
+- 确认无旧逻辑残留
 
 ## Current State
 
-- 前端 UI 已完整（老板演示级），抽检派发语义已对齐
-- 数据层目前使用 mock 数据
-- V1.0 派发规则已收口为 sampled default / full optional
-- 后端尚未实现
+- 7 个核心业务逻辑文件 + 1 个 constraints 文件已在 software 目录完整落地
+- `yaocao` bucket 业务规则闭环：扫描/分类/状态推进/object_role/seed 盘点/对象访问协议全部可用
+- 唯一开放项：Q-20260623-004（全量 list census，非阻塞）
+- 下一步进入代码实现：MinIO 控制面 migration、扫描器实现、manual QC MinIO 化改造
 
 ## Next Steps
 
-- 开始后端服务实现（FastAPI + PostgreSQL + Docker Compose）
-- 优先落地 batch 候选池、dispatch-plan / dispatch-preview、qc_task 生成与指派接口
-- 前端切到真实 API 数据源
+- Git push
+- 开始代码实现：控制面 6 表迁移、扫描器、分类规则种子、manual QC 媒体访问改造

@@ -1,192 +1,158 @@
 # Business Logic Edges
 
-## Edge Template
+## Edge A->B: 执行公开数据集QC调研
 
 ```yaml
-edge_id: <edge-id>
-from: <start-node-id>
-to: <target-node-id>
-path: main | branch | archived
-status: draft | stable | testing | validated | archived
-method: <method summary>
+edge_id: A->B
+from: A
+to: B
+path: main
+status: stable（主要产出已完成）
+method: 调研公开机器人数据集的质检流程
 execution_chain:
-  - <step 1>
-  - <step 2>
+  - 阅读DROID论文和数据集文档
+  - 分析DROID数据集（droid_100样本）
+  - 阅读RH20T、DQAF、Consistency Matters论文
+  - 调研 Forge、RINSE、异常检测前沿
+  - 扩展到 19 数据集/生态覆盖
+  - 提取可迁移QC规则（27条）
 inputs:
-  - <input>
+  - DROID论文：https://arxiv.org/html/2403.12945v2
+  - RH20T文档：https://rh20t.github.io/
+  - DQAF论文：https://arxiv.org/abs/2605.26349
+  - Consistency Matters论文：https://arxiv.org/html/2412.14309v2
+  - Forge + RINSE + 异常检测
 outputs:
-  - <output>
-parameters:
-  - name: <parameter-name>
-    type: <data-type>
-    default: <default-value>
-    source: <config/code/user/hardware>
-error_handling:
-  - <failure condition and response>
+  - 报告 01：公开数据集隐式QC（19数据集覆盖）
+  - 报告 02：数据质量检测框架（DQAF + L3深度）
+  - 报告 03：数据策展框架（暂缓）
 verification:
-  - <verification method>
+  - 内容与原始论文交叉核对一致
+notes:
+  - 主要产出已在 2026-06-16 完成
+  - 如时间允许可继续深入 B3，但不阻塞后续节点
 ```
 
-## Edges
+## Edge B->C: 深度分析 Linker TeleDex + MinIO 实查
 
 ```yaml
-edge_id: ingest-to-qc-queue
-from: ingest-manager
-to: qc-task-queue
+edge_id: B->C
+from: B
+to: C
 path: main
-status: draft
-method: 新入库数据先进入 QC 候选池，再按抽检比例或全量策略生成 QC 任务并进入派发队列
+status: stable（已完成）
+method: 深度理解 Linker TeleDex 数据格式 + 实地验证 MinIO 对象存储
 execution_chain:
-  - Scanner / IngestManager 识别新 batch / episode
-  - 系统创建或更新 task_type / batch / episode 记录
-  - 判断 processed 是否存在
-  - processed 就绪则标记 processed_ready，进入待抽检候选池
-  - `qc_manager` / `admin` 为 batch 选择派发模式：默认按比例抽检，可切换为全量派发
-  - 系统按派发计划筛选 sample episode，并为 sample 集生成 QC 任务进入 pending_assign
-  - 未抽中的 episode 保持候选状态，等待后续补派或全量展开
+  - 阅读Linker Open TeleDex数据说明文档PDF
+  - 理解telemetry.npz字段结构（timestamps、qpos、qvel、actions等）
+  - 使用 boto3 直连 MinIO，验证连通性
+  - 枚举 bucket 并确认 `yaocao` 为主业务 bucket
+  - 实查对象布局：list 多层分布、raw/processed 双层结构、episode 组织方式
+  - 读取样例元数据（manifest.json、metadata.json、recording_info.json）
+  - 确认 manual QC 真实依赖 processed 层对象
+  - 确认 V1 默认 scope = 单 bucket yaocao
 inputs:
-  - raw / processed episode
-  - dispatch mode
-  - sampling ratio
+  - Linker Open TeleDex数据说明文档PDF
+  - MinIO 凭据（endpoint, access_key, secret_key）
 outputs:
-  - sampled qc_task
-  - pending_assign 状态
-  - sampling audit trail
+  - Linker TeleDex数据格式理解文档
+  - MinIO 对象布局记录
+  - 三条基础业务规则（list定义、episode状态、task_type归类）
 verification:
-  - 新入库 episode 可先在候选池中被主管看到，抽检后样本任务进入任务池
+  - PDF已阅读，核心结构已理解
+  - MinIO 连接成功：list_buckets, list_objects, get_object 均验证通过
+  - 样例元数据已读取，确认了 processed 层的 QC 依赖
+notes:
+  - C 节点同时覆盖了"文档分析"和"MinIO 实查"两部分
+  - MinIO 实查结果直接驱动了后续 Node F 的规则设计
 ```
 
-```yaml
-edge_id: manager-assign-reviewer
-from: qc-task-queue
-to: auth-rbac
-path: main
-status: draft
-method: 主管把 QC 任务派发给 reviewer 账号
-execution_chain:
-  - qc_manager 打开任务池
-  - 选择 reviewer
-  - 系统写入任务责任人和分配历史
-  - reviewer 待办列表更新
-inputs:
-  - task_id
-  - reviewer_id
-outputs:
-  - assigned task
-  - assignment_history
-verification:
-  - reviewer 登录后可在我的待办看到任务
-```
+## Edge C->F: MinIO 数据湖控制面规则确定
 
 ```yaml
-edge_id: reviewer-submit-with-audit
-from: manual-qc-ui
-to: audit-log
+edge_id: C->F
+from: C
+to: F
 path: main
-status: draft
-method: reviewer 提交 QC 结果后同步写审计事件和 revision 历史
+status: stable（三条基础规则已确定）
+method: 基于 MinIO 实查数据，确定数据湖接入的业务基础规则
 execution_chain:
-  - reviewer 打开任务并完成检查
-  - 提交 POST /api/qc/manual/{episode_id}
-  - ResultStore 写当前结果与 revision
-  - AuditLog 写入 action / payload snapshot / status change
+  - 基于实查对象结构定义 list = bucket + list_prefix
+  - 确定全量扫描采用全层级递归发现 + 结构特征识别
+  - 定义 episode 三层生命周期状态（ingestable/processable/qc_ready）
+  - 确定 task_type 作为 PostgreSQL 控制面字段（非 MinIO 路径字符串）
+  - 记录三条规则到 decision-records.md
+  - 明确 PostgreSQL 控制面模型：MinIO 只存原始对象
 inputs:
-  - reviewer_id
-  - qc payload
+  - MinIO 实查结果（Node C 产出）
+  - 用户关于"一个任务可能拆散到多个list"、"多次少量写入"的输入
 outputs:
-  - qc_result
-  - qc_review_revision
-  - audit_event
+  - 三条基础业务规则
+  - PostgreSQL 控制面模型决策
+  - 全量扫描策略原则
 verification:
-  - 可回溯谁在何时对哪条 episode 做了什么提交
+  - 规则与 MinIO 真实对象结构对照一致
+  - 规则已记录到 decision-records.md、progress.md、current-session.md
+notes:
+  - 这是从"调研"到"方案设计"的转折边
+  - 三条规则是后续 Node F 字段设计的前置约束
 ```
 
-```yaml
-edge_id: lan-browser-access
-from: deploy-host
-to: dashboard
-path: main
-status: draft
-method: 员工通过局域网浏览器访问中心主机上的 QC 平台
-execution_chain:
-  - 中心主机运行前后端和数据库
-  - 员工电脑通过浏览器打开平台地址
-  - 登录后进入各自权限范围内页面
-inputs:
-  - LAN URL
-  - user session
-outputs:
-  - dashboard 页面
-verification:
-  - 不同电脑可访问同一套数据与 QC 结果
-```
+## Edge F->D: 基于控制面方案的 QC 改造
 
 ```yaml
-edge_id: dashboard-to-batch-detail
-from: dashboard
-to: batch-detail
+edge_id: F->D
+from: F
+to: D
 path: main
-status: draft
-method: 点击批次进入批次详情页
+status: ready（Node F 已闭环，可进入实现）
+method: 将 QC 方案迁移到 MinIO 数据湖控制面之上
 execution_chain:
-  - 在主界面选中任务种类
-  - 点击某个批次
-  - 打开该批次详情页
+  - 基于既定 6 表控制面实现 MinIO 扫描与对象映射
+  - 改造现有本地 ingestion 为 MinIO 对象读取
+  - 改造 manual QC 上下文加载为 MinIO 对象访问
+  - 实现 media presign refresh 与受控下载接口
 inputs:
-  - batch_id
+  - MinIO 控制面方案（Node F 已产出）
+  - 现有 QC 代码（local file 基线）
+  - 现有 manual QC 页面实现
 outputs:
-  - batch-detail 页面
+  - MinIO 兼容的 ingestion 链路（待实现）
+  - Object 访问协议实现（待实现）
+  - `ManualQcContext.media[]` 合同落地（待实现）
 verification:
-  - 可从主界面进入批次详情
+  - 业务规则已齐备；实现前仅剩 `yaocao` 全量 list census 可作为规模校验补充，不阻塞编码
+notes:
+  - 现有 manual QC（telemetry 指标、timeline、review lock）保持不动
+  - 主要改造点在"对象从哪里读"和"对象映射怎么查"
 ```
 
-```yaml
-edge_id: database-to-qc-reason-codes
-from: database-view
-to: qc-reason-codes
-path: main
-status: draft
-method: 手动QC/复查时选择原因码
-execution_chain:
-  - 在数据库页面选中 episode
-  - 打开 QC 面板
-  - 选择原因码并提交
-inputs:
-  - episode_id
-  - qc_result
-outputs:
-  - reason_code
-  - note
-verification:
-  - 结果可回写到 QC 记录
-```
+## Edge D->E: 整合交付
 
 ```yaml
-edge_id: manual-qc-end-to-end
-from: dashboard
-to: result-store
+edge_id: D->E
+from: D
+to: E
 path: main
-status: draft
-method: 手动QC页面完成 episode 级裁决并写回结果
+status: draft（未开始）
+method: 整合所有调研与实现成果
 execution_chain:
-  - 在 Dashboard 选择 batch 或 episode
-  - 后端校验 processed 数据存在性
-  - 创建 review_lock 并将 episode 状态切换为 in_review
-  - 进入 Manual QC 页面查看视频、时间轴、指标摘要和异常段
-  - 操作员完成核查并选择 qc_result / reason code / note
-  - 前端校验通过后提交 POST /api/qc/manual/{episode_id}
-  - ResultStore 写入 qc_review_revision 与当前 qc_result
-  - episode 状态切换为 done
-  - batch_qc_summary 刷新
+  - 整合公开数据集QC调研文档
+  - 整合Linker TeleDex数据格式分析
+  - MinIO 数据湖方案说明
+  - QC 方案与实现说明
+  - 撰写完整交付文档
 inputs:
-  - episode_id
-  - frame data
-  - episode summary metrics
-  - segment violations
-  - reason_code / note
+  - 公开数据集QC调研文档
+  - Linker TeleDex数据格式分析
+  - MinIO 数据湖方案
+  - QC 方案与实现
 outputs:
-  - QC 结果记录
-  - batch qc_status 更新
+  - 完整交付文档
+  - 可交付给领导的文档
 verification:
-  - 页面提交后可在 Report 中看到结果与统计变化
+  - 未开始
+notes:
+  - 交付范围需结合 MinIO 数据湖方案和用户实际使用场景决定
+  - 交付对象可能同时包含"调研成果"和"系统实现"
 ```
