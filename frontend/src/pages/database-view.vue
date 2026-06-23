@@ -14,8 +14,8 @@ const result = ref('')
 const batch = ref('')
 
 const scanForm = reactive({
-  sourcePath: '/home/tbl/Project/data_collect/data/raw/process',
-  batchName: ''
+  bucket: 'yaocao',
+  scope: 'full'
 })
 
 const formatError = (err: unknown, fallback: string) => {
@@ -44,8 +44,8 @@ const submitScan = async () => {
   scanning.value = true
   try {
     const job = await scanDatabase({
-      sourcePath: scanForm.sourcePath.trim(),
-      batchName: scanForm.batchName.trim()
+      bucket: scanForm.bucket.trim(),
+      scope: scanForm.scope
     })
     ElMessage.success(`扫描完成：${job.detail}`)
     await loadDatabase()
@@ -80,7 +80,7 @@ const statusType = (statusValue: string) => {
 }
 
 const ingestStatusType = (statusValue: string) => {
-  if (statusValue === 'indexed') return 'success'
+  if (statusValue === 'done') return 'success'
   if (statusValue === 'failed') return 'danger'
   if (statusValue === 'scanning') return 'warning'
   return 'info'
@@ -94,7 +94,7 @@ const ingestStatusType = (statusValue: string) => {
         <div>
           <el-tag type="success" effect="light">Indexed Data Catalog</el-tag>
           <h1>数据总库</h1>
-          <p>按任务、批次、QC 状态、审核员和原因码检索全部采集数据，并直接触发受控目录扫描入库。</p>
+          <p>按任务、批次、QC 状态、审核员和原因码检索全部采集数据，并直接触发 MinIO 数据湖扫描入库。</p>
         </div>
         <div class="toolbar-actions">
           <el-tag type="info" effect="light">导出能力暂未交付</el-tag>
@@ -105,7 +105,7 @@ const ingestStatusType = (statusValue: string) => {
       <el-alert v-if="error" type="error" :closable="false" :title="error" />
 
       <el-row :gutter="18" v-loading="loading">
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-blue"><span>已索引 Episodes</span><strong>{{ episodes.length }}</strong><small>processed-ready 样本</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="stat-card accent-blue"><span>已索引 Episodes</span><strong>{{ episodes.length }}</strong><small>MinIO episode 样本</small></el-card></el-col>
         <el-col :span="6"><el-card shadow="never" class="stat-card accent-green"><span>任务类型</span><strong>{{ taskTypes.length }}</strong><small>支持动态扫描</small></el-card></el-col>
         <el-col :span="6"><el-card shadow="never" class="stat-card accent-orange"><span>失败原因种类</span><strong>{{ reasonStats.length }}</strong><small>L2/L3/L4/System</small></el-card></el-col>
         <el-col :span="6"><el-card shadow="never" class="stat-card accent-purple"><span>批次数量</span><strong>{{ batches.length }}</strong><small>一次扫描形成一个批次</small></el-card></el-col>
@@ -114,32 +114,35 @@ const ingestStatusType = (statusValue: string) => {
       <el-row :gutter="18">
         <el-col :span="9">
           <el-card shadow="never" class="product-card filter-card">
-            <template #header>扫描入库</template>
+            <template #header>扫描 MinIO</template>
             <div class="filter-grid">
-              <el-input v-model="scanForm.sourcePath" placeholder="输入允许扫描的 processed 目录" clearable />
-              <el-input v-model="scanForm.batchName" placeholder="批次名（可选，默认取目录名）" clearable />
+              <el-input v-model="scanForm.bucket" placeholder="输入 MinIO bucket 名称" clearable />
+              <el-select v-model="scanForm.scope" placeholder="扫描范围">
+                <el-option label="全量扫描" value="full" />
+              </el-select>
               <el-button type="primary" :loading="scanning" @click="submitScan">开始扫描</el-button>
             </div>
             <div style="margin-top: 10px; color: #909399; font-size: 13px; line-height: 1.6;">
-              允许目录以服务端配置为准，当前建议使用样例路径
-              <code>/home/tbl/Project/data_collect/data/raw/process</code>
-              或生产机上的
-              <code>/data/collection_data/process</code>。
+              当前扫描直接面向 MinIO 数据湖，默认 bucket 为
+              <code>yaocao</code>
+              ，scope 目前保留
+              <code>full</code>
+              全量扫描语义。
             </div>
           </el-card>
         </el-col>
         <el-col :span="15">
           <el-card shadow="never" class="product-card" v-loading="loading">
-            <template #header>最近入库任务</template>
+            <template #header>最近扫描任务</template>
             <el-table :data="ingestJobs" stripe height="240">
-              <el-table-column prop="batchName" label="批次" min-width="180" />
-              <el-table-column prop="sourcePath" label="来源目录" min-width="260" show-overflow-tooltip />
+              <el-table-column prop="bucket" label="Bucket" min-width="150" />
+              <el-table-column prop="scope" label="范围" width="110" />
               <el-table-column label="状态" width="110">
                 <template #default="{ row }"><el-tag :type="ingestStatusType(row.status)">{{ row.status }}</el-tag></template>
               </el-table-column>
-              <el-table-column prop="episodes" label="总数" width="80" />
-              <el-table-column prop="importedEpisodes" label="导入" width="80" />
-              <el-table-column prop="skippedEpisodes" label="跳过" width="80" />
+              <el-table-column prop="confirmedLists" label="列表" width="80" />
+              <el-table-column prop="totalEpisodes" label="Episodes" width="90" />
+              <el-table-column prop="newEpisodes" label="新增" width="80" />
               <el-table-column prop="detail" label="详情" min-width="180" show-overflow-tooltip />
               <el-table-column prop="startedAt" label="开始时间" width="160" />
             </el-table>

@@ -154,7 +154,7 @@ const reassignTask = async (taskId: string) => {
           <div class="card-header"><span>派发计划 — 候选池预览</span><el-tag :type="dispatchPreview?.dispatchMode === 'full' ? 'success' : 'warning'" size="small">{{ dispatchPreview?.dispatchMode === 'full' ? '当前全量' : `当前抽检 ${dispatchPreview?.samplingRatio ?? 0}%` }}</el-tag></div>
         </template>
         <el-row :gutter="18">
-          <el-col :span="6"><div class="stat-card accent-blue"><span>候选总量</span><strong>{{ candidateCount }}</strong><small>processed-ready</small></div></el-col>
+          <el-col :span="6"><div class="stat-card accent-blue"><span>候选总量</span><strong>{{ candidateCount }}</strong><small>已索引 MinIO episode</small></div></el-col>
           <el-col :span="6"><div class="stat-card accent-orange"><span>已抽中样本</span><strong>{{ sampledCount }}</strong><small>已生成 {{ taskSummary.created }} 条任务</small></div></el-col>
           <el-col :span="6"><div class="stat-card accent-purple"><span>未抽中</span><strong>{{ unsampledCount }}</strong><small>等待补派或全量展开</small></div></el-col>
           <el-col :span="6"><div class="stat-card accent-green"><span>样本进度</span><strong>{{ taskSummary.done }}/{{ taskSummary.created }}</strong><small>assigned {{ taskSummary.assigned }} · in_review {{ taskSummary.inReview }}</small></div></el-col>

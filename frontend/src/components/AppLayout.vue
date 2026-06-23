@@ -59,10 +59,10 @@ const logout = async () => {
       </el-menu>
 
       <div class="storage-card">
-        <div class="storage-title">本地中心主机</div>
-        <div class="storage-path">/data/collection_data</div>
+        <div class="storage-title">MinIO 对象存储</div>
+        <div class="storage-path">默认 bucket: yaocao</div>
         <el-tag type="success" effect="light">业务数据由后端统一索引</el-tag>
-        <div class="storage-meta">文件存储路径与扫描白名单以服务端配置为准</div>
+        <div class="storage-meta">对象访问与扫描范围以服务端 MinIO 配置为准</div>
       </div>
     </el-aside>
 

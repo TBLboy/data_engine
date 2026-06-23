@@ -1,3 +1,148 @@
+## 2026-06-23 (Robot QC V1 MinIO scanner/runtime validation and local-field cleanup)
+
+- Type: implementation
+- Status: validated on real MinIO data
+- Importance: critical
+- Reusable: yes
+- Objective: 在下游合同切换完成后，继续把旧本地字段从运行路径移除，并用真实 `yaocao` bucket 数据验证 scanner、控制面写入和 manual QC 结构化上下文读取
+- Work completed:
+  - 新增 `backend/app/services/authz.py`，把权限校验从旧本地 ingestion 模块中独立出来；`api/routes/qc.py` 与 `services/scanner.py` 已改为直接依赖该模块
+  - 删除旧运行路径中的 `backend/app/services/ingestion.py` 与 `backend/app/models/ingest.py`，不再保留本地扫描服务作为运行时入口
+  - 清理后端配置与模型中的本地字段：`app/core/config.py` 去掉 `COLLECTION_DATA_ROOT` / `SAMPLE_PROCESSED_ROOT`，`models/batch.py` 去掉 `storage_path`，`models/episode.py` 去掉 `source_path/source_hash/ingest_status`
+  - 更新 baseline migration，并新增 `20260623_0003_drop_local_storage_fields.py`，用于正式删除 `ingest_jobs` 表和旧本地字段；同时补上“按实际表/列存在性 drop”的兼容逻辑，保证 fresh 库与历史库都能推进
+  - 新增 `backend/app/services/classification_seed.py`，把业务文档中已经收敛的首版 `task_types + classification_rules` 种子真正写入初始化流程；`bootstrap.initialize_schema()` 现在会自动补齐这些 seed
+  - 扩展 `services/scanner.py`：真实扫描后不仅写 `scan_jobs/lists/episode_inventory/episode_objects`，还会同步生成 `batches` 与 `episodes` 业务层行，并按规则 seed 绑定 `task_type`
+  - 修复 scanner 运行期 bug：纠正 episode inventory 构建块的缩进错误，并修复 `telemetry.npz` 从 MinIO 流直接 `np.load()` 时的 seek 问题，改为先读入内存再解析
+- Business logic impact: 到这一阶段，系统已经不再只是“控制面能扫到对象”，而是可以从真实 MinIO bucket 一次扫描落到控制面和业务层，再从这些业务层/控制面数据反向构建 manual QC 所需的结构化上下文。这意味着本地目录方案在核心运行路径上已经被实际替代，而不是只停留在 schema 或 UI 文案层
+- Problems encountered:
+  - `20260623_0003` 初版在 fresh SQLite 库上因 `ingest_jobs` 尚不存在而直接失败
+  - MinIO SDK 运行依赖在 `.conda-env` 中不完整，导致真实扫描初次验证时缺少 `certifi` / `_cffi_backend`
+  - scanner 首次接入 batch/episode 业务层时，episode inventory 构建块被错误挂在 `else` 分支下，导致只生成 list 不生成 inventory
+  - `telemetry.npz` 通过 MinIO response 流直接传给 `numpy.load()` 时会因底层流不支持 seek 而失败
+- Resolution:
+  - migration 改为对目标表/列/索引先做存在性判断，再执行 drop
+  - 在 `.conda-env` 中补齐 `minio` 运行依赖并完成导入验证
+  - 修正 scanner 的批次/episode 构建逻辑缩进，重新跑真实 bucket 验证
+  - `npz` 读取改为 `response.read() -> io.BytesIO -> np.load()`
+- Verification:
+  - `cd software/backend && DATABASE_URL=sqlite:////tmp/robot_qc_minio_phase.db .conda-env/bin/python -m alembic upgrade head`
+  - `cd software/backend && DATABASE_URL=sqlite:////tmp/robot_qc_minio_phase.db .conda-env/bin/python -m app.services.bootstrap --ensure-schema-only`
+  - 真实 MinIO 连通性：使用 `MINIO_ENDPOINT=192.168.21.95:9190`、真实凭据、bucket=`yaocao` 成功列出对象
+  - 真实 scanner 验证：临时 SQLite 库上跑 `run_minio_scan()`，结果为 `lists=39`、`episode_inventory=3699`、`episode_objects=1857532`、`batches=39`、`episodes=3699`
+  - 真实 manual QC 结构化上下文验证：`episode_000000` 返回 `frameCount=394`、`q_motion=5.9`、`timelineSegments=3`
+  - `cd software/backend && .conda-env/bin/python -m compileall app migrations/versions`
+  - `npm run build --prefix software/frontend`
+- Unverified items:
+  - manual QC 的真实视频 `media[]` descriptor、presigned preview URL、refresh/download API 仍未落地
+  - 还未做浏览器层真实视频播放和完整 login -> scan -> database -> manual-qc 的真对象端到端验收
+  - 还未完成阶段性 git commit/push 之后的生产 compose 级联调
+- Files changed:
+  - `software/backend/app/services/authz.py`
+  - `software/backend/app/services/classification_seed.py`
+  - `software/backend/app/services/scanner.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/backend/app/services/bootstrap.py`
+  - `software/backend/app/api/routes/qc.py`
+  - `software/backend/app/core/config.py`
+  - `software/backend/app/models/__init__.py`
+  - `software/backend/app/models/batch.py`
+  - `software/backend/app/models/episode.py`
+  - `software/backend/app/services/ingestion.py`
+  - `software/backend/app/models/ingest.py`
+  - `software/backend/migrations/versions/20260623_0001_baseline_schema.py`
+  - `software/backend/migrations/versions/20260623_0003_drop_local_storage_fields.py`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 提交并 push 当前阶段版本
+  - 落地 `ManualQcContext.media[]`、preview/refresh/download API 与前端真实播放器接线
+  - 用真实 MinIO 数据跑浏览器端到端链路并补生产 compose 验收
+
+## 2026-06-23 (Robot QC V1 MinIO 替换继续推进)
+
+- Type: implementation
+- Status: partially validated
+- Importance: critical
+- Reusable: yes
+- Objective: 继续把 scan API 切换向下游闭环推进，去掉 manual QC 对本地 processed 目录的依赖，并收口批次/界面/部署中的本地存储语义
+- Work completed:
+  - 后端 `app/services/payloads.py` 已不再查找本地 processed 目录，manual QC 真实上下文改为通过 `EpisodeInventory + EpisodeObject + ListRecord.bucket` 定位对象，并直接从 MinIO 读取 `manifest.json`、`metadata.json`、`telemetry.npz`
+  - 后端 `serialize_batch()` 已从旧 `storagePath` 输出切换为 `bucket + storagePrefix`，并通过控制面映射为 batch 提供 MinIO 存储定位信息
+  - 前端 `BatchSummary` mock 与下游页面文案继续切到 MinIO：登录页、侧栏、database、task-pool、manual-qc 已去掉本地存储表达
+  - `software/deploy/README.txt` 已改为 MinIO 对象存储说明，`software/deploy/docker-compose.yml` 已移除旧 `/data/collection_data` 业务挂载
+  - `frontend/src/api/mock.ts` 已同步把 batch 示例与审计文案切到 MinIO 语义
+- Business logic impact: manual QC 指标与时间轴链路现在已经脱离本地目录查找，开始真正依赖 MinIO 控制面与对象读取；同时 scan/database/batch 的对外合同已不再继续暴露本地路径，系统运行语义进一步向“MinIO 是唯一数据面”收敛
+- Problems encountered:
+  - 现有 `Episode/Batch/IngestJob` 模型与旧 `app/services/ingestion.py` 仍保留 `source_path/storage_path` 等本地字段，仓库层面还没有彻底完成结构清理
+  - 当前 scanner 虽已落控制面，但还没有把 `ingested_episode_id` 做成稳定真实映射；本轮 batch/minio 对位改为依赖 `episode_id_from_manifest/episode_name/ingested_episode_id` 兜底查找，避免错误绑定
+  - 当前 manual QC 页面的视频区仍是占位 UI，真实 media descriptor、presigned preview URL、refresh/download 接口尚未实现
+- Resolution:
+  - 先在 payload/query/view 层完成运行路径替换，确保旧本地扫描数据逻辑不再参与当前 manual QC 上下文与 batch 对外合同
+  - 对 batch 与 episode 的 MinIO 控制面关联采用查询兜底策略，保证在现有控制面首版数据下也能继续推进 downstream 清理
+- Verification:
+  - `npm run build --prefix software/frontend`
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 software/backend/.conda-env/bin/python -m compileall software/backend/app`
+- Unverified items:
+  - 尚未在真实 MinIO + 数据库样本上跑通 manual QC 页面请求，当前仅完成静态构建/编译验证
+  - 尚未通过 migration 正式移除旧 `source_path/storage_path` 字段与 `ingest_jobs` / `app/services/ingestion.py` 本地链路
+  - 尚未做浏览器层 real media playback 验证
+- Files changed:
+  - `software/backend/app/services/payloads.py`
+  - `software/backend/app/services/scanner.py`
+  - `software/frontend/src/api/mock.ts`
+  - `software/frontend/src/pages/login.vue`
+  - `software/frontend/src/components/AppLayout.vue`
+  - `software/frontend/src/pages/task-pool.vue`
+  - `software/frontend/src/pages/database-view.vue`
+  - `software/frontend/src/pages/manual-qc.vue`
+  - `software/deploy/README.txt`
+  - `software/deploy/docker-compose.yml`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 继续清理 `app/core/config.py`、`models/batch.py`、`models/episode.py`、`models/ingest.py` 与 `app/services/ingestion.py` 中残留的本地存储字段/逻辑
+  - 落地 manual QC `media[]` descriptor、presigned preview/refresh/download API，并做浏览器真播放验证
+  - 在真实 MinIO 样本上补一轮 scan → database → manual QC 的端到端验证
+
+
+- Type: implementation
+- Status: validated
+- Importance: critical
+- Reusable: yes
+- Objective: 按 Node D 的首块实现顺序先把 MinIO 控制面数据模型落到代码里，补齐 6 张新表的 SQLAlchemy models 与 Alembic migration，并确认新库与 bootstrap 初始化都能正确推进到最新版本
+- Work completed:
+  - 新增 `software/backend/app/models/control_plane.py`，落地 `scan_jobs`、`discovered_prefixes`、`lists`、`episode_inventory`、`episode_objects`、`classification_rules` 六个 SQLAlchemy model
+  - 按业务文档中的字段约束补齐唯一键、外键、关键索引与默认值，包括 `scan_jobs(bucket, started_at)`、`lists(bucket, list_prefix)`、`episode_inventory(list_id, episode_name)`、`episode_objects(episode_inventory_id, object_key)` 等控制面约束
+  - 新增 Alembic revision `software/backend/migrations/versions/20260623_0002_minio_control_plane.py`，把 6 张表和对应索引正式纳入迁移链路
+  - 更新 `software/backend/app/models/__init__.py`，把新控制面模型纳入 metadata 导入，确保 Alembic/运行时都能识别到新表
+  - 修正 `software/backend/app/services/bootstrap.py`：对“已有旧业务表但尚无 Alembic 版本表”的库，不再直接 `stamp head`，而是先 `stamp 20260623_0001` 再 `upgrade head`，避免旧库被错误跳过新控制面 migration
+- Business logic impact: Node D 已从纯文档 handoff 进入真实代码落地阶段。系统现在已经有稳定的 PostgreSQL 控制面骨架，能承接 bucket 扫描批次、递归发现的 prefix、去重后的 list、episode 级库存、对象清单与任务分类规则，为后续扫描器实现、classification seed 装载和 manual QC MinIO 化改造提供了正式数据层基础
+- Problems encountered:
+  - 当前 backend 没有现成测试文件覆盖新 migration，只能先做迁移与初始化级验证
+  - `.venv` 中未安装 Alembic，直接在该环境执行迁移失败
+- Resolution:
+  - 改用已验证可用的 `software/backend/.conda-env` 运行 Alembic 与 bootstrap 验证，保持与现有 backend 验证环境一致
+  - 用临时 SQLite 库同时验证 `alembic upgrade head` 和 `python -m app.services.bootstrap --ensure-schema-only`，确保 revision 链与初始化入口都能通过
+- Verification:
+  - `software/backend/.venv/bin/python -m compileall app/models/control_plane.py app/models/__init__.py app/services/bootstrap.py migrations/versions/20260623_0002_minio_control_plane.py`
+  - `cd software/backend && DATABASE_URL=sqlite:////tmp/robot_qc_minio_control_plane.db .conda-env/bin/python -m alembic upgrade head`
+  - `rm -f /tmp/robot_qc_minio_control_plane.db && cd software/backend && DATABASE_URL=sqlite:////tmp/robot_qc_minio_control_plane.db .conda-env/bin/python -m app.services.bootstrap --ensure-schema-only`
+- Unverified items:
+  - 还未实现真正的 MinIO recursive scanner、deepest-match dedup 和 `episode_objects` 明细落库逻辑
+  - 还未补 classification seed 初始化与基于 `classification_rules` 的自动归类流程
+  - 还未把现有 ingestion/manual QC 查询链路接到 `episode_inventory` / `episode_objects` 上
+- Files changed:
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+  - `software/backend/app/models/control_plane.py`
+  - `software/backend/app/models/__init__.py`
+  - `software/backend/app/services/bootstrap.py`
+  - `software/backend/migrations/versions/20260623_0002_minio_control_plane.py`
+- Next steps:
+  - 实现 MinIO recursive scanner，把 `scan_jobs` / `discovered_prefixes` / `lists` / `episode_inventory` 真正跑起来
+  - 补首版 `classification_rules` seed 装载逻辑，并定义未命中 list 的人工确认入口
+  - 开始把 manual QC 上下文改造为从 `episode_objects` 与 MinIO 访问协议生成真实媒体 descriptors
+
 ## 2026-06-23 (Robot QC V1 Node D manual QC API contract closure)
 
 - Type: analysis

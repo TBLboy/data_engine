@@ -8,9 +8,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 BASE_DIR = Path(__file__).resolve().parents[2]
 PROJECT_ROOT = BASE_DIR.parents[1] if len(BASE_DIR.parents) > 1 else BASE_DIR
 DEFAULT_SQLITE_PATH = BASE_DIR / 'data' / 'robot_qc.db'
-DEFAULT_SAMPLE_PROCESSED_ROOT = PROJECT_ROOT / 'data' / 'raw' / 'process'
-if not DEFAULT_SAMPLE_PROCESSED_ROOT.exists():
-    DEFAULT_SAMPLE_PROCESSED_ROOT = BASE_DIR / 'data' / 'raw' / 'process'
 DEFAULT_SECRET_KEY = 'robot-qc-dev-secret-change-in-prod'
 
 
@@ -27,8 +24,12 @@ class Settings(BaseSettings):
     session_cookie_secure: bool = Field(default=False, alias='SESSION_COOKIE_SECURE')
     session_max_age_seconds: int = 60 * 60 * 12
     review_lock_ttl_seconds: int = Field(default=60 * 20, alias='REVIEW_LOCK_TTL_SECONDS')
-    collection_data_root: Path = Field(default=Path('/data/collection_data'), alias='COLLECTION_DATA_ROOT')
-    sample_processed_root: Path = Field(default=DEFAULT_SAMPLE_PROCESSED_ROOT, alias='SAMPLE_PROCESSED_ROOT')
+    minio_endpoint: str = Field(default='127.0.0.1:9000', alias='MINIO_ENDPOINT')
+    minio_access_key: str = Field(default='', alias='MINIO_ACCESS_KEY')
+    minio_secret_key: str = Field(default='', alias='MINIO_SECRET_KEY')
+    minio_secure: bool = Field(default=False, alias='MINIO_SECURE')
+    minio_region: str = Field(default='', alias='MINIO_REGION')
+    minio_default_bucket: str = Field(default='yaocao', alias='MINIO_DEFAULT_BUCKET')
     database_url: str = Field(
         default=f'sqlite:///{DEFAULT_SQLITE_PATH}',
         alias='DATABASE_URL'

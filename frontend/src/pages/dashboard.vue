@@ -64,11 +64,11 @@ const statusType = (status: string) => {
         <div class="hero-copy">
           <el-tag type="primary" effect="dark">V1.0 Manual QC Platform</el-tag>
           <h1>机器人采集数据质检运营中心</h1>
-          <p>从本地数据入库、批次管理、抽检派发、人工 QC、结果留痕到批次统计，形成公司内网可落地的完整闭环。</p>
+          <p>从 MinIO 数据湖扫描入库、批次管理、抽检派发、人工 QC、结果留痕到批次统计，形成公司内网可落地的完整闭环。</p>
           <div class="hero-badges">
-            <span>本地中心主机部署</span>
+            <span>LAN 内网部署</span>
             <span>PostgreSQL 业务数据</span>
-            <span>视频/telemetry 本地文件存储</span>
+            <span>MinIO 对象存储</span>
             <span>多人账号协作</span>
           </div>
         </div>
@@ -169,11 +169,11 @@ const statusType = (status: string) => {
 
         <el-col :span="8">
           <el-card shadow="never" class="product-card" v-loading="loading">
-            <template #header>入库与转换任务</template>
+            <template #header>扫描任务</template>
             <div v-for="job in ingestJobs" :key="job.id" class="ingest-row">
-              <div class="ingest-head"><strong>{{ job.batchName }}</strong><el-tag size="small">{{ job.status }}</el-tag></div>
+              <div class="ingest-head"><strong>{{ job.bucket }}</strong><el-tag size="small">{{ job.status }}</el-tag></div>
               <el-progress :percentage="job.progress" />
-              <span>{{ job.episodes }} episodes · {{ job.startedAt }}</span>
+              <span>{{ job.scope }} · {{ job.totalEpisodes }} episodes · {{ job.startedAt }}</span>
             </div>
           </el-card>
         </el-col>

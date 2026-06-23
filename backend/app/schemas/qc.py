@@ -74,7 +74,8 @@ class BatchSummarySchema(BaseModel):
     qcStatus: str
     passRate: float
     topReason: str
-    storagePath: str
+    bucket: str
+    storagePrefix: str
 
 
 class EpisodeRowSchema(BaseModel):
@@ -170,22 +171,21 @@ class ReviewerWorkloadSchema(BaseModel):
 
 class IngestJobSchema(BaseModel):
     id: str
-    batchId: str
-    batchName: str
-    sourcePath: str
+    bucket: str
+    scope: str
     status: str
     progress: int
-    episodes: int
-    importedEpisodes: int
-    skippedEpisodes: int
+    confirmedLists: int
+    totalEpisodes: int
+    newEpisodes: int
     detail: str
     startedAt: str
     finishedAt: str | None
 
 
 class IngestScanRequest(BaseModel):
-    sourcePath: str
-    batchName: str = ''
+    bucket: str
+    scope: str = 'full'
 
 
 class QcRevisionSchema(BaseModel):

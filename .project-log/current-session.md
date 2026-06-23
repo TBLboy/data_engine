@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-- 2026-06-23 (Robot QC V1 MinIO rule-set analysis recorded)
+- 2026-06-23 (MinIO control-plane schema/models first implementation block landed and validated)
 
 ## Current Objective
 
@@ -52,10 +52,16 @@
 - 已明确 manual QC 的 MinIO 对象访问协议：预览/播放类 MP4 采用后端签发的短时 presigned URL，`manifest.json`/`metadata.json`/`telemetry.npz` 等结构化对象继续由后端读取解析，显式下载/导出保持后端受控接口
 - 已进一步收口 Node D manual QC API 合同：`/api/episodes/{episode_id}/qc-context` 直接返回 embedded `media[]` descriptors；预览 URL 刷新走 `POST /api/episodes/{episode_id}/media/refresh` 按 `objectId` 定向更新；显式下载走独立 `GET /api/episodes/{episode_id}/objects/{object_id}/download`
 - Node F 控制面业务规则已闭环：扫描、状态推进、object_role、classification_rules 与 manual QC 对象访问协议均已落定，下一步进入 Node D 实现规划与 API/前端合同改造
+- 已在 scan API 切换后继续收口下游链路：`database/dashboard` 扫描任务视图已全部改为 bucket/scope 语义，`BatchSummary` 已切到 `bucket + storagePrefix`，frontend mock 已同步为 MinIO 字段
+- manual QC 真实上下文已从本地 processed 目录读取切换为基于控制面 `episode_inventory + episode_objects + lists` 的 MinIO 对象读取；后端直接从 MinIO 拉取 `manifest.json` / `metadata.json` / `telemetry.npz` 生成 metrics 与 timeline，不再参与旧本地扫描目录逻辑
+- 已继续推进旧本地字段清理：新增 `app/services/authz.py` 承接权限校验，旧 `app/services/ingestion.py` 与 `models/ingest.py` 已从运行路径删除；同时新增 Alembic revision `20260623_0003` 用于删除 `ingest_jobs`、`batches.storage_path`、`episodes.source_path/source_hash/ingest_status`
+- 已完成首轮真实 MinIO 运行时验证：使用 `yaocao` bucket 在临时 SQLite 库上成功执行真实扫描，产出 `scan_jobs=1`、`lists=39`、`episode_inventory=3699`、`episode_objects=1857532`、`batches=39`、`episodes=3699`，说明 scanner 已能把对象湖数据真正沉到控制面和业务层
+- manual QC 结构化对象读取已通过真实对象验证：`_build_real_manual_qc_context()` 能基于真实 `episode_000000` 从 MinIO 读取 `telemetry.npz`/`manifest.json`/`metadata.json`，返回 `frameCount=394`、`metric0=q_motion 5.9`、`timelineSegments=3`
 
 ## Current Risks
 
-- 当前真实入库和 manual QC 上下文仍依赖宿主本地 processed 目录；虽然对象访问协议已定，但 MinIO 对象映射表、媒体 descriptor payload 和后端签名发放接口尚未实现
-- 当前已拿到对象存储访问凭据；后续实现时必须改为环境变量注入，不能写入仓库代码或部署文档中的明文默认值
+- 当前真实入库和业务模型中仍残留旧本地字段：`episodes.source_path`、`batches.storage_path`、`ingest_jobs.source_path` 及旧 `app/services/ingestion.py` 尚未从仓库彻底移除，后续还需补 migration 与模型清理，避免“代码已不走、结构仍滞留”
+- MinIO manual QC 当前已切到对象读取，但 media descriptor / presigned preview URL / refresh/download 接口仍未落地，视频区仍是占位 UI，Node D 合同还有后续实现工作
+- 当前 scanner 已能生成 batch/episode 业务行，但 task type 仍主要依赖 basename 规则 seed，后续还需要补 task-type 管理接口、人工确认入口与浏览器端到端验证
 - 当前虽已明确 bucket 全量扫描必须做递归结构识别，但 `raw_only`、`processed_only`、父子 prefix 同时命中的边界判定和重扫幂等策略还未落成正式字段设计
 - 当前仍未确认是否存在“显式任务字段”可直接从单个 episode 元数据稳定提取；因此任务类型设计必须允许规则推断和人工回写，而不能把 MinIO 路径字符串直接当最终业务分类键

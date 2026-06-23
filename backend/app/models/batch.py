@@ -19,7 +19,6 @@ class Batch(Base):
     qc_status: Mapped[str] = mapped_column(String(32), default='new', nullable=False)
     pass_rate: Mapped[float] = mapped_column(nullable=False, default=0)
     top_reason: Mapped[str] = mapped_column(String(128), default='-', nullable=False)
-    storage_path: Mapped[str] = mapped_column(String(255), nullable=False)
 
     task_type = relationship('TaskType', back_populates='batches')
     episodes = relationship('Episode', back_populates='batch')

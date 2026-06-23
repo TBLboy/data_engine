@@ -1,17 +1,15 @@
 from __future__ import annotations
 
+import io
 import json
 from datetime import datetime
-from pathlib import Path
 
 import numpy as np
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
-from app.models import AuditEvent, Batch, Episode, IngestJob, QcReviewRevision, QcTask, TaskType, User
-
-settings = get_settings()
+from app.models import AuditEvent, Batch, Episode, EpisodeInventory, EpisodeObject, ListRecord, QcReviewRevision, QcTask, ScanJob, TaskType, User
+from app.services.minio_client import get_minio_service
 
 
 def format_time(value: datetime) -> str:
@@ -53,9 +51,29 @@ def serialize_task_type(task_type: TaskType) -> dict:
     }
 
 
-def serialize_batch(batch: Batch) -> dict:
+def _lookup_inventory_for_episode(db: Session, episode_id: str):
+    return db.query(EpisodeInventory, ListRecord.bucket).join(
+        ListRecord, EpisodeInventory.list_id == ListRecord.id
+    ).filter(
+        (EpisodeInventory.ingested_episode_id == episode_id)
+        | (EpisodeInventory.episode_id_from_manifest == episode_id)
+        | (EpisodeInventory.episode_name == episode_id)
+    ).order_by(EpisodeInventory.last_seen_scan_id.desc()).first()
+
+
+def _batch_storage_location(db: Session, batch: Batch) -> tuple[str, str]:
+    for episode in batch.episodes:
+        inventory = _lookup_inventory_for_episode(db, episode.id)
+        if inventory:
+            episode_inventory, bucket = inventory
+            return bucket, episode_inventory.processed_prefix or episode_inventory.raw_prefix or episode_inventory.episode_prefix
+    return '', ''
+
+
+def serialize_batch(db: Session, batch: Batch) -> dict:
     coverage = round((batch.sampled_episode_count / batch.episode_count) * 100) if batch.episode_count else 0
     completion = round((batch.completed_sample_count / batch.sampled_episode_count) * 100) if batch.sampled_episode_count else 0
+    bucket, storage_prefix = _batch_storage_location(db, batch)
     return {
         'id': batch.id,
         'taskTypeId': batch.task_type_id,
@@ -71,7 +89,8 @@ def serialize_batch(batch: Batch) -> dict:
         'qcStatus': batch.qc_status,
         'passRate': batch.pass_rate,
         'topReason': batch.top_reason,
-        'storagePath': batch.storage_path,
+        'bucket': bucket,
+        'storagePrefix': storage_prefix,
     }
 
 
@@ -176,33 +195,20 @@ def serialize_audit(audit: AuditEvent) -> dict:
     }
 
 
-def serialize_ingest_job(job: IngestJob) -> dict:
+def serialize_ingest_job(job: ScanJob) -> dict:
     return {
         'id': job.id,
-        'batchId': job.batch_id,
-        'batchName': job.batch_name,
-        'sourcePath': job.source_path,
+        'bucket': job.bucket,
+        'scope': job.scope,
         'status': job.status,
-        'progress': job.progress,
-        'episodes': job.episodes,
-        'importedEpisodes': job.imported_episodes,
-        'skippedEpisodes': job.skipped_episodes,
-        'detail': job.detail,
+        'progress': 100 if job.status == 'done' else 0,
+        'confirmedLists': job.confirmed_lists,
+        'totalEpisodes': job.total_episodes,
+        'newEpisodes': job.new_episodes,
+        'detail': job.error_detail or f'lists={job.confirmed_lists} episodes={job.total_episodes} new={job.new_episodes}',
         'startedAt': format_time(job.started_at),
         'finishedAt': format_time(job.finished_at) if job.finished_at else None,
     }
-
-
-def _processed_episode_dir(episode_id: str) -> Path | None:
-    candidate_dirs = [
-        settings.sample_processed_root / episode_id,
-        settings.collection_data_root / 'process' / episode_id,
-        settings.collection_data_root / episode_id,
-    ]
-    for candidate in candidate_dirs:
-        if candidate.exists():
-            return candidate
-    return None
 
 
 def _metric_level(value: float, warn_threshold: float, bad_threshold: float, reverse: bool = False) -> str:
@@ -280,21 +286,46 @@ def _merge_segments(segments: list[dict], max_gap_seconds: int = 1, min_duration
     return sorted(merge_pass(merged), key=lambda item: (item['start'], item['label']))
 
 
-def _build_real_manual_qc_context(episode_id: str) -> dict | None:
-    episode_dir = _processed_episode_dir(episode_id)
-    if not episode_dir:
+def _read_minio_json(bucket: str, object_key: str) -> dict:
+    response = get_minio_service().get_object(bucket, object_key)
+    try:
+        return json.loads(response.read().decode('utf-8'))
+    finally:
+        response.close()
+        response.release_conn()
+
+
+def _read_minio_npz(bucket: str, object_key: str):
+    response = get_minio_service().get_object(bucket, object_key)
+    try:
+        payload = response.read()
+    finally:
+        response.close()
+        response.release_conn()
+    return np.load(io.BytesIO(payload), allow_pickle=False)
+
+
+def _build_real_manual_qc_context(db: Session, episode_id: str) -> dict | None:
+    inventory_row = _lookup_inventory_for_episode(db, episode_id)
+    if not inventory_row:
         return None
 
-    manifest_path = episode_dir / 'manifest.json'
-    metadata_path = episode_dir / 'metadata.json'
-    telemetry_path = episode_dir / 'telemetry.npz'
-    if not manifest_path.exists() or not metadata_path.exists() or not telemetry_path.exists():
+    inventory, bucket = inventory_row
+    object_rows = db.query(EpisodeObject).filter(
+        EpisodeObject.episode_inventory_id == inventory.id,
+        EpisodeObject.object_scope == 'processed',
+    ).all()
+    object_map = {item.object_role: item.object_key for item in object_rows}
+    manifest_key = object_map.get('manifest')
+    metadata_key = object_map.get('metadata')
+    telemetry_key = object_map.get('telemetry_npz')
+    if not manifest_key or not metadata_key or not telemetry_key:
         return None
 
-    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
-    metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
+    manifest = _read_minio_json(bucket, manifest_key)
+    metadata = _read_minio_json(bucket, metadata_key)
 
-    with np.load(telemetry_path) as telemetry:
+    with _read_minio_npz(bucket, telemetry_key) as telemetry:
         timestamps = telemetry['timestamps'].astype(np.float64)
         relative_seconds = timestamps - timestamps[0]
         tracking_error = np.abs(telemetry['actions'] - telemetry['qpos']).mean(axis=1)
@@ -389,21 +420,21 @@ def dashboard_payload(db: Session, current_user: User) -> dict:
     return {
         'currentUser': serialize_user(current_user),
         'taskTypes': [serialize_task_type(item) for item in db.query(TaskType).order_by(TaskType.id).all()],
-        'batches': [serialize_batch(item) for item in db.query(Batch).order_by(Batch.imported_at.desc()).all()],
+        'batches': [serialize_batch(db, item) for item in db.query(Batch).order_by(Batch.imported_at.desc()).all()],
         'qcTasks': [serialize_task(item, current_user) for item in db.query(QcTask).order_by(QcTask.created_at.desc()).all()],
         'reasonStats': reason_stats_payload_from_db(db),
         'reviewerWorkloads': reviewer_workload_payload(db),
-        'ingestJobs': [serialize_ingest_job(item) for item in db.query(IngestJob).order_by(IngestJob.started_at.desc()).all()],
+        'ingestJobs': [serialize_ingest_job(item) for item in db.query(ScanJob).order_by(ScanJob.started_at.desc()).all()],
     }
 
 
 def database_payload(db: Session) -> dict:
     return {
         'episodes': [serialize_episode(item) for item in db.query(Episode).order_by(Episode.updated_at.desc()).all()],
-        'batches': [serialize_batch(item) for item in db.query(Batch).order_by(Batch.imported_at.desc()).all()],
+        'batches': [serialize_batch(db, item) for item in db.query(Batch).order_by(Batch.imported_at.desc()).all()],
         'taskTypes': [serialize_task_type(item) for item in db.query(TaskType).order_by(TaskType.id).all()],
         'reasonStats': reason_stats_payload_from_db(db),
-        'ingestJobs': [serialize_ingest_job(item) for item in db.query(IngestJob).order_by(IngestJob.started_at.desc()).all()],
+        'ingestJobs': [serialize_ingest_job(item) for item in db.query(ScanJob).order_by(ScanJob.started_at.desc()).all()],
     }
 
 
@@ -468,7 +499,7 @@ def history_payload(db: Session) -> dict:
         'auditRecords': [serialize_audit(item) for item in audits],
         'qcRevisions': [serialize_revision(item) for item in revisions],
         'episodes': [serialize_episode(item) for item in episodes],
-        'batches': [serialize_batch(item) for item in batches],
+        'batches': [serialize_batch(db, item) for item in batches],
     }
 
 
@@ -654,7 +685,7 @@ def dispatch_preview_payload(db: Session, batch_id: str) -> dict:
 def task_pool_payload(db: Session, current_user: User | None = None) -> dict:
     batches = db.query(Batch).order_by(Batch.imported_at.desc()).all()
     return {
-        'batches': [serialize_batch(item) for item in batches],
+        'batches': [serialize_batch(db, item) for item in batches],
         'dispatchPreviews': [dispatch_preview_payload(db, item.id) for item in batches],
         'qcTasks': [serialize_task(item, current_user) for item in db.query(QcTask).order_by(QcTask.created_at.desc()).all()],
         'reviewerWorkloads': reviewer_workload_payload(db),
@@ -674,7 +705,7 @@ def manual_qc_context_payload(db: Session, episode_id: str, current_user: User |
         'expiresAt': None,
         'version': 0,
     }
-    real_context = _build_real_manual_qc_context(episode_id)
+    real_context = _build_real_manual_qc_context(db, episode_id)
 
     if real_context:
         episode.duration_sec = real_context['durationSec']

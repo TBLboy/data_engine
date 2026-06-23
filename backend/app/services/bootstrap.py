@@ -12,6 +12,7 @@ from app.core.config import BASE_DIR
 from app.core.db import Base, SessionLocal, engine
 from app.core.security import hash_password
 from app.models import User
+from app.services.classification_seed import seed_classification_rules
 
 
 def _ensure_sqlite_directory() -> None:
@@ -44,9 +45,6 @@ def _sqlite_backfill_schema() -> None:
 
     if 'episodes' in existing_tables:
         episode_columns = {
-            'source_path': "ALTER TABLE episodes ADD COLUMN source_path VARCHAR(255) NOT NULL DEFAULT ''",
-            'source_hash': "ALTER TABLE episodes ADD COLUMN source_hash VARCHAR(64) NOT NULL DEFAULT ''",
-            'ingest_status': "ALTER TABLE episodes ADD COLUMN ingest_status VARCHAR(32) NOT NULL DEFAULT 'indexed'",
             'in_candidate_pool': 'ALTER TABLE episodes ADD COLUMN in_candidate_pool INTEGER NOT NULL DEFAULT 1',
             'sampled_for_qc': 'ALTER TABLE episodes ADD COLUMN sampled_for_qc INTEGER NOT NULL DEFAULT 0',
         }
@@ -67,12 +65,6 @@ def _sqlite_backfill_schema() -> None:
             for column_name, ddl in qc_task_columns.items():
                 if not _sqlite_column_exists('qc_tasks', column_name):
                     conn.execute(text(ddl))
-
-    inspector = inspect(engine)
-    episode_indexes = {item['name'] for item in inspector.get_indexes('episodes')} if 'episodes' in inspector.get_table_names() else set()
-    with engine.begin() as conn:
-        if 'episodes' in inspector.get_table_names() and 'ix_episodes_source_hash' not in episode_indexes:
-            conn.execute(text('CREATE INDEX IF NOT EXISTS ix_episodes_source_hash ON episodes (source_hash)'))
 
 
 def _alembic_config() -> Config:
@@ -98,7 +90,6 @@ def _has_business_tables() -> bool:
         'qc_tasks',
         'qc_review_revisions',
         'audit_events',
-        'ingest_jobs',
     }
     return bool(tables & business_tables)
 
@@ -110,7 +101,8 @@ def _ensure_migration_state() -> None:
         return
     if _has_business_tables():
         _sqlite_backfill_schema()
-        command.stamp(config, 'head')
+        command.stamp(config, '20260623_0001')
+        command.upgrade(config, 'head')
         return
     command.upgrade(config, 'head')
 
@@ -118,6 +110,12 @@ def _ensure_migration_state() -> None:
 def initialize_schema() -> None:
     _ensure_sqlite_directory()
     _ensure_migration_state()
+    db = SessionLocal()
+    try:
+        seed_classification_rules(db)
+        db.commit()
+    finally:
+        db.close()
 
 
 def initialize_admin(

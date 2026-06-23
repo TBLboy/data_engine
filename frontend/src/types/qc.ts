@@ -43,7 +43,8 @@ export interface BatchSummary {
   qcStatus: QcStatus
   passRate: number
   topReason: string
-  storagePath: string
+  bucket: string
+  storagePrefix: string
 }
 
 export interface EpisodeRow {
@@ -139,14 +140,13 @@ export interface ReviewerWorkload {
 
 export interface IngestJob {
   id: string
-  batchId: string
-  batchName: string
-  sourcePath: string
-  status: 'scanning' | 'converted' | 'indexed' | 'failed'
+  bucket: string
+  scope: string
+  status: 'scanning' | 'classifying' | 'done' | 'failed'
   progress: number
-  episodes: number
-  importedEpisodes: number
-  skippedEpisodes: number
+  confirmedLists: number
+  totalEpisodes: number
+  newEpisodes: number
   detail: string
   startedAt: string
   finishedAt: string | null

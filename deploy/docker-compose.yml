@@ -11,8 +11,6 @@ services:
       FRONTEND_ORIGIN: http://localhost:8080
     depends_on:
       - db
-    volumes:
-      - /data/collection_data:/data/collection_data
     restart: unless-stopped
 
   frontend:

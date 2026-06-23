@@ -13,9 +13,9 @@ This compose stack is for internal LAN deployment of the V1 manual QC platform.
 - `backend`: FastAPI service
 - `db`: PostgreSQL business database with persistent Docker volume
 
-## Data mounts
+## Object storage
 - PostgreSQL business data persists in volume `robot_qc_postgres`
-- Raw/processed collection data is mounted from host path `/data/collection_data`
+- Episode raw/processed artifacts are expected in MinIO; configure endpoint, bucket, and credentials through environment variables
 
 ## Build frontend assets first
 The frontend container packages the prebuilt local `dist` directory instead of installing npm dependencies inside Docker. Build it on the host before `docker compose up --build`:

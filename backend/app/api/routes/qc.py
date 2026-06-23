@@ -35,22 +35,8 @@ from app.schemas.qc import (
     TaskPoolPayloadSchema,
     UpdateAccountStatusRequest,
 )
-from app.services.ingestion import require_roles, run_ingest_scan, serialize_ingest_job
-from app.services.payloads import (
-    build_history_export_payload,
-    build_history_report_payload,
-    dashboard_payload,
-    database_payload,
-    dispatch_preview_payload,
-    history_payload,
-    home_payload,
-    manual_qc_context_payload,
-    serialize_account,
-    serialize_task,
-    serialize_user,
-    sync_batch_metrics,
-    task_pool_payload,
-)
+from app.services.authz import require_roles
+from app.services.scanner import run_minio_scan
 
 router = APIRouter(prefix='/api', tags=['qc'])
 settings = get_settings()
@@ -328,10 +314,10 @@ def scan_database(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        job = run_ingest_scan(
+        job = run_minio_scan(
             db,
-            source_path=payload.sourcePath,
-            batch_name=payload.batchName,
+            bucket=payload.bucket,
+            scope=payload.scope,
             operator=current_user,
         )
     except PermissionError as exc:

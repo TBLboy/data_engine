@@ -139,7 +139,7 @@ const submit = async () => {
             <div>
               <el-tag type="warning" effect="dark">{{ episode?.qcStatus?.toUpperCase() || 'IN REVIEW' }}</el-tag>
             <h1>人工质检工作台</h1>
-            <p>{{ episode?.id }} · {{ episode?.taskName }} · {{ episode?.batchId }} · processed-ready</p>
+            <p>{{ episode?.id }} · {{ episode?.taskName }} · {{ episode?.batchId }} · MinIO indexed</p>
           </div>
           <div class="lock-panel">
             <span>审核锁状态</span>

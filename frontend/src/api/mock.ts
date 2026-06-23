@@ -43,7 +43,8 @@ export const batches: BatchSummary[] = [
     qcStatus: 'in_review',
     passRate: 80,
     topReason: '-',
-    storagePath: '/data/collection_data/double_linkerhand_grasp_2026-06-22_09-30-12'
+    bucket: 'yaocao',
+    storagePrefix: 'double_linkerhand_grasp_2026-06-22_09-30-12/processed/'
   },
   {
     id: 'batch_20260621_002',
@@ -60,7 +61,8 @@ export const batches: BatchSummary[] = [
     qcStatus: 'in_review',
     passRate: 87.1,
     topReason: 'occlusion_object',
-    storagePath: '/data/collection_data/double_linkerhand_grasp_2026-06-21_15-18-07'
+    bucket: 'yaocao',
+    storagePrefix: 'double_linkerhand_grasp_2026-06-21_15-18-07/processed/'
   },
   {
     id: 'batch_20260620_001',
@@ -77,7 +79,8 @@ export const batches: BatchSummary[] = [
     qcStatus: 'done',
     passRate: 91.7,
     topReason: 'tracking_error',
-    storagePath: '/data/collection_data/double_linkerhand_grasp_2026-06-20_11-04-39'
+    bucket: 'yaocao',
+    storagePrefix: 'double_linkerhand_grasp_2026-06-20_11-04-39/processed/'
   },
   {
     id: 'batch_20260619_001',
@@ -94,7 +97,8 @@ export const batches: BatchSummary[] = [
     qcStatus: 'done',
     passRate: 84.8,
     topReason: 'placement_failed',
-    storagePath: '/data/collection_data/transfer_place_2026-06-19_17-42-10'
+    bucket: 'yaocao',
+    storagePrefix: 'transfer_place_2026-06-19_17-42-10/processed/'
   },
   {
     id: 'batch_20260618_003',
@@ -111,7 +115,8 @@ export const batches: BatchSummary[] = [
     qcStatus: 'done',
     passRate: 89.5,
     topReason: 'task_incomplete',
-    storagePath: '/data/collection_data/drawer_open_2026-06-18_14-12-02'
+    bucket: 'yaocao',
+    storagePrefix: 'drawer_open_2026-06-18_14-12-02/processed/'
   }
 ]
 
@@ -242,7 +247,7 @@ export const timelineSegments: TimelineSegment[] = [
 export const auditRecords: AuditRecord[] = [
   { id: 'audit_001', operator: '张审核', action: '提交人工质检', target: 'episode_000127', time: '2026-06-21 18:08', detail: 'fail / occlusion_object / 已写入 revision #2' },
   { id: 'audit_002', operator: '王主管', action: '批量派发任务', target: 'batch_20260622_001', time: '2026-06-22 09:50', detail: '分配 32 条 episode 给李审核' },
-  { id: 'audit_003', operator: '系统', action: '扫描入库', target: 'batch_20260622_001', time: '2026-06-22 09:31', detail: '发现 64 条 processed-ready episode' },
+  { id: 'audit_003', operator: '系统', action: '扫描入库', target: 'batch_20260622_001', time: '2026-06-22 09:31', detail: '发现 64 条 MinIO episode' },
   { id: 'audit_004', operator: '李审核', action: '释放软锁', target: 'episode_000128', time: '2026-06-20 16:22', detail: '人工质检提交后释放 review_lock' }
 ]
 
@@ -262,9 +267,9 @@ export const reviewerWorkloads: ReviewerWorkload[] = [
 ]
 
 export const ingestJobs: IngestJob[] = [
-  { id: 'job_001', batchId: 'batch_20260622_001', batchName: '2026-06-22 上午入库', sourcePath: '/data/collection_data/double_linkerhand_grasp_2026-06-22_09-30-12', status: 'indexed', progress: 100, episodes: 64, importedEpisodes: 64, skippedEpisodes: 0, detail: '导入 64 条，跳过 0 条', startedAt: '2026-06-22 09:30', finishedAt: '2026-06-22 09:34' },
-  { id: 'job_002', batchId: 'batch_20260622_002', batchName: '2026-06-22 raw 转换补扫', sourcePath: '/data/collection_data/raw_pending_2026-06-22_10-10-05', status: 'scanning', progress: 56, episodes: 28, importedEpisodes: 16, skippedEpisodes: 0, detail: '已扫描 16/28', startedAt: '2026-06-22 10:10', finishedAt: null },
-  { id: 'job_003', batchId: 'batch_20260621_003', batchName: '2026-06-21 下午入库', sourcePath: '/data/collection_data/double_linkerhand_grasp_2026-06-21_15-18-07', status: 'converted', progress: 100, episodes: 58, importedEpisodes: 58, skippedEpisodes: 0, detail: '转换完成，待索引', startedAt: '2026-06-21 15:18', finishedAt: '2026-06-21 15:24' }
+  { id: 'job_001', bucket: 'yaocao', scope: 'full', status: 'done', progress: 100, confirmedLists: 4, totalEpisodes: 64, newEpisodes: 64, detail: 'lists=4 episodes=64 new=64', startedAt: '2026-06-22 09:30', finishedAt: '2026-06-22 09:34' },
+  { id: 'job_002', bucket: 'yaocao', scope: 'full', status: 'scanning', progress: 0, confirmedLists: 0, totalEpisodes: 0, newEpisodes: 0, detail: '正在递归扫描对象前缀', startedAt: '2026-06-22 10:10', finishedAt: null },
+  { id: 'job_003', bucket: 'yaocao', scope: 'full', status: 'classifying', progress: 0, confirmedLists: 3, totalEpisodes: 58, newEpisodes: 12, detail: '正在匹配 list 与 episode 状态', startedAt: '2026-06-21 15:18', finishedAt: null }
 ]
 
 export const qcRevisions: QcRevision[] = [

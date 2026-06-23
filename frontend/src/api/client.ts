@@ -106,8 +106,8 @@ export interface DatabasePayload {
 }
 
 export interface IngestScanRequest {
-  sourcePath: string
-  batchName: string
+  bucket: string
+  scope: string
 }
 
 export interface TaskPoolPayload {

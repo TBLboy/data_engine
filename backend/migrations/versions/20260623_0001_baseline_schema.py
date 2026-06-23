@@ -64,7 +64,6 @@ def upgrade() -> None:
         sa.Column('qc_status', sa.String(length=32), nullable=False),
         sa.Column('pass_rate', sa.Float(), nullable=False),
         sa.Column('top_reason', sa.String(length=128), nullable=False),
-        sa.Column('storage_path', sa.String(length=255), nullable=False),
         sa.ForeignKeyConstraint(['task_type_id'], ['task_types.id']),
         sa.PrimaryKeyConstraint('id'),
     )
@@ -80,9 +79,6 @@ def upgrade() -> None:
         sa.Column('qc_result', sa.String(length=32), nullable=False),
         sa.Column('reviewer', sa.String(length=64), nullable=False),
         sa.Column('reason_code', sa.String(length=128), nullable=False),
-        sa.Column('source_path', sa.String(length=255), nullable=False),
-        sa.Column('source_hash', sa.String(length=64), nullable=False),
-        sa.Column('ingest_status', sa.String(length=32), nullable=False),
         sa.Column('updated_at', sa.DateTime(), nullable=False),
         sa.Column('in_candidate_pool', sa.Integer(), nullable=False),
         sa.Column('sampled_for_qc', sa.Integer(), nullable=False),
@@ -90,24 +86,6 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('id'),
     )
     op.create_index(op.f('ix_episodes_batch_id'), 'episodes', ['batch_id'], unique=False)
-    op.create_index(op.f('ix_episodes_source_hash'), 'episodes', ['source_hash'], unique=False)
-    op.create_table(
-        'ingest_jobs',
-        sa.Column('id', sa.String(length=64), nullable=False),
-        sa.Column('batch_id', sa.String(length=64), nullable=False),
-        sa.Column('batch_name', sa.String(length=128), nullable=False),
-        sa.Column('source_path', sa.String(length=255), nullable=False),
-        sa.Column('status', sa.String(length=32), nullable=False),
-        sa.Column('progress', sa.Integer(), nullable=False),
-        sa.Column('episodes', sa.Integer(), nullable=False),
-        sa.Column('imported_episodes', sa.Integer(), nullable=False),
-        sa.Column('skipped_episodes', sa.Integer(), nullable=False),
-        sa.Column('detail', sa.String(length=500), nullable=False),
-        sa.Column('started_at', sa.DateTime(), nullable=False),
-        sa.Column('finished_at', sa.DateTime(), nullable=True),
-        sa.PrimaryKeyConstraint('id'),
-    )
-    op.create_index(op.f('ix_ingest_jobs_batch_id'), 'ingest_jobs', ['batch_id'], unique=False)
     op.create_table(
         'qc_review_revisions',
         sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
@@ -154,9 +132,6 @@ def downgrade() -> None:
     op.drop_table('qc_tasks')
     op.drop_index(op.f('ix_qc_review_revisions_episode_id'), table_name='qc_review_revisions')
     op.drop_table('qc_review_revisions')
-    op.drop_index(op.f('ix_ingest_jobs_batch_id'), table_name='ingest_jobs')
-    op.drop_table('ingest_jobs')
-    op.drop_index(op.f('ix_episodes_source_hash'), table_name='episodes')
     op.drop_index(op.f('ix_episodes_batch_id'), table_name='episodes')
     op.drop_table('episodes')
     op.drop_index(op.f('ix_batches_task_type_id'), table_name='batches')
