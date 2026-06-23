@@ -1,69 +1,1071 @@
+## 2026-06-23 (Robot QC V1 Node D manual QC API contract closure)
+
+- Type: analysis
+- Status: documented for implementation handoff
+- Importance: critical
+- Reusable: yes
+- Objective: 在 manual QC 的 MinIO 混合访问协议已确定后，继续把 Node D 需要的 API 合同收口到可直接指导实现的粒度，明确 `ManualQcContext.media[]` 字段形状、URL 刷新方式、显式下载边界和 review lock 约束
+- Work completed:
+  - 复核 `software/backend/app/schemas/qc.py` 与 `software/frontend/src/api/client.ts`，确认当前 `ManualQcContext` 尚无 `media[]` 字段，Node D 仍存在明显合同缺口
+  - 回看 `control-plane-schema-v1.md` 中上一轮协议结论，把原先仍带二义性的 `url`/`expiresInSec` 方案收紧为 embedded `previewUrl` + `previewExpiresAt`
+  - 明确 `media[]` V1 descriptor 最少字段：`objectId`、`role`、`label`、`variant`、`slot`、`mimeType`、`previewUrl`、`previewExpiresAt`、`refreshable`、`downloadable`、`sortOrder`，以及可选的分辨率/帧率/时长元数据
+  - 明确 preview URL 刷新采用 `POST /api/episodes/{episode_id}/media/refresh`，请求只提交 `objectIds`，响应只返回对应对象的新 preview 字段，前端按 `objectId` merge，不整页重载也不猜 bucket/key
+  - 明确显式下载不复用 preview 字段，而是保留独立 `GET /api/episodes/{episode_id}/objects/{object_id}/download` 受控接口，避免预览与下载权限边界混淆
+  - 明确 review lock 与刷新关系：可查看页面的用户可拿到首轮 preview URL，但只有当前持锁用户可以持续 refresh；锁丢失后已发出的 URL 自然过期，后端不再续签
+  - 同步更新 `control-plane-schema-v1.md`、`decision-records.md`、`open-questions.md`、`nodes.md`、`graph.md`、`current-session.md`
+- Business logic impact: Node D 的实现入口现在不再停留在“以后再决定 payload 怎么长”的模糊状态，而是已经收敛成稳定合同。后端需要做的是按 `episode_objects` 构造 embedded descriptors、签发/刷新 preview URL、受控下载；前端需要做的是消费 `media[]`、按 `previewExpiresAt` 触发 refresh、绝不拼接存储路径。这样 implementation 可以直接围绕明确合同展开，而不是边写边改协议
+- Problems encountered:
+  - 上一轮协议虽然已经定下混合模式，但 `qc-context` 是否直接带可播 URL、还是只返回 access endpoint，再由前端二次换取，仍有实现分叉空间
+  - 如果 preview 与 download 复用一个通用 `url` 字段，后续权限矩阵、审计和播放器行为都会变得含糊
+- Resolution:
+  - 选定 embedded `previewUrl` 方案，优先降低 manual QC 多视频播放器的首版接入复杂度
+  - 把 refresh 与 download 都收成独立、单职责 endpoint，避免前端和后端对对象访问语义产生歧义
+- Verification:
+  - 代码静态复核：`software/backend/app/schemas/qc.py`
+  - 代码静态复核：`software/frontend/src/api/client.ts`
+  - 文档同步复核：`control-plane-schema-v1.md`、`decision-records.md`、`open-questions.md`、`nodes.md`、`graph.md`
+- Unverified items:
+  - 仍未把该合同真正落成 Pydantic schema、FastAPI 路由、MinIO presign service 与前端播放器接线代码
+  - 仍未确认当前 `yaocao` 样本里三路 RGB/深度视频在 UI 上的最终 `slot`/`label` 命名映射是否需要额外规则表
+- Files changed:
+  - `.project-log/business-logic/control-plane-schema-v1.md`
+  - `.project-log/business-logic/decision-records.md`
+  - `.project-log/business-logic/open-questions.md`
+  - `.project-log/business-logic/nodes.md`
+  - `.project-log/business-logic/graph.md`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 进入 Node D 实现规划，把 `ManualQcContextSchema`、前端 `ManualQcContext` 类型、media refresh/download 路由和 MinIO object mapping service 拆成代码任务
+  - 再进入 migration/schema/MinIO client 接入与 manual QC 真媒体联调实现
+
+## 2026-06-23 (Robot QC V1 MinIO list/episode/task classification rule analysis)
+
+- Type: analysis
+- Status: documented for control-plane design
+- Importance: critical
+- Reusable: yes
+- Objective: 基于已验证的 `yaocao` bucket 对象布局与样例元数据，先把 MinIO 接入前最关键的三条业务基础规则落地：list 是什么、什么样的 episode 才能进入流水线/进入 QC、以及任务类型应该如何归类
+- Work completed:
+  - 基于已确认的真实对象结构 `bucket/<list_prefix>/{raw|processed}/episode_xxxxxx/...`，明确 list 不应等同于单个业务任务，而应视作一次采集/上传来源批次
+  - 将 V1 的 list 自然身份收敛为 `bucket + list_prefix`，用于稳定承接对象存储里的物理组织单位，而不是直接把 prefix 当最终业务主键
+  - 结合已读取的 `manifest.json`、`metadata.json`、`recording_info.json`，确认当前 episode 内虽有 `episode_id`、处理参数、topic/sensor 结构等丰富信息，但尚未看到可直接充当稳定业务任务主键的单字段
+  - 明确 episode 需要区分三层状态：`ingestable`（可接纳入库）、`processable`（可进入处理/补处理链路）、`qc_ready`（processed 且 QC 关键对象齐全，可进入 manual QC）
+  - 明确 raw 与 processed 不能混为一个业务状态：raw-only episode 可以先建索引与归类，但不应直接进入 manual QC；manual QC 仍以 processed 为准入前提
+  - 明确任务类型不应从单个对象字段硬取，也不应把 MinIO 路径字符串直接当最终分类键；V1 应采用“prefix 命名线索 + episode 元数据证据 + 后续人工确认”的分层归类方式
+  - 明确 PostgreSQL 中后续至少要同时保留 `candidate_task_type` 与最终业务 `task_type` 一类字段，并记录 classification evidence / source，避免每次查询时重新临时解释 MinIO 路径
+  - 更新 `.project-log/current-session.md` 与本日志，记录这三条规则，作为后续 schema/API 设计的前置约束
+- Business logic impact: 这次分析把“MinIO 对象如何动态关联到 PostgreSQL 元数据”的核心边界进一步收紧了。后续系统不应把对象路径直接当业务主键，而应先把 list 作为来源批次接住、把 episode 作为最小处理单元管理、再把任务类型沉淀为 PostgreSQL 中可推断可回写的业务字段。这样才能同时兼容“一个 list 一个任务”“多个 list 同一任务”“raw/processed 不对称存在”等真实数据湖场景
+- Problems encountered:
+  - 当前样例元数据已经足够描述处理质量、设备形态与传感器结构，但还不足以证明每条 episode 都自带一个稳定显式的业务任务字段
+  - MinIO 里的命名规则看起来能提供任务线索，但用户已明确一个任务可能拆散在多个 list 中，因此不能把 prefix 文本直接等价成最终业务任务
+  - raw/processed episode 数量可能不完全一致，如果系统只做二元“有/无 episode”建模，后续 QC 派发与补处理会混乱
+- Resolution:
+  - 将 list、episode、task classification 三层职责拆开定义，避免把对象存储物理组织与上层业务管理强耦合
+  - 将 episode 生命周期拆成多状态推进模型，以适配“多次少量写入”以及 raw 先到、processed 后补齐的现实过程
+  - 将任务类型设计为 PostgreSQL 中的控制面结果，而不是 MinIO 中天然存在的单字段事实
+- Verification:
+  - 基于已实查对象路径：`yaocao/K1/.../{raw|processed}/episode_xxxxxx/...`
+  - 基于已读取样例元数据：`manifest.json`、`metadata.json`、`recording_info.json`
+  - 基于已观察到的 list/prefix 分布：同一 bucket 下存在多个同类命名前缀，且 raw/processed episode 数量并非严格完全对齐
+- Unverified items:
+  - 还未确认是否有其它任务前缀或更深层对象中存放显式任务标签、工单号或外部任务 ID
+  - 还未确定 `candidate_task_type` 到最终 `task_type` 的具体规则映射表和人工确认入口如何落地
+  - 还未确定 V1 中 `qc_ready` 的最小对象清单是否要按任务类型进一步细分
+- Files changed:
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 继续把这三条规则向 PostgreSQL 最小控制面字段收敛，先定 list / episode_inventory / episode_objects / classification 相关字段
+  - 再讨论 ingestion、状态推进、任务派发和 manual QC 查询链路如何围绕这些字段实现
+
+
+## 2026-06-23 (Robot QC V1 MinIO bucket validation and default-scope confirmation)
+
+- Type: analysis
+- Importance: critical
+- Reusable: yes
+- Objective: 在进入 PostgreSQL 表结构与 MinIO 关联设计前，先实查对象存储是否可访问、episode 实际对象组织方式是什么、以及当前 V1 应默认收敛到哪个 bucket
+- Work completed:
+  - 使用现有凭据直连 MinIO endpoint，确认当前运行环境可以成功完成认证并列出 bucket
+  - 实查到当前可见 bucket 至少包含 `20260527`、`rokae`、`shucai`、`test`、`wen`、`yaocao`
+  - 进一步检查样例对象布局，确认业务数据不是“单 episode 单 object”，而是“任务前缀/raw|processed/episode_xxxxxx/...” 的 prefix 结构
+  - 在 `20260527` bucket 中确认 raw 层样例：`.../raw/episode_000000/` 下存在 `device_info.json`、`recording_info.json`、`raw/metadata.yaml`
+  - 在 `yaocao` bucket 中确认 processed 层样例：`.../processed/episode_000000/` 下存在 `manifest.json`、`metadata.json`、`telemetry.npz`、`camera_info.json`、三路 RGB `mp4`、三路 depth colormap `mp4`、时间戳 `npy` 与深度 png 序列
+  - 读取样例 `manifest.json` / `metadata.json` / `recording_info.json`，确认 `episode_id`、时长、帧数、同步误差、视频文件相对路径等关键字段已经存放在对象内元数据文件里，可作为后续 PostgreSQL 建模依据
+  - 从对象实查中确认 manual QC 真正依赖的是 processed prefix，而不是 raw prefix，因为当前页面所需的 `telemetry.npz`、多路视频和 manifest 都位于 processed 层
+  - 结合用户新增指令，确认当前阶段后续实现默认只连接 `yaocao` 这一个 bucket，把 V1 收敛为单 bucket 版本
+  - 更新 `.project-log/current-session.md` 与本日志，记录 MinIO 实查结果和“默认 bucket = yaocao”的范围约束
+- Business logic impact: 这次实查把之前的“推测性架构分析”推进成了“可落地约束”。后续 PostgreSQL 不应围绕单 object 建模，而应围绕 episode prefix 建模；同时 V1 的 MinIO 接入范围可先明确收敛到 `yaocao`，这样 schema、配置项、API 解析和前端联调都可以先按单 bucket 假设实现，避免过早引入多 bucket 路由复杂度
+- Problems encountered:
+  - 当前仓库里没有现成的 MinIO client 接入代码或 CLI 约定，第一次验证必须先确认本机可用工具链
+  - 对象组织方式与本地文件系统的“一个目录一条 episode”看似相似，但真实结构包含 raw/processed 双层与大量多媒体对象，如果不实查很容易误把关联键设计成单个文件名
+  - 当前业务 bucket 并不唯一存在，系统层面若默认支持全部 bucket，会在首版设计时把范围放得过宽
+- Resolution:
+  - 使用现有 Python `boto3` 能力完成 MinIO 认证、bucket 枚举、prefix 列举、对象清单检查与样例元数据读取，不依赖额外安装工具
+  - 将“episode 关联粒度是 prefix 而不是单 object”记录为后续 schema 设计前提
+  - 将 `yaocao` 明确记为当前主业务 bucket，并把首版实现范围收敛为默认只连接这一个 bucket
+- Verification:
+  - `curl -sS -I --max-time 10 http://192.168.21.95:9190`
+  - `python3` + `boto3.client('s3', endpoint_url=...)` 成功 `list_buckets()`
+  - `list_objects_v2(Bucket='20260527', MaxKeys=20)`
+  - `list_objects_v2(Bucket='yaocao', Prefix='K1/.../processed/episode_000000/')`
+  - `get_object()` 读取 `manifest.json`、`metadata.json`、`recording_info.json`
+  - `list_objects_v2(..., Delimiter='/')` 验证 `K1/<task>/raw|processed/episode_xxx/` 层级
+- Unverified items:
+  - 还未统计 `yaocao` bucket 在真实生产使用中的完整任务前缀分布与 episode 总量
+  - 还未确认后续是否需要从 `yaocao` 之外的 bucket 做历史兼容导入
+  - 还未确认 raw/processed 是否总是成对存在，还是允许仅 processed 入库
+- Files changed:
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 在后续设计中把 `yaocao` 作为默认 bucket 配置项，而不是散落硬编码常量
+  - 继续基于已验证的 `processed` prefix 结构设计 PostgreSQL episode/object 映射字段与入库逻辑
+
+## 2026-06-23 (Robot QC V1 MinIO/PostgreSQL lakehouse architecture analysis)
+
+- Type: analysis
+- Status: documented for business-logic confirmation
+- Importance: critical
+- Reusable: yes
+- Objective: 在不立即改代码的前提下，先确认 Robot QC 从“本地 processed 目录 + PostgreSQL”迁移到“MinIO 原始对象存储 + PostgreSQL 元数据/QC 湖仓协同”时的业务边界、表结构方向和前后端查询路径
+- Work completed:
+  - 复核 `software/backend/app/models/episode.py`、`batch.py`、`ingest.py`，确认当前 `episodes.source_path`、`batches.storage_path`、`ingest_jobs.source_path` 仍以宿主本地路径为主键语义，不具备对象存储身份层
+  - 复核 `software/backend/app/services/ingestion.py`，确认当前入库流程依赖本地目录扫描、`manifest.json`/`metadata.json`/`telemetry.npz` 存在性判断，以及基于文件路径/mtime 的 fingerprint 去重
+  - 复核 `software/backend/app/services/payloads.py`，确认 manual QC 上下文仍直接从本地 processed 目录读取 `manifest.json`、`metadata.json` 与 `telemetry.npz`，尚未支持 MinIO 对象读取或对象清单解析
+  - 复核 `software/backend/app/api/routes/qc.py` 与 `software/frontend/src/api/client.ts`，确认前端当前已经是“只请求后端 API，不直接触达存储”的模式，这与后续 MinIO 后端代理/签名访问方向一致
+  - 复核 `software/frontend/src/pages/database-view.vue` 与 `manual-qc.vue`，确认数据库检索页已经是 PostgreSQL 元数据优先的交互，但 manual QC 视频区域仍为占位 UI，尚未绑定真实对象媒体
+  - 明确目标业务边界：MinIO 只保存原始 episode 对象数据，PostgreSQL 继续保存批次、episode 元数据、账号、任务分发、QC 结果、审计日志以及对象映射关系
+  - 明确关联策略方向：保留 `episodes` 作为业务主实体，在其上补外部 episode 标识和对象存储定位字段，并新增一张一对多对象清单映射表承接 bucket/key/prefix 与对象角色信息
+  - 明确查询链路方向：前端质检检索仍先查 PostgreSQL，后端根据 episode/object 映射解析 MinIO 中对应对象，再返回可展示的媒体访问结果或代理流，不让前端直接耦合 MinIO 路径规则
+  - 更新 `.project-log/current-session.md` 与本日志，记录本轮属于“先确认业务逻辑，再实施编码”的阶段性结论
+- Business logic impact: 系统后续将从“数据库记录本地路径，再由后端直接读宿主文件”转为“数据库记录业务元数据和对象映射，再由后端按映射解析 MinIO 对象”。这意味着 `episodes` 不再只是一条本地目录索引，而会成为连接批次、QC 状态、对象清单和媒体访问的中心业务实体；前端的检索入口和权限模型可以基本保持不变，但 manual QC 的上下文加载和媒体展示必须改为后端经 PostgreSQL 映射后访问 MinIO
+- Problems encountered:
+  - 当前入库、去重、manual QC 上下文构建都深度绑定本地文件系统，迁移到 MinIO 不是单点替换，而是一次对象身份模型重构
+  - 现有 schema 只有 `source_path/storage_path` 一类路径字段，没有 bucket、object key、prefix、object role、外部 episode ID 等可长期演进的对象层语义
+  - manual QC 页面虽然已经有真实 telemetry 指标链路，但视频区域仍是占位内容，因此未来不仅要解决对象定位，还要补真实媒体访问协议
+  - 已获得对象存储连接信息，但这些凭据属于敏感配置，不能以默认值方式写入仓库或进度文档
+- Resolution:
+  - 将本轮工作限定为业务分析和日志沉淀，不在对象命名规范未确认前提前落表或改接口，避免后续返工
+  - 将 PostgreSQL 定位为唯一业务查询入口和系统事实源，MinIO 仅作为原始对象数据层，明确前端继续只依赖后端 API
+  - 将现有 `episodes`/`batches`/`ingest_jobs` 视为迁移骨架，而不是推倒重建；下一步以“补对象身份层”而非“直接替换成本地 MinIO 路径字符串”为原则设计 schema
+- Verification:
+  - 代码静态复核：`software/backend/app/models/episode.py`
+  - 代码静态复核：`software/backend/app/models/batch.py`
+  - 代码静态复核：`software/backend/app/models/ingest.py`
+  - 代码静态复核：`software/backend/app/services/ingestion.py`
+  - 代码静态复核：`software/backend/app/services/payloads.py`
+  - 代码静态复核：`software/backend/app/api/routes/qc.py`
+  - 代码静态复核：`software/frontend/src/api/client.ts`
+  - 代码静态复核：`software/frontend/src/pages/database-view.vue`
+  - 代码静态复核：`software/frontend/src/pages/manual-qc.vue`
+- Unverified items:
+  - 还未确认 MinIO 中“一条 episode”对应的真实对象组织规则：是单目录 prefix、单对象归档，还是多摄像头/多模态对象散列布局
+  - 还未确认 MinIO 内用于关联 PostgreSQL 的稳定唯一标识究竟是对象名、prefix 名、外部 episode_id，还是额外元数据字段
+  - manual QC 媒体访问协议已确定为混合模式，但具体 API 字段、签名刷新接口和前端播放器联调尚未实现
+- Files changed:
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+  - `.project-log/business-logic/control-plane-schema-v1.md`
+  - `.project-log/business-logic/decision-records.md`
+  - `.project-log/business-logic/open-questions.md`
+  - `.project-log/business-logic/nodes.md`
+  - `.project-log/business-logic/graph.md`
+- Next steps:
+  - 进入 Node D 实现规划，先把 `ManualQcContext` 的 media descriptor 合同、预签名刷新接口与受控下载接口定出来
+  - 再进入 schema migration、MinIO client 接入、ingestion 改造、manual QC 媒体加载与前端联调实现阶段
+
+## 2026-06-23 (Robot QC V1 manual QC MinIO object-access protocol closure)
+
+- Type: analysis
+- Status: documented for Node F -> D handoff
+- Importance: critical
+- Reusable: yes
+- Objective: 在进入 MinIO 代码改造前，先落定 manual QC 对 MinIO 媒体与结构化对象的访问协议，明确哪些对象走 presigned URL、哪些对象必须继续留在后端受控路径，并把结论写回业务逻辑文档体系
+- Work completed:
+  - 复核 `software/backend/app/services/payloads.py`，确认当前 manual QC 上下文仍直接从宿主本地 processed 目录读取 `manifest.json`、`metadata.json`、`telemetry.npz`
+  - 复核 `software/frontend/src/pages/manual-qc.vue`、`software/frontend/src/api/client.ts` 与 `software/backend/app/schemas/qc.py`，确认当前 manual QC 前后端合同里尚无媒体 descriptor 字段，视频区仍为占位 UI
+  - 结合已实查的 `yaocao` processed 对象结构，明确 preview/playback 类 MP4 与结构化对象的访问特征不同，不能简单采用“全代理”或“全 presigned”单一路径
+  - 落定 V1 混合协议：预览/播放类 MP4 由后端签发短时 presigned URL；`manifest.json`、`metadata.json`、`telemetry.npz` 等结构化对象继续由后端直接读取/解析；显式下载、导出与非预览对象访问走后端受控接口
+  - 在 `control-plane-schema-v1.md` 中补齐 manual QC 对象访问章节，定义 media descriptor 合同、URL TTL、授权边界、review lock 与 refresh 规则
+  - 将 Q-20260623-005 标记为已解决，并同步更新 `decision-records.md`、`nodes.md`、`graph.md`、`current-session.md`
+- Business logic impact: Node F 的控制面规则至此闭环。系统后续不再讨论“manual QC 到底直接读 MinIO 还是后端代理”的抽象问题，而是按明确分工推进：浏览器用后端签发的短时 URL 直接播放媒体，业务敏感与结构化对象继续由后端掌控。这样既保住“前端只调后端 API”的架构约束，也避免把多路视频预览流量全部压回 backend
+- Problems encountered:
+  - 当前代码仍是本地文件系统实现，意味着对象访问协议不仅是存储方案选择，还会牵动 `ManualQcContext` payload 结构扩展
+  - 如果走纯 presigned，前端会开始感知 bucket/key 语义；如果走纯代理，manual QC 多路视频预览会给 backend 带来不必要的数据面压力
+- Resolution:
+  - 采用混合协议，并把“前端永远只接后端返回的 media descriptors，不拼 bucket/key”作为硬约束
+  - 把协议设计收敛为实现级规则：短 TTL、后端鉴权后签发、需要时刷新、显式下载单独走受控接口
+- Verification:
+  - 代码静态复核：`software/backend/app/services/payloads.py`
+  - 代码静态复核：`software/backend/app/api/routes/qc.py`
+  - 代码静态复核：`software/backend/app/schemas/qc.py`
+  - 代码静态复核：`software/frontend/src/pages/manual-qc.vue`
+  - 代码静态复核：`software/frontend/src/api/client.ts`
+  - 文档同步复核：`control-plane-schema-v1.md`、`decision-records.md`、`open-questions.md`、`nodes.md`、`graph.md`
+
+- Type: validation
+- Status: validated in real Docker/PostgreSQL runtime
+- Importance: critical
+- Reusable: yes
+- Objective: 收口 V1 最后一轮高风险项，完成真实 Docker/PostgreSQL 发布链路验收、补齐 task-pool 多批次浏览器稳定性验证，并修正文档与运行时健康检查不一致问题
+- Work completed:
+  - 在 `software/frontend` 执行生产构建，确认当前前端代码可生成用于容器镜像的 `dist`
+  - 运行专用 Playwright 用例 `/tmp/robot-qc-playwright-runner/tests/task-pool-batch-selection.spec.js`，覆盖空批次、全量批次、可操作批次切换与刷新后的默认选择保持，结果 `1 passed (2.8s)`
+  - 复核 `software/deploy/README.txt`、`software/backend/alembic.ini`、`software/backend/app/services/bootstrap.py`，确认当前源代码的 PostgreSQL/Alembic 发布路径已切到显式 bootstrap
+  - 在 compose 环境启动 `db` 服务并发现 backend 镜像为旧版本；通过容器内源码检查确认仍残留旧 `seed_demo_data` 启动逻辑后，重新构建 backend 镜像
+  - 在真实容器验收中发现 `software/backend/app/core/config.py` 的 `PROJECT_ROOT` 推导在 `/app` 场景下触发 `IndexError`，已修复为 Docker 安全路径计算并补齐 `sample_processed_root` fallback
+  - 重新构建并执行 `python -m app.services.bootstrap --ensure-schema-only`，确认空 PostgreSQL 数据库成功执行 Alembic `upgrade head`
+  - 执行 `python -m app.services.bootstrap --admin-username admin --admin-password 'Admin123!' --admin-name '系统管理员' --admin-role admin`，完成首个管理员初始化
+  - 直接在 Postgres 中确认 9 张业务表已落库、`alembic_version=20260623_0001`、管理员账号存在
+  - 重启 compose `backend` / `frontend` 服务并验证 `POST /api/auth/login` 登录成功，确认 production/postgres 基线可用
+  - 补上 `software/backend/app/api/routes/qc.py` 的 `/api/health` 接口，使 `software/deploy/README.txt` 中的健康检查地址与运行时一致
+  - 更新 `.project-log/current-session.md` 与本日志，移除“Docker/PostgreSQL 发布链路待验收”和“task-pool 多批次稳定性待补强”的过期风险
+- Business logic impact: V1 已从“源代码具备 migration 与 task-pool 修复”推进到“真实 Docker/PostgreSQL 发布链路和关键浏览器回归均已验收通过”；部署文档中的健康检查地址现已可直接用于实际生产探针
+- Problems encountered:
+  - 初次 compose 验收里 backend 镜像与当前工作区源码不一致，容器内部仍然是旧 bootstrap 逻辑，因此表面 exit 0 但数据库未真正建表
+  - `app/core/config.py` 原先假设项目目录层级固定，在 Docker `/app` 运行时会因 `BASE_DIR.parents[1]` 越界而崩溃
+  - `README.txt` 已声明 `/api/health`，但运行时此前返回 404，造成部署说明与实际行为不一致
+- Resolution:
+  - 通过重新构建镜像消除 stale image 漂移，并以真实 Postgres 表结构与 `alembic_version` 校验发布链路是否正确落地
+  - 将 `PROJECT_ROOT` 计算改为容器安全逻辑，并在样例数据路径不存在时回退到 `BASE_DIR` 下的 data 目录
+  - 直接补齐 `/api/health` 路由，而不是修改文档去适配缺失能力
+- Verification:
+  - `cd software/frontend && npm run build`
+  - `"/tmp/robot-qc-playwright-runner/node_modules/.bin/playwright" test "/tmp/robot-qc-playwright-runner/tests/task-pool-batch-selection.spec.js" --config "/tmp/robot-qc-playwright-runner/playwright.config.js" --reporter=line`
+  - `docker compose -f software/deploy/docker-compose.yml up -d db`
+  - `docker compose -f software/deploy/docker-compose.yml build backend`
+  - `docker compose -f software/deploy/docker-compose.yml run --rm -e APP_ENV=development backend python -m app.services.bootstrap --ensure-schema-only`
+  - `docker compose -f software/deploy/docker-compose.yml run --rm -e APP_ENV=development backend python -m app.services.bootstrap --admin-username admin --admin-password 'Admin123!' --admin-name '系统管理员' --admin-role admin`
+  - `docker exec robot-qc-db psql -U robot_qc -d robot_qc -c "select version_num from alembic_version;"`
+  - `docker compose -f software/deploy/docker-compose.yml up -d --build backend frontend`
+  - `curl -sS -i http://127.0.0.1:8080/api/health`
+  - `curl -sS -H 'Content-Type: application/json' -d '{"username":"admin","password":"Admin123!"}' http://127.0.0.1:8080/api/auth/login`
+- Unverified items:
+  - 仍需在真实目标生产环境替换 `SECRET_KEY`、PostgreSQL 口令、`SESSION_COOKIE_SECURE` 与宿主数据挂载路径后做一次最终现场联调
+- Files changed:
+  - `software/backend/app/core/config.py`
+  - `software/backend/app/api/routes/qc.py`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 进入真实生产环境测试，重点验证 HTTPS/cookie、宿主挂载路径与运维口令配置
+
+## 2026-06-23 (Robot QC V1 final account-role browser validation)
+
+- Type: validation
+- Status: validated in browser and API runtime
+- Importance: high
+- Reusable: yes
+- Objective: 收尾账号管理页最后一处生产缺口，补齐 `admin` / `qc_manager` / `reviewer` / `viewer` 的前端展示与后端权限矩阵验证
+- Work completed:
+  - 复核 `software/frontend/src/pages/accounts.vue`、`src/components/AppLayout.vue`、`src/router/index.ts` 与 `software/backend/app/api/routes/qc.py`，确认账号页的预期角色矩阵已经在前后端实现
+  - 使用管理员会话为现有 `manager1` / `reviewer1` 账号重置测试口令，并额外创建 `viewer1` 访客账号，补足非管理员浏览器回归前置条件
+  - 新增隔离 Playwright 用例 `/tmp/robot-qc-playwright-runner/tests/accounts-role-access.spec.js`，覆盖管理员可管理账号、主管仅可只读访问、审核员/访客无账号菜单且直达 `/accounts` 被重定向回工作台
+  - 在当前运行时 `http://127.0.0.1:18081` 上补做 API 级权限复核，确认 `qc_manager` 可读取 `/api/accounts`，但创建账号返回 403；`reviewer` 与 `viewer` 访问 `/api/accounts` 均返回 403
+  - 更新 `.project-log/current-session.md` 与本日志，移除“账号页非管理员浏览器验证缺失”的过期风险记录
+- Business logic impact: 账号管理能力已从“管理员路径验证完成”推进到“完整角色矩阵已验证”，当前 V1 对账户页面的菜单可见性、路由守卫、只读/可变更边界以及后端权限拒绝都已有可信验证证据
+- Problems encountered:
+  - 本轮环境里原先没有可直接使用的 `qc_manager` / `reviewer` 明确测试口令，导致非管理员浏览器回归一直停留在文档缺口
+  - 现有浏览器用例只覆盖管理员黄金路径，无法证明主管只读与审核员/访客重定向行为
+- Resolution:
+  - 通过管理员重置账号密码并新增单独 `viewer` 账号，建立稳定的角色测试基线
+  - 增加独立 Playwright 角色验证脚本，并结合 API 级 200/403 结果收口角色矩阵验证
+- Verification:
+  - `curl -c /tmp/robot_qc_admin_cookies.txt -H 'Content-Type: application/json' -d '{"username":"admin","password":"Admin123!"}' http://127.0.0.1:18081/api/auth/login`
+  - `curl -b /tmp/robot_qc_admin_cookies.txt -H 'Content-Type: application/json' -X POST -d '{"password":"Manager123!"}' http://127.0.0.1:18081/api/accounts/user_manager1/reset-password`
+  - `curl -b /tmp/robot_qc_admin_cookies.txt -H 'Content-Type: application/json' -X POST -d '{"password":"Reviewer123!"}' http://127.0.0.1:18081/api/accounts/user_reviewer1/reset-password`
+  - `curl -b /tmp/robot_qc_admin_cookies.txt -H 'Content-Type: application/json' -d '{"username":"viewer1","name":"测试访客","password":"Viewer123!","role":"viewer"}' http://127.0.0.1:18081/api/accounts`
+  - `"/tmp/robot-qc-playwright-runner/node_modules/.bin/playwright" test "/tmp/robot-qc-playwright-runner/tests/accounts-role-access.spec.js" --config "/tmp/robot-qc-playwright-runner/playwright.config.js" --reporter=line`
+  - 浏览器角色验证结果：`4 passed (3.8s)`
+  - `curl -b /tmp/robot_qc_manager_cookies.txt http://127.0.0.1:18081/api/accounts` -> `200`
+  - `curl -b /tmp/robot_qc_manager_cookies.txt -H 'Content-Type: application/json' -d '{"username":"forbidden_manager_create","name":"禁止创建","password":"Nope123!","role":"reviewer"}' http://127.0.0.1:18081/api/accounts` -> `403`
+  - `curl -b /tmp/robot_qc_reviewer_cookies.txt http://127.0.0.1:18081/api/accounts` -> `403`
+  - `curl -b /tmp/robot_qc_viewer_cookies.txt http://127.0.0.1:18081/api/accounts` -> `403`
+- Unverified items:
+  - Docker/production 发布链路里尚未实际执行一轮 PostgreSQL `alembic upgrade head` 验收
+  - task-pool 多批次/默认首批选中场景的浏览器稳定性仍可继续补强
+- Files changed:
+  - `/tmp/robot-qc-playwright-runner/tests/accounts-role-access.spec.js`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 在有 Docker/PostgreSQL 权限的验收环境补跑 `alembic upgrade head` + 显式管理员初始化，完成正式发布链路闭环
+  - 视时间补强 task-pool 多批次选择的浏览器稳定性回归
+
+## 2026-06-23 (Robot QC V1 migration baseline landing)
+
+- Type: implementation
+- Status: validated in isolated backend runtime and legacy DB adoption path
+- Importance: critical
+- Reusable: yes
+- Objective: 为 Robot QC V1 建立正式版本化 schema 基线，替代 `create_all()` 主导的建库方式，并验证新库初始化与旧库纳管两条路径
+- Work completed:
+  - 在 `software/backend/requirements.txt` 引入 `alembic==1.16.5`，将 schema migration 能力纳入项目内隔离 `.conda-env`
+  - 新建 `software/backend/alembic.ini`、`software/backend/migrations/env.py`、`software/backend/migrations/script.py.mako`，补齐 Alembic 基础配置与后续 revision 模板
+  - 新建基线 revision `software/backend/migrations/versions/20260623_0001_baseline_schema.py`，把 `users`、`task_types`、`batches`、`episodes`、`ingest_jobs`、`qc_review_revisions`、`qc_tasks`、`audit_events` 的当前权威 schema 固化为正式版本
+  - 重写 `software/backend/app/services/bootstrap.py` 的 schema 初始化路径：不再走 `Base.metadata.create_all()`，改为根据数据库状态执行 `upgrade head`、旧库 SQLite 兼容补齐 + `stamp head`、或版本库 `upgrade head`
+  - 保留 SQLite 旧字段/旧索引补齐逻辑，仅作为历史本地库纳管前的兼容桥接，不再作为新库主建表方案
+  - 更新 `.project-log/current-session.md` 与 `software/deploy/README.txt`，把 Alembic 基线、`--ensure-schema-only`、以及发布前执行 migration 的要求写入当前状态与部署说明
+- Business logic impact: 系统从“应用内隐式建表”推进到“正式 migration 驱动的 schema 生命周期”；新环境可以按固定 revision 建库，已有历史库也能在不重灌数据的情况下纳入版本管理，为后续 PostgreSQL 生产发布提供可追踪的 schema 演进基线
+- Problems encountered:
+  - 当前机器运行环境不提供 shell `apply_patch`，迁移文件与 bootstrap 调整需要改用文件工具直接编辑
+  - 历史本地 SQLite 库已经带有业务表但没有 `alembic_version`，不能直接按空库方式运行初始 revision
+- Resolution:
+  - 改用文件工具创建 Alembic 目录与 revision 文件，避免依赖缺失的 shell patch 能力
+  - 在 `bootstrap.initialize_schema()` 中加入数据库状态判断：已有业务表的旧库先执行 SQLite 兼容补齐，再 `stamp head`，空库与已版本化库统一走 `upgrade head`
+- Verification:
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -m pip install -r requirements.txt'`
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -m compileall app main.py'`
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && DATABASE_URL="sqlite:////tmp/robot_qc_migration_baseline.db" .conda-env/bin/python -m app.services.bootstrap --ensure-schema-only'`
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -m app.services.bootstrap --ensure-schema-only'`
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && DATABASE_URL="sqlite:////tmp/robot_qc_migration_baseline.db" .conda-env/bin/python - <<"PY"
+from sqlalchemy import create_engine, inspect, text
+engine = create_engine("sqlite:////tmp/robot_qc_migration_baseline.db")
+inspector = inspect(engine)
+print(sorted(inspector.get_table_names()))
+with engine.connect() as conn:
+    print(conn.execute(text("SELECT version_num FROM alembic_version")).scalar())
+PY'`
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python - <<"PY"
+from sqlalchemy import text
+from app.core.db import engine
+with engine.connect() as conn:
+    print(conn.execute(text("SELECT version_num FROM alembic_version")).scalar())
+PY'`
+- Unverified items:
+  - Docker/production 发布链路里尚未实际执行一轮 PostgreSQL `alembic upgrade head` 验收
+  - 后续新增 schema 变更的 revision 生成与上线节奏虽已有模板，但还未形成固定发布 SOP
+  - 账号页的 `qc_manager` / `reviewer` 浏览器态复核仍待有效测试口令
+- Files changed:
+  - `software/backend/requirements.txt`
+  - `software/backend/alembic.ini`
+  - `software/backend/migrations/env.py`
+  - `software/backend/migrations/script.py.mako`
+  - `software/backend/migrations/versions/20260623_0001_baseline_schema.py`
+  - `software/backend/app/services/bootstrap.py`
+  - `software/deploy/README.txt`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 在 Docker/PostgreSQL 验收环境补跑一轮 `alembic upgrade head` + 显式管理员初始化，确认生产发布链路与基线 revision 完整一致
+  - 在拿到有效非管理员测试口令后，补一轮账号页浏览器验证，确认管理员/主管/审核员前端权限呈现一致
+
+## 2026-06-23 (Robot QC V1 qc-history report/export landing)
+
+- Type: implementation
+- Status: validated in fresh isolated runtime and browser flow
+- Importance: high
+- Reusable: yes
+- Objective: 将 `qc-history` 从在线浏览页补齐为可交付的批次报告与 JSON 导出能力，并完成接口与浏览器级验证
+- Work completed:
+  - 复核 `software/backend/app/api/routes/qc.py`，确认历史页新增 `/api/qc-history/report` 与 `/api/qc-history/export` 路由，继续沿用 `admin` / `qc_manager` 角色门禁
+  - 在新鲜 backend 运行时 `http://127.0.0.1:18081` 上验证 `report` 与 `export` 接口，确认 `batch_id=all` 与指定批次都能返回有效 payload
+  - 验证导出 `scope` 语义：`report` 仅返回报告摘要，`episodes` 返回 episode/revision 明细，`audits` 返回 audit 明细，三者互斥行为正确
+  - 将隔离 Playwright runner 的 `playwright.config.js` 基地址切到当前 frontend `http://127.0.0.1:4174`
+  - 新增专用浏览器用例 `/tmp/robot-qc-playwright-runner/tests/qc-history-report.spec.js`，覆盖登录、历史页导航、批次切换、报告内容展示、三类导出下载与退出登录
+  - 修正用例中批次名断言的宽泛选择器，避免同名文本在多个区域重复渲染时触发 strict-mode 歧义
+  - 更新 `.project-log/current-session.md` 与本日志，移除“qc-history 导出/批次报告能力未实现”的过期结论
+- Business logic impact: `qc-history` 已从“只能在线查看”提升到“可按批次生成报告并按范围导出 JSON 交付物”，管理员和质检主管可直接从历史页获取正式汇总与明细数据
+- Problems encountered:
+  - 机器上原先占用 `127.0.0.1:8001` 的 backend 进程是旧构建，登录和基础历史接口可用，但缺少新加的 `/api/qc-history/report` 与 `/api/qc-history/export`
+  - 首轮 Playwright 用例在 `getByText('2026-06-21 下午入库')` 上命中 9 个节点，属于测试选择器过宽而非产品故障
+- Resolution:
+  - 不销毁已有旧进程，改为在 `127.0.0.1:18081` 启动更新后的 backend，并让 frontend 通过 `VITE_PROXY_API_TARGET` 指向该新运行时
+  - 将批次选择后的断言收敛到表格单元格级别，消除 strict-mode 歧义后重新通过浏览器验证
+- Verification:
+  - `curl -c /tmp/robot_qc_cookies.txt -H 'Content-Type: application/json' -d '{"username":"admin","password":"Admin123!"}' http://127.0.0.1:18081/api/auth/login`
+  - `curl -b /tmp/robot_qc_cookies.txt 'http://127.0.0.1:18081/api/qc-history/report?batch_id=all'`
+  - `curl -b /tmp/robot_qc_cookies.txt 'http://127.0.0.1:18081/api/qc-history/report?batch_id=batch_20260621_002'`
+  - `curl -b /tmp/robot_qc_cookies.txt 'http://127.0.0.1:18081/api/qc-history/export?batch_id=all&scope=report'`
+  - `curl -b /tmp/robot_qc_cookies.txt 'http://127.0.0.1:18081/api/qc-history/export?batch_id=all&scope=episodes'`
+  - `curl -b /tmp/robot_qc_cookies.txt 'http://127.0.0.1:18081/api/qc-history/export?batch_id=all&scope=audits'`
+  - `"/tmp/robot-qc-playwright-runner/node_modules/.bin/playwright" test "/tmp/robot-qc-playwright-runner/tests/qc-history-report.spec.js" --config "/tmp/robot-qc-playwright-runner/playwright.config.js" --reporter=line`
+  - 浏览器专用 qc-history 用例结果：`1 passed (2.5s)`
+- Unverified items:
+  - 账号页的 `qc_manager` / `reviewer` 浏览器态复核仍待有效测试口令
+- Files changed:
+  - `/tmp/robot-qc-playwright-runner/playwright.config.js`
+  - `/tmp/robot-qc-playwright-runner/tests/qc-history-report.spec.js`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 引入正式 migration 流程，替代当前 `bootstrap.initialize_schema()` 的过渡式 schema 修补
+  - 在拿到有效非管理员测试口令后，补一轮账号页浏览器验证，确认管理员/主管/审核员前端权限呈现一致
+
+## 2026-06-23 (Robot QC V1 runtime alignment and browser revalidation)
+
+- Type: validation
+- Status: validated with remaining doc-level production gaps tracked
+- Importance: critical
+- Reusable: yes
+- Objective: 修复前端 dev/runtime 与当前 backend 的对齐问题，重新跑通浏览器黄金链路，并把账号生命周期与剩余生产缺口记录到项目日志
+- Work completed:
+  - 更新 `software/frontend/vite.config.ts`，引入 `VITE_PROXY_API_TARGET`，保持浏览器侧使用同源 `/api`，由 Vite 代理转发到当前 backend
+  - 更新 `software/frontend/src/api/client.ts`，仅在请求实际携带 JSON body 时设置 `Content-Type: application/json`，避免 `/auth/session` 等 GET 触发不必要的跨域预检
+  - 重启对齐后的 frontend dev runtime，并确认此前 `OPTIONS /api/auth/session` 导致的 bootstrap 失败已消失
+  - 修正隔离 Playwright 脚本 `/tmp/robot-qc-playwright-runner/tests/robot-qc-golden-path.spec.js`：兼容 `认领任务/重新认领` 两种按钮文案，并改为点击可见 `Fail` 文本驱动 Element Plus 单选
+  - 在 rerun 前释放 `episode_000124` 上的旧 review lock，确保 browser flow 可重复执行
+  - 成功重跑 `login → dashboard → task-pool → manual-qc → qc-history → logout`，结果 `1 passed (3.2s)`
+  - 复核账号生命周期现状：管理员创建/重置密码/启停、self-deactivation 保护、停用后登录拒绝、reviewer 访问 `/api/accounts` 返回 403 的后端验证已完成
+  - 更新 `.project-log/current-session.md` 与 `.project-log/progress.md`，移除“review lock 未实现”“账号生命周期未实现”等失真记录
+- Business logic impact: 当前 V1 已从“前端与后端能单点联通”推进到“浏览器黄金链路在当前真实 backend 上可稳定重跑”；账号生命周期、review lock 与会话引导逻辑都已进入已落地状态
+- Problems encountered:
+  - 将 `VITE_API_BASE_URL` 设为绝对地址 `http://127.0.0.1:8000/api` 时，浏览器会对 `/api/auth/session` 发起跨域预检，backend 返回 `400`，导致路由 bootstrap 直接失败
+  - manual QC 页面在锁已归当前用户所有时按钮文案为 `重新认领`，旧 Playwright 仅等待 `认领任务` 会超时
+  - Element Plus 单选组件对隐藏 input 的 `.check()` 不稳定，`Fail` 结果选择会卡死在脚本层
+  - 当前运行时未拿到可用的 `reviewer` / `qc_manager` 测试口令，账号页的非管理员浏览器回归无法在本轮完成
+- Resolution:
+  - 恢复 dev 浏览器同源访问模式，把 backend 切换责任下沉到 `VITE_PROXY_API_TARGET`
+  - 收敛请求头注入逻辑，避免无 body GET 请求携带多余 JSON 头
+  - 放宽锁按钮定位条件并改用可见文本点击 `Fail`，提升 Element Plus 场景下的浏览器脚本稳定性
+  - 将账号页浏览器验证缺口明确记录为剩余验证项，而不是继续保留“能力未落地”的错误结论
+- Verification:
+  - `cd software/frontend && npm run build`
+  - `cd /tmp/robot-qc-playwright-runner && npx playwright test --reporter=line`
+  - 浏览器黄金链路结果：`1 passed (3.2s)`
+- Unverified items:
+  - 账号页的 `qc_manager` / `reviewer` 浏览器态复核仍待有效测试口令
+- Files changed:
+  - `software/frontend/vite.config.ts`
+  - `software/frontend/src/api/client.ts`
+  - `/tmp/robot-qc-playwright-runner/tests/robot-qc-golden-path.spec.js`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 继续补 `qc-history` 导出/批次报告，收口历史页剩余占位缺口
+  - 引入正式 migration 流程，替代当前 `bootstrap.initialize_schema()` 的过渡式 schema 修补
+  - 在拿到有效非管理员测试口令后，补一轮账号页浏览器验证，确认管理员/主管/审核员前端权限呈现一致
+
+## 2026-06-22 (Robot QC V1 production hardening phase 2 ingestion validation)
+
+- Type: implementation
+- Status: phase 2 landed and locally validated
+- Importance: critical
+- Reusable: yes
+- Objective: 打通真实扫描入库链路，修复旧本地数据库与当前模型的 schema 漂移，完成 ingestion 的本地闭环验证
+- Work completed:
+  - 在 `software/backend/app/services/ingestion.py` 落地真实扫描入库能力：扫描允许目录、识别 processed episode、按 source fingerprint 做幂等跳过、写入 `ingest_jobs` / `batches` / `episodes` / `audit_events`
+  - 在 `software/backend/app/api/routes/qc.py` 新增 `/api/database/scan` 并返回真实 ingest job 结果，同时为派发计划与人工质检提交补齐角色限制
+  - 更新前端 `software/frontend/src/types/qc.ts`、`src/api/client.ts`、`src/pages/database-view.vue`，接入真实扫描表单、入库任务列表与后端错误 `detail` 展示
+  - 清理剩余前端占位语义：`dashboard.vue`、`AppLayout.vue`、`task-pool.vue`、`manual-qc.vue`、`qc-history.vue` 改为仅展示当前已落地能力
+  - 扩展 `software/backend/app/services/bootstrap.py`，增加 SQLite 旧库补字段/补索引逻辑，并提供 `--ensure-schema-only` 入口用于仅修复本地 schema 基线
+  - 对当前本地 SQLite 运行 `python -m app.services.bootstrap --ensure-schema-only`，补齐 `users.is_active`、`users.password_changed_at`、`episodes.source_*`/`ingest_status`/candidate flags 以及 `ingest_jobs` 表
+  - 使用真实样例目录 `/home/tbl/Project/data_collect/data/raw/process` 执行扫描 smoke test，成功生成 `indexed` 状态入库任务并导入 1 条 episode
+- Business logic impact: V1.0 从“前端有扫描入口但未完成运行时验证”推进到“真实本地数据可被后端扫描入库并在数据库中持久化”；旧开发 SQLite 库也具备继续联调当前功能的最低兼容基线
+- Problems encountered:
+  - 当前机器上的历史 SQLite 库缺少 `users.is_active` 字段与 `ingest_jobs` 表，导致任何真实扫描验证都会在 ORM 查询阶段失败
+  - 运行环境不提供 `apply_patch`，需要继续使用文件编辑工具修改代码
+- Resolution:
+  - 将旧库兼容补丁集中收敛到 `bootstrap.initialize_schema()` 后置步骤，仅对 SQLite 执行最小补字段/补索引逻辑
+  - 增加 `--ensure-schema-only` 模式，使本地修复 schema 不再要求重复创建管理员账号
+  - 重新在隔离 `.conda-env` 中执行 schema 修复和 ingestion smoke test，确认真实扫描链路已经可跑通
+- Verification:
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -m compileall app main.py'`
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -m app.services.bootstrap --ensure-schema-only'`
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -c "from app.core.db import SessionLocal; from app.models import User, IngestJob; db = SessionLocal(); user = db.query(User).first(); print(user.username if user else None, user.is_active if user else None); print(db.query(IngestJob).count()); db.close()"'`
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -c "from app.core.db import SessionLocal; from app.models import User; from app.services.ingestion import run_ingest_scan; db = SessionLocal(); user = db.query(User).filter(User.username == \"admin\").first() or db.query(User).first(); job = run_ingest_scan(db, source_path=\"/home/tbl/Project/data_collect/data/raw/process\", batch_name=\"\", operator=user); print(job.id, job.status, job.detail, job.episodes, job.imported_episodes, job.skipped_episodes); db.close()"'`
+  - `cd software/frontend && npm run build`
+- Unverified items:
+  - 尚未在浏览器端重新完整复跑“扫描入库 → 派发 → manual QC → history”最新链路
+  - PostgreSQL 生产基线仍未具备正式 migration 脚本，当前 schema 修复只覆盖本地 SQLite 兼容
+  - review lock / claim / release / version 冲突保护仍未实现
+- Files changed:
+  - `software/backend/app/services/ingestion.py`
+  - `software/backend/app/api/routes/qc.py`
+  - `software/backend/app/services/bootstrap.py`
+  - `software/frontend/src/types/qc.ts`
+  - `software/frontend/src/api/client.ts`
+  - `software/frontend/src/pages/database-view.vue`
+  - `software/frontend/src/pages/dashboard.vue`
+  - `software/frontend/src/components/AppLayout.vue`
+  - `software/frontend/src/pages/task-pool.vue`
+  - `software/frontend/src/pages/manual-qc.vue`
+  - `software/frontend/src/pages/qc-history.vue`
+  - `software/frontend/src/api/mock.ts`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 实现 review lock / claim / release / lock expiry / version 控制，补齐多人并发审核保护
+  - 在浏览器端复跑最新业务闭环，并确认扫描入库后的批次可以直接进入派发和人工质检
+
+## 2026-06-22 (Robot QC V1 production hardening phase 0/1 baseline)
+
+- Type: implementation
+- Status: phase 0 recorded, phase 1 baseline landed
+- Importance: critical
+- Reusable: yes
+- Objective: 按“公司内网可直接投入使用”标准，先记录生产就绪性缺口，并移除默认 demo 启动路径，建立显式初始化和安全部署基线
+- Work completed:
+  - 在 `.project-log/current-session.md` 与 `.project-log/progress.md` 记录生产就绪性审计结论，明确 P0/P1 缺口：demo 启动链路、默认口令、SQLite 部署、无真实入库、无 RBAC/lock/并发保护、前端占位入口未收口
+  - 重写 `software/backend/app/main.py`，移除 `Base.metadata.create_all()` 与 `seed_demo_data()` 的默认 startup 行为
+  - 扩展 `software/backend/app/core/config.py`，补充 `FRONTEND_ORIGIN`、`EXTRA_FRONTEND_ORIGINS`、`SESSION_COOKIE_SECURE`、production 判定与统一 CORS origins 计算
+  - 在 `software/backend/app/main.py` 增加 production 守卫：生产环境若仍使用默认 `SECRET_KEY` 或 SQLite，则启动直接失败
+  - 调整 `software/backend/app/api/routes/qc.py` 的 cookie 配置，改为读取 `SESSION_COOKIE_SECURE`
+  - 重写 `software/backend/app/services/bootstrap.py` 为显式初始化脚本，提供 `python -m app.services.bootstrap --admin-username ... --admin-password ...` 建库并创建首个管理员的入口
+  - 更新 `software/frontend/src/pages/login.vue`，移除默认管理员账号/初始密码展示与预填值，避免继续传递 demo 口令
+  - 更新 `software/deploy/docker-compose.yml` 与 `software/deploy/README.txt`，将部署基线切到 PostgreSQL + 显式初始化流程
+- Business logic impact: 系统从“服务一启动就自动建表并灌演示数据”切换到“空库保持空、必须显式初始化管理员、生产环境拒绝默认密钥和 SQLite”，这是从演示态迈向可控生产基线的第一步
+- Problems encountered:
+  - 当前工程尚未引入正式 migration 框架，Phase 1 只能先用显式初始化脚本承接建库动作
+  - 现有前端和历史验证都默认依赖 `admin/Admin@123` 演示账号，需要同步清理文案和后续验证口径
+- Resolution:
+  - 先把隐式 startup 行为整体拆除，避免继续扩大 demo 假设
+  - 将 `create_all()` 收敛到手工初始化入口，作为 migration 上线前的过渡控制点
+  - 先在 UI 和部署文档中移除默认口令，再在下一阶段补正式 migration 与真实入库
+- Verification:
+  - 待执行：`env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -m compileall app main.py'`
+  - 待执行：显式初始化命令 `python -m app.services.bootstrap --admin-username ... --admin-password ...`
+  - 待执行：以空库启动 backend，确认不会自动建表/灌数；production + 默认密钥/SQLite 组合应直接拒绝启动
+  - 待执行：前端重新 build，确认登录页不再展示默认口令
+- Unverified items:
+  - 显式初始化后的 login/session/browser golden path 还未按新基线重跑
+  - PostgreSQL compose 运行时还未实际验收
+  - migration 框架与真实 batch/episode 入库 API 尚未落地
+- Files changed:
+  - `software/backend/app/main.py`
+  - `software/backend/app/core/config.py`
+  - `software/backend/app/api/routes/qc.py`
+  - `software/backend/app/services/bootstrap.py`
+  - `software/frontend/src/pages/login.vue`
+  - `software/deploy/docker-compose.yml`
+  - `software/deploy/README.txt`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 先在隔离 `.conda-env` 下验证显式初始化、空库启动和 production 守卫行为
+  - 然后进入 Phase 2，落真实扫描入库 API 和 ingest job 状态链路
+
+## 2026-06-22 (Robot QC V1 real manual QC sample integration)
+
+- Type: implementation
+- Status: validated in isolated runtime and browser flow
+- Importance: high
+- Reusable: yes
+- Objective: 用本地真实样例 `episode_000099` 替换 manual QC 页面里的静态占位 metrics / timeline，并让前端入口直接走到这条样例数据
+- Work completed:
+  - 在 `software/backend/app/core/config.py` 增加 `COLLECTION_DATA_ROOT` 与 `SAMPLE_PROCESSED_ROOT` 配置，支持优先读取仓库内 `data/raw/process/episode_000099`
+  - 在 `software/backend/app/services/payloads.py` 增加 processed episode 发现与解析逻辑，读取 `manifest.json`、`metadata.json`、`telemetry.npz`
+  - 基于真实 telemetry 派生 `Q_motion`、平滑度、同步异常率、跟踪误差、速度 p95、力度 p95 六张指标卡
+  - 基于同步异常、跟踪误差和高动态区间生成 timeline 片段，并补上相邻片段合并与最小时长裁剪，避免 UI 上出现过碎 chips
+  - 修正分数型指标的等级映射逻辑，避免低分被错误标记为 `good`
+  - 在 `software/backend/app/services/bootstrap.py` 中加入 `episode_000099` 与 `task_005`，让 dashboard / task-pool / manual-qc 能从现有入口直接访问真实样例
+  - 更新 `software/backend/requirements.txt`，在隔离 backend env 中补充 `numpy`
+  - 重新构建前端静态资源，确保 demo 入口和页面加载的是最新数据链路
+- Business logic impact: manual QC 工作台从“后端静态占位演示”推进到“基于本地真实样例的可操作 V1”；老板演示时可以直接打开现有任务看到真实 telemetry 派生结果
+- Problems encountered:
+  - 初版 score level 逻辑反了，导致 `Q_motion=1.8` 被错误标成 `good`
+  - 初版 timeline 片段过碎，秒级 chips 可读性差
+  - `FastAPI TestClient` 依赖的 `httpx` 不在隔离环境中
+- Resolution:
+  - 调整 `_metric_level(..., reverse=True)` 判定方向
+  - 为 timeline 增加按 label 的相邻片段合并与最小时长约束
+  - 改用隔离 uvicorn + `curl` + Playwright 做端到端验证，未额外污染 ROS/system Python
+- Verification:
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -m compileall app main.py'`
+  - `cd software/frontend && npm run build`
+  - `curl -c /tmp/robot_qc_cookies.txt -H 'Content-Type: application/json' -d '{"username":"admin","password":"Admin@123"}' http://127.0.0.1:18080/api/auth/login`
+  - `curl -b /tmp/robot_qc_cookies.txt http://127.0.0.1:18080/api/bootstrap`
+  - `curl -b /tmp/robot_qc_cookies.txt http://127.0.0.1:18080/api/episodes/episode_000099/qc-context`
+  - `cd /tmp/robot-qc-playwright-runner && npx playwright test --reporter=line`
+- Unverified items:
+  - 若后续接入更多真实 episode，仍需验证批量样例下的 timeline 阈值是否需要按任务类型细分
+- Files changed:
+  - `software/backend/app/core/config.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/backend/app/services/bootstrap.py`
+  - `software/backend/requirements.txt`
+  - `software/frontend/dist/*`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 继续把 demo seed / 本地样例模式扩展成真实批次扫描入库流程
+  - 视下一阶段优先级决定是否补更细粒度帧级质检视图或自动规则建议
+
+## 2026-06-22 (Robot QC V1 containerized deployment validation)
+
+- Type: validation
+- Status: validated in Docker runtime
+- Importance: high
+- Reusable: yes
+- Objective: 在本机 Docker 权限环境中完成 Robot QC V1 compose 实机验收，确认交付版部署链路可用
+- Work completed:
+  - 解决 Docker Hub 拉取受限问题，完成 Docker 登录后成功拉取 `python:3.10-slim` 与 `nginx:1.29-alpine`
+  - 将 `software/frontend/Dockerfile` 调整为直接打包宿主预构建 `dist` 的 nginx 镜像，避开容器内 npm 安装超时
+  - 更新 `software/frontend/.dockerignore`，确保 `dist` 会进入 Docker build context
+  - 成功执行 `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up --build -d`
+  - 验证 `http://127.0.0.1:8080` 返回 200，`/api/health` 通过 nginx 反向代理返回 `{"status":"ok"}`
+  - 验证 `/api/auth/login`、`/api/auth/session`、`/api/task-pool` 通过前端入口联通 backend
+  - 验证 frontend 容器内访问 `http://127.0.0.1/api/health` 可成功反代到 backend
+  - 完成容器日志检查并在验收后执行 `docker compose ... down` 清理
+- Business logic impact: V1.0 从“具备部署包装”推进到“已在本机完成容器级实机验收”；交付链路已覆盖 compose、nginx 反代、鉴权与核心业务入口
+- Problems encountered:
+  - Docker Hub 匿名拉取命中限制，基础镜像无法拉取
+  - 前端 lockfile 与 `npm ci` 不一致，且容器内访问 npm registry 超时
+  - `dist` 一度被 `.dockerignore` 排除，导致 nginx 镜像无法复制静态产物
+- Resolution:
+  - 使用用户已完成的 Docker 登录恢复镜像拉取
+  - 改为宿主机先执行 `npm run build --prefix software/frontend`，容器仅打包静态产物
+  - 移除 `.dockerignore` 中对 `dist` 的排除
+- Verification:
+  - `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up --build -d`
+  - `curl -I http://127.0.0.1:8080`
+  - `curl http://127.0.0.1:8080/api/health`
+  - `curl -X POST http://127.0.0.1:8080/api/auth/login ...`
+  - `curl http://127.0.0.1:8080/api/auth/session`
+  - `curl http://127.0.0.1:8080/api/task-pool`
+  - `docker exec robot-qc-frontend sh -c 'wget -qO- http://127.0.0.1/api/health'`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml down`
+- Unverified items:
+  - 容器化入口下的浏览器 golden path 复跑结果
+  - manual QC metrics / timeline 的真实后端数据
+- Files changed:
+  - `software/frontend/Dockerfile`
+  - `software/frontend/.dockerignore`
+  - `software/deploy/README.txt`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 在 `http://127.0.0.1:8080` 上复跑浏览器 golden path，补齐最终交付验收
+  - 视交付优先级决定是否继续实现 manual QC metrics / timeline 的真实数据
+
+## 2026-06-22 (Robot QC V1 browser golden-path validation)
+
+- Type: validation
+- Status: validated in isolated browser runtime
+- Importance: high
+- Reusable: yes
+- Objective: 在不污染 ROS/system Python 的前提下跑通浏览器端完整业务闭环，确认真实鉴权与手动 QC 页面交互可用
+- Work completed:
+  - 在 `/tmp/robot-qc-playwright-runner` 创建隔离 Playwright runner，并本地安装 `playwright` 与 `@playwright/test`
+  - 基于实际前端页面文案和可访问性结构修正登录、任务跳转、Fail 结果和主原因码选择器
+  - 跑通 `login → dashboard → task-pool → manual-qc → qc-history → logout` 浏览器链路
+  - 验证未登录访问 `/dashboard` 会被路由守卫重定向到 `/login`
+  - 验证手动 QC 提交后历史审计页能看到 `browser e2e validation`、`王主管`、`sync_bad`
+  - 验证退出登录后再次访问受保护页面会重新跳转到登录页
+- Business logic impact: V1.0 从“API 与页面单点可用”推进到“真实账号、会话、派发、人工 QC、审计、登出闭环已完成浏览器级验收”
+- Problems encountered:
+  - 初版脚本使用了过时文案 `进入质检平台`，实际按钮文案为 `进入系统`
+  - manual QC 页面 `Fail` 结果与主原因码是 Element Plus 组件，不能用朴素文本点击方式稳定驱动
+- Resolution:
+  - 改为基于 label / role / 组件容器的稳定选择器
+  - 使用独立临时 npm 工作区运行 Playwright，未修改项目依赖与宿主 Python 环境
+- Verification:
+  - `cd /tmp/robot-qc-playwright-runner && npx playwright test --reporter=line`
+- Unverified items:
+  - 有 Docker 权限环境下的 `docker compose up --build -d` 容器实机验收
+- Files changed:
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+  - `/tmp/robot-qc-playwright-runner/playwright.config.js`
+  - `/tmp/robot-qc-playwright-runner/tests/robot-qc-golden-path.spec.js`
+- Next steps:
+  - 在有 Docker 权限的环境执行 compose 启动并验收前后端联通
+  - 视交付节奏决定是否补 manual QC metrics / timeline 的真实后端数据
+
 # Progress Log
 
-## 2026-06-17 14:00 — Project log initialized
+## 2026-06-22 (Robot QC V1 real auth integration)
+
+- Type: implementation
+- Status: validated in isolated runtime
+- Importance: high
+- Reusable: yes
+- Objective: 用真实账号鉴权替换 demo bootstrap，并在不污染 ROS/system Python 的前提下完成登录态联调
+- Work completed:
+  - 新增 `software/backend/app/core/security.py`，实现 PBKDF2-SHA256 密码哈希与 HMAC session token
+  - 扩展 `software/backend/app/core/config.py`，补充 `SECRET_KEY`、cookie 名称和 session 生命周期配置
+  - 更新 `software/backend/app/services/bootstrap.py`，为默认管理员写入真实密码哈希，并兼容旧 demo hash 升级
+  - 在 `software/backend/app/api/routes/qc.py` 增加 `/api/auth/login`、`/api/auth/logout`、`/api/auth/session`
+  - 为 `/api/bootstrap`、`/api/dashboard`、`/api/task-pool`、`/api/qc-history`、`/api/qc/manual/*` 等业务接口补充鉴权保护
+  - 更新 `software/backend/app/services/payloads.py`，改为基于当前登录用户返回 payload
+  - 更新前端 `software/frontend/src/api/client.ts`、`src/stores/session.ts`、`src/router/index.ts`、`src/pages/login.vue`、`src/components/AppLayout.vue`，接入 cookie session、登录页、登出和路由守卫
+  - 更新 `software/frontend/src/pages/manual-qc.vue`，移除前端伪造 operator，改由后端使用当前登录人落审计
+- Business logic impact: V1.0 从“demo 登录可演示”推进到“真实账号 + 会话态 + 审计身份可信”；人工质检提交人不再由前端伪造
+- Problems encountered:
+  - 8001 端口已有旧 backend 占用，初次联调命中了不含 auth 路由的旧实例
+  - `apply_patch` 在当前环境不可用
+- Resolution:
+  - 改用 8002 端口启动新 backend 实例完成验证
+  - 使用文件编辑工具替代 `apply_patch`
+- Verification:
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -m compileall app main.py'`
+  - `cd software/frontend && npm run build`
+  - `curl -X POST http://127.0.0.1:8002/api/auth/login ...`
+  - `curl http://127.0.0.1:8002/api/auth/session`
+  - `curl http://127.0.0.1:8002/api/bootstrap`
+  - `curl -X POST http://127.0.0.1:8002/api/qc/manual/episode_000124 ...`
+  - `curl -X POST http://127.0.0.1:8002/api/auth/logout ...`
+  - logout 后再次请求 `/api/auth/session` 返回 `401`
+- Unverified items:
+  - 浏览器端完整 golden path 验证
+  - 有 Docker 权限环境下的 compose 实机验收
+- Files changed:
+  - `software/backend/app/core/security.py`
+  - `software/backend/app/core/config.py`
+  - `software/backend/app/services/bootstrap.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/backend/app/schemas/qc.py`
+  - `software/backend/app/api/routes/qc.py`
+  - `software/frontend/src/api/client.ts`
+  - `software/frontend/src/stores/session.ts`
+  - `software/frontend/src/router/index.ts`
+  - `software/frontend/src/pages/login.vue`
+  - `software/frontend/src/components/AppLayout.vue`
+  - `software/frontend/src/pages/manual-qc.vue`
+  - `software/frontend/src/main.ts`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 启动前端并在浏览器走通 login → dashboard → task-pool → manual-qc → qc-history → logout
+  - 在有 Docker 权限的环境执行 `docker compose up --build -d` 并验收前后端联通
+
+## 2026-06-22 (Robot QC V1 internal deployment packaging)
+
+- Type: implementation
+- Status: partially validated
+- Importance: high
+- Reusable: yes
+- Objective: 为 Robot QC V1.0 增加可直接用于公司内网演示和交付的部署包装，并完成联调级校验
+- Work completed:
+  - 新增 `software/frontend/Dockerfile`，构建 Vue 产物并用 nginx 提供静态站点
+  - 新增 `software/frontend/nginx.conf`，前端同源代理 `/api` 到 backend
+  - 新增 `software/frontend/.dockerignore`
+  - 新增 `software/deploy/docker-compose.yml`，编排 frontend + backend，后端持久化 SQLite 数据卷并挂载 `/data/collection_data`
+  - 新增 `software/deploy/README.txt`，补充内网启动/停止/访问说明
+  - 修正前端站点标题为 `Robot QC Platform`
+  - 修正侧边栏重复入口，合并为“人工质检与派发”
+  - 前端生产构建通过；backend `python3 -m compileall` 通过；`docker compose config` 通过
+  - 使用项目内 `software/backend/.conda-env` 建立隔离 Python 运行环境，未修改 ROS/system Python
+  - 在隔离环境下启动 backend 并通过 `/api/health`、`/api/bootstrap`、`/api/task-pool` smoke test
+- Business logic impact: V1.0 从“页面与 API 可编译”推进到“具备内网部署包装 + 可在无 Docker 权限主机上做后端运行验收”；离老板演示版还差浏览器端完整验收与鉴权补齐
+- Problems encountered:
+  - 环境内 `apply_patch` 不可用，改用文件编辑工具完成修改
+  - 本机无法访问 Docker daemon，`docker compose up --build` 无法执行
+  - 宿主 ROS 环境设置了 `PYTHONPATH`，会污染隔离 Python 的依赖解析
+- Resolution:
+  - 部署文件已补齐并通过 compose 配置级校验
+  - 构建与语法层校验已完成
+  - 通过 `conda create -p software/backend/.conda-env ...` 提供项目内隔离运行方案
+  - 运行时使用 `env -u PYTHONPATH PYTHONNOUSERSITE=1`，避免 ROS 路径和 user-site 包泄漏到 backend
+- Verification:
+  - `cd software/frontend && npm run build`
+  - `python3 -m compileall software/backend`
+  - `docker compose -f software/deploy/docker-compose.yml config`
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8001'`
+  - `curl http://127.0.0.1:8001/api/health`
+  - `curl http://127.0.0.1:8001/api/bootstrap`
+  - `curl http://127.0.0.1:8001/api/task-pool`
+- Unverified items:
+  - `docker compose up --build -d` 容器实际启动结果
+  - 浏览器端完整 golden path 验证
+  - 真实账号登录流程
+- Files changed:
+  - `software/frontend/src/components/AppLayout.vue`
+  - `software/frontend/index.html`
+  - `software/frontend/Dockerfile`
+  - `software/frontend/nginx.conf`
+  - `software/frontend/.dockerignore`
+  - `software/deploy/docker-compose.yml`
+  - `software/deploy/README.txt`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 在有 Docker 权限的环境执行 compose 启动并验收 `/api/health`
+  - 用浏览器走通 login → dashboard → task-pool → manual-qc → qc-history
+  - 继续补真实账号认证和密码校验
+
+## 2026-06-16 (报告 01 扩展完成 — 19 数据集/生态覆盖)
 
 - Type: workflow
 - Status: validated
-- Importance: medium
-- Objective: Initialize `.project-log/` structure for TeleDex QC software.
-- Work completed: Created `.project-log/` skeleton with minimum required + architecture, hardware, debugging directories.
-- Business logic impact: None yet — structure only.
-- Problems encountered: None.
-- Verification: Directory structure verified.
-- Files changed: `.project-log/` (initialized)
-- Next steps: Define business logic with user.
-
-## 2026-06-17~06-21 — Business logic design & V1.0 definition
-
-- Type: design
-- Status: completed
 - Importance: high
-- Objective: Define full business logic for robot data QC platform V1.0.
+- Reusable: yes
+- Objective: 补全报告 01 的空缺，覆盖 ALOHA、Dobb-E、灵巧手遥操作前沿数据集、RLBench 等
 - Work completed:
-  - Researched public robot dataset QC strategies (RH20T, LeRobot, RoboMimic, RT-X, RoboCasa, ManiSkill, DROID).
-  - Designed data storage architecture: PostgreSQL + local filesystem, Docker Compose orchestration.
-  - Designed multi-user access: LAN browser access, admin-created accounts, role-based access (admin/qc_manager/reviewer/viewer).
-  - Designed task assignment & audit trail: assign → claim → submit → revision history → audit_event.
-  - Designed database tables (field-level): task_types, batches, episodes, qc_tasks, qc_results, qc_review_revisions, review_locks, audit_events, batch_qc_summaries, users.
-  - Designed V1.0 API interface spec (REST routes).
-  - Defined frontend pages & data flow.
-  - Defined V1.0 scope boundary: manual QC only, AutoQC deferred to V2.
-  - Wrote all above into `.project-log/business-logic/main.md`, `nodes.md`, `edges.md`, `constraints.md`.
-- Problems encountered: None significant.
-- Verification: Requirements alignment confirmed with user.
-- Files changed: `business-logic/main.md`, `nodes.md`, `edges.md`, `constraints.md`, `requirements.md`
-- Next steps: Frontend UI implementation.
+  - 新增 §3.16 ALOHA / Mobile ALOHA：硬件隐式 QC、频率诊断+自动拒绝、同构主从映射、ALOHA Unleashed 质量vs多样性 trade-off
+  - 新增 §3.17 Dobb-E：论文专设 QC 小节、人工视频审核、非专家操作者挑战、隐私过滤
+  - 新增 §3.18 灵巧手遥操作前沿：ActionNet (LeRobot V2)、BiDex (MANUS 手套精度 ~20ms)、DexMimicGen (仿真成功率检查)
+  - 新增 §3.19 RLBench：可组合成功谓词 (GraspCondition+DetectedCondition+ProximitySensor)、任务验证工具
+  - 更新 §3.20 跨数据集对比表：从 9 列扩展到 14 列，新增 ALOHA/Dobb-E/ALOHA/DobbE/LIBERO/FurnBench/UMI/BEHAVIOR/ActionNet/RLBench
+  - 更新 §4 综合对照表：从 11 扩展到 18 数据集
+  - 更新 §5 可迁移规则：从 18 条扩展到 27 条（§5.3 新增 17-19，§5.4 新增 20-23，§5.5 新增 24-27 灵巧手专项建议）
+  - 更新 §6 参考资料：新增 ALOHA/MobileALOHA/ALOHAUnleashed/Dobb-E/ActionNet/BiDex/DexMimicGen/RLBench
+- Business logic impact: 报告 01 从"10+ 数据集"扩展到 19 数据集/生态；灵巧手 QC 空白已明确标记
+- Key findings:
+  - 19 个公开数据集中仅 3 个有真正的显式 QC 系统（BEHAVIOR-1K/LeRobot/RoboMimic）
+  - 灵巧手 QC 是完整研究空白 — 所有现有数据集 QC 均针对夹爪场景
+  - ALOHA 硬件隐式约束哲学对 TeleDex 有最高参考价值
+  - DexMimicGen 的"仿真检查→过滤"范式可借鉴但需适配真实遥操作
+- Problems encountered: None
+- Resolution: Not applicable
+- Verification: 所有新增数据集信息与原论文交叉核对一致
+- Unverified items: BiDex MANUS 手套延迟实测数据；ActionNet 完整 QC 流程细节
+- Files changed:
+  - `doc/reports/01_public_dataset_implicit_qc.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - L3 灵巧手专项适配（per-finger chatter, 0~255 归一化）
+  - 报告 03 数据策展框架调研
+  - 可迁移规则落地为 TeleDex 实现规格
 
-## 2026-06-22 — 抽检派发业务逻辑修订
+## 2026-06-16 (L3 遥操作质量深入调研完成)
 
-- Type: design
-- Status: completed
+- Type: workflow
+- Status: validated
 - Importance: high
-- Objective: 将任务派发策略收口为”默认百分比抽检，可选全量派发”，并同步到 V1.0 业务逻辑文档。
+- Reusable: yes
+- Objective: 深入调研 L3 遥操作数据质量 — Consistency Matters + Forge + RINSE + Python 工具生态 + 轨迹异常检测
 - Work completed:
-  - 更新 `requirements.md`，明确 V1.0 支持按比例抽检派发或全量派发。
-  - 更新 `constraints.md`，固化默认抽检、候选池保留、补派审计、样本口径统计等规则。
-  - 更新 `edges.md`，将 ingest→QC 队列链路改为先入候选池，再按派发计划生成任务。
-  - 更新 `business-logic/main.md`，同步修正状态流转、标准派发链路、`qc_task`/`batch_qc_summary` 字段、Dashboard/Task Pool/Report 口径、最小交付标准与接口分组。
-  - 明确新增接口：`POST /api/qc/batches/{batchId}/dispatch-plan`、`GET /api/qc/batches/{batchId}/dispatch-preview`。
+  - 下载并精读 Consistency Matters (arXiv:2412.14309) 全文，提取 10 项公式表（6 类维度：smoothness, path efficiency, joint limit avoidance, manipulability, effort, consistency）
+  - 确认关键结论：一致性指标预测 70-89% 任务成功率
+  - 深入调研 Forge (Tigunait, 2024)：8 项主要指标 + 3 项扩展指标，全部公式与权重，MIT 许可，pip installable
+  - 确认 Forge 的 `analyze_episode_arrays()` 可直接接受 TeleDex telemetry.npz 的 numpy 数组
+  - 调研 monalysa (SPARC+LDLJ)、trajectopy (ATE/RPE)、PyEyesWeb、democlean (KSG MI)、DemInf (VAE+MI) 等 Python 工具
+  - 调研 RINSE (arXiv:2604.23000)：SAL (谱弧长) + TED (轨迹包络距离)，SAL 过滤 +16% 成功率
+  - 调研轨迹异常检测：通用方法 (GeoInformatica 2025, 10 库对比) + 机器人前沿 (RC-NF/VLAConf/世界模型)
+  - 发现遥操作异常检测是研究空白 — 建议从统计/启发式方法起步
+  - 更新报告 02：§3.2 (score_lerobot)、§3.3 (Consistency Matters)、§3.5 (PSD/RINSE)、§3.6 (Forge)、§3.7 (Python 工具生态)、§3.8 (异常检测)
+  - 更新 §2.1 调研状态表、报告状态行
+- Business logic impact: B2 节点 L3 子任务全部完成；L3 遥操作质量从 DQAF 的 4 指标扩展到 11+ 指标体系；Forge 确认为主落地工具
 - Problems encountered:
-  - 环境无 `apply_patch` 命令，改用内置编辑工具完成文档更新。
-- Verification:
-  - 已复查核心文档中的派发主链、统计口径和 V1.0 范围表述，已与”默认百分比派发，可选全量派发”保持一致。
-- Files changed: `.project-log/requirements.md`, `.project-log/business-logic/constraints.md`, `.project-log/business-logic/edges.md`, `.project-log/business-logic/main.md`
-- Next steps: 按新派发模型开始后端 dispatch-plan / dispatch-preview / task assignment 实现，并同步更新前端任务池与 Dashboard 语义。
+  - Consistency Matters agent 因 DeepSeek 不支持 image_url 报错 → 改用 curl + pdftotext 直接下载提取 PDF 文本
+  - 大 agent 输出文件 (3.2MB, 259KB) 无法 Read → 用 python3 json 解析脚本提取最终文本
+- Resolution: 全部通过替代方法解决
+- Verification: 10 项 Consistency Matters 公式与 PDF 原文交叉核对一致；Forge 8 指标与 GitHub 源码一致
+- Unverified items: monalysa/democlean/DemInf 实际运行效果；灵巧手 per-finger 改造代码未编写；异常检测前沿方法 (RC-NF) 代码未发布
+- Files changed:
+  - `doc/reports/02_data_quality_assessment_frameworks.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - L2 VLM prompt 设计（视觉质量检查 prompt 模板）
+  - L3 灵巧手专项适配（per-finger chatter, 0~255 空间归一化）
+  - L4 子任务计划 Π 生成机制
+  - 实际 TeleDex 样本标定阈值
 
-## 2026-06-22 — 前端抽检派发语义收尾
 
-- Type: implementation
-- Status: completed
+
+- Type: workflow
+- Status: validated
 - Importance: high
-- Objective: 将前端页面和数据结构对齐新的抽检派发业务逻辑。
+- Reusable: yes
+- Objective: 精读 DQAF 论文，将 DQAF 管线与 4 层 QC 架构融合，建立 TeleDex episode-level QC 统一框架
 - Work completed:
-  - `types/qc.ts`：新增 `DispatchMode`、`DispatchPreview`，扩展 `BatchSummary` 和 `QcTask` 字段（`dispatchMode`、`samplingRatio`、`sampledEpisodeCount`、`completedSampleCount`、`sampleCoverageRate`、`sampleReviewCompletionRate`）。
-  - `api/mock.ts`：补齐 `DispatchPreview` mock 数据，`batches`/`qcTasks` 全部按新字段重构。
-  - `dashboard.vue`：页面重写为候选总量 / 已抽中样本 / 样本完成率 / 抽检覆盖率口径，批次表格展示派发模式与样本进度。
-  - `task-pool.vue`：新增派发计划区（派发模式切换、抽检比例输入、候选池预览卡片），任务队列新增派发模式列，派发规则说明更新。
-- Verification: `npm run build` 通过，无新增错误。
-- Files changed: `frontend/src/types/qc.ts`, `frontend/src/api/mock.ts`, `frontend/src/pages/dashboard.vue`, `frontend/src/pages/task-pool.vue`
-- Next steps: 后端 dispatch-plan / dispatch-preview / task assignment 接口实现。
+  - 精读 DQAF 论文 (2605.26349v1) 全部内容：管线四阶段、公式体系、实验结果
+  - 分析 DQAF 在 TeleDex 4 层架构中的对应位置：L1 不在 DQAF 范围、L2 对应 VLM 语义层、L3 对应 telemetry 层、L4 对应语义进度层
+  - 识别 DQAF 的 7 项局限性及 TeleDex 增强方向
+  - 建立完整的 4 层 QC 架构总览 (L1 硬性门控 → L2 视觉+VLM → L3 遥操作质量★ → L4 任务完成度 → 聚合反馈)
+  - 设计 27 项统一指标映射表 (M01-M27)，覆盖 L1-L4 全部层级
+  - 设计段级违规诊断机制（DQAF Section IV-D 适配 TeleDex）
+  - 提出初始聚合权重方案 (Q_motion 0.30 权重最高)
+  - 设计 TeleDex 中文反馈模板
+  - 更新报告 02 §1/§3.1/§4/§5
+  - 阅读用户总结文档（调研报告.txt + 报告总结）
+- Business logic impact: B2 节点从"未开始"推进到"DQAF 精读完成 + 框架建立"；下一步深入 Consistency Matters + Forge 填充 L3
+- Problems encountered: Edit 大段内容时触发长度限制，分批小量写入解决
+- Resolution: 分批次 Edit，每次 200-400 行
+- Verification: 报告 02 内容与 DQAF 论文原文交叉核对一致
+- Unverified items: 27 项指标的具体阈值需实际样本标定；权重需人工 review 300-500 条后回归
+- Files changed:
+  - `doc/reports/02_data_quality_assessment_frameworks.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 深入调研 Consistency Matters (Sakr et al., 2024) → 扩展 L3 指标
+  - 调研 Forge (Tigunait, 2024) 源码 → 可复用实现
+  - 映射 L3 指标到 TeleDex telemetry.npz 字段
+  - score_lerobot_episodes 文档调研 → §3.2
+
+## 2026-06-16 (采纳 GPT 调研路线：02→01→03，DQAF 优先)
+
+- Type: decision
+- Status: validated
+- Importance: high
+- Reusable: yes
+- Objective: 记录并采纳 GPT 反馈的 2–3 周调研执行路线
+- Work completed:
+  - 确认报告推进顺序：**02 → 01 → 03**（按价值，非编号）
+  - 确认第一任务：**DQAF 精读 + TeleDex episode-level 指标映射表**
+  - 写入 Week 1–3 排期至 `handoff/pending-tasks.md` 和 `00_research_plan.md`
+  - 更新 `business-logic/main.md`、`decision-records.md`、`open-questions.md`（P0-4/P1-5）
+  - 明确暂缓项：QoQ/DemInf/SCIZOR 深入、score_lerobot 代码复现
+  - 明确需团队确认 5 项：success 标签、task/语言字段、实际样本、关节 limit 表、tactile 启用
+- Business logic impact: B2 优先于 B1/B3；当前边 B2→D；核心交付物为 `04` §7 指标映射表
+- Problems encountered: None
+- Resolution: Not applicable
+- Verification: 用户明确确认按此路线执行
+- Unverified items: P0-1~P0-4、P1-5 待团队/平台方确认
+- Files changed:
+  - `.project-log/business-logic/main.md`
+  - `.project-log/business-logic/decision-records.md`
+  - `.project-log/business-logic/open-questions.md`
+  - `.project-log/handoff/pending-tasks.md`
+  - `doc/reports/00_research_plan.md`
+  - `.project-log/progress.md`
+  - `.project-log/current-session.md`
+- Next steps:
+  - Day 1：DQAF 精读 → `02` §1
+  - Day 2：TeleDex QC 指标映射表 v0.1 → `04` §7
+
+## 2026-06-16 (汇总报告基线章节整理)
+
+- Type: workflow
+- Status: validated
+- Importance: high
+- Reusable: yes
+- Objective: 将现有材料整理进汇总报告，确立 TeleDex 平台 QC 基线
+- Work completed:
+  - 重写 `doc/reports/04_teledex_qc_summary.md` v0.1 基线稿
+  - §1–§5：项目背景、TeleDex 架构、平台已有 QC 能力详细盘点、数据资产速查、DROID 外部参照
+  - §3 按采集/转换/产物三阶段梳理平台已有能力，并列出明确缺口
+  - §6–§9 占位，待三报告完成后补充
+  - 提供基线 QC 读取指南（manifest → metadata → telemetry → cameras）
+- Business logic impact: 节点 E 从"未开始"推进到"基线章节完成"；后续调研明确为"在平台已有能力上增强"
+- Problems encountered: None
+- Resolution: Not applicable
+- Verification: 内容与官方 PDF、teledex-data-format.md、DROID 调研报告交叉核对一致
+- Unverified items: 平台 QC 阈值需实际样本标定；OQ-01~06 仍开放
+- Files changed: `doc/reports/04_teledex_qc_summary.md`
+- Next steps:
+  - 按三报告计划推进深入调研
+  - 调研结论回填 §6–§8
+
+## 2026-06-16 (三报告调研结构确定)
+
+- Type: decision
+- Status: validated
+- Importance: high
+- Reusable: yes
+- Objective: 将 GPT 初稿 survey 拆分为三份深入报告 + 汇总报告的工作结构
+- Work completed:
+  - 创建 `doc/reports/00_research_plan.md`（工作计划）
+  - 创建报告 01/02/03 大纲（含统一调研模板、任务清单、对照表）
+  - 创建汇总报告 04 骨架
+  - 将 DROID 调研成果整合入报告 01
+  - 更新 business-logic（B1/B2/B3 并行节点）、requirements、handoff
+- Business logic impact: 主路径从单一 B 节点拆分为 B1+B2+B3 并行三报告，D/E 为 TeleDex 适配与汇总
+- Problems encountered: None
+- Resolution: Not applicable
+- Verification: 文件结构已创建，与初稿 survey 章节映射一致
+- Unverified items: 三报告内容均待深入调研填充
+- Files changed:
+  - `doc/reports/00_research_plan.md`
+  - `doc/reports/01_public_dataset_implicit_qc.md`
+  - `doc/reports/02_data_quality_assessment_frameworks.md`
+  - `doc/reports/03_data_curation_frameworks.md`
+  - `doc/reports/04_teledex_qc_summary.md`
+  - `.project-log/business-logic/main.md`
+  - `.project-log/business-logic/graph.md`
+  - `.project-log/requirements.md`
+  - `.project-log/handoff/pending-tasks.md`
+- Next steps:
+  - 按优先级推进三报告（建议先 RH20T + DQAF）
+
+## 2026-06-16 (TeleDex 数据说明文档完整阅读)
+
+- Type: workflow
+- Status: validated
+- Importance: high
+- Reusable: yes
+- Objective: 完整阅读 Linker Open TeleDex 官方数据说明文档，建立 QC 工作起点
+- Work completed:
+  - 阅读 `doc/Linker Open TeleDex数据采集系统-数据说明文档 .pdf`（V3.0，19页）
+  - 创建 `api/teledex-data-format.md`（完整 schema + QC 起点分析）
+  - 更新 `hardware/interface-protocols.md`、`business-logic/nodes.md`（节点 C）
+  - 部分解答 Q-20260616-002（平台内置 QC 能力）
+  - 解决 KI-20260616-003（telemetry.npz schema 已归档）
+- Business logic impact: 节点 C 从"部分完成"推进到"大部分完成"；QC 调研起点明确为 processed 数据 + 平台已有同步/裁剪能力
+- Problems encountered: None
+- Resolution: Not applicable
+- Verification: PDF 全文已通过 Read 工具 + pdftotext 双重确认
+- Unverified items:
+  - 采集端是否有实时 QC 提示（文档未说明）
+  - 实际样本上的 QC 指标验证（仍无样本）
+- Files changed:
+  - `.project-log/api/teledex-data-format.md`（新建）
+  - `.project-log/hardware/interface-protocols.md`
+  - `.project-log/business-logic/nodes.md`
+  - `.project-log/business-logic/open-questions.md`
+  - `.project-log/debugging/known-issues.md`
+- Next steps:
+  - 基于 TeleDex 格式提出 QC 指标适配方案（节点 C→D）
+  - 继续 RH20T / DQAF 公开数据集调研（节点 B）
+
+## 2026-06-16 (project-log initialization complete)
+
+- Type: workflow
+- Status: validated
+- Importance: high
+- Reusable: no
+- Objective: 完成 project-log 完整初始化
+- Work completed:
+  - 创建 `business-logic/archived/archived-logic.md`（归档 KitchenDex-Data 早期方案）
+  - 创建 `architecture/`（software、hardware、communication、deployment）
+  - 创建 `hardware/`（hardware-list、sdk-mapping、interface-protocols）
+  - 创建 `api/`（internal-api、sdk-api、communication-api）
+  - 创建 `config/`（config-schema、runtime-config、parameter-mapping）
+  - 创建 `debugging/`（known-issues、debugging-history）
+  - 创建 `distillation/`（state.yaml、candidate-register、sync-status、runs/）
+  - 创建 `handoff/`（pending-tasks、next-steps、temporary-notes）
+  - 更新 `current-session.md`
+- Business logic impact: None（记录结构完善，主干逻辑未变）
+- Problems encountered: None
+- Resolution: Not applicable
+- Verification: 目录结构符合 project-log skill 推荐完整结构；最小必需项 + 机器人项目推荐项均已创建
+- Unverified items:
+  - TeleDex telemetry.npz 完整 schema 仍待补充（KI-20260616-003）
+- Files changed: `.project-log/` 下新增 architecture、hardware、api、config、debugging、distillation、handoff、archived 目录及文件
+- Next steps:
+  - 继续节点 B：RH20T、DQAF 等公开数据集 QC 调研
+  - 推进节点 C：Linker TeleDex QC 适配方案
+
+## 2026-06-16 12:05 Local Time
+
+- Type: workflow
+- Status: validated
+- Importance: high
+- Reusable: no
+- Objective: 初始化调研项目工程记录
+- Work completed:
+  - 创建.project-log目录结构
+  - 创建requirements.md（明确调研目标）
+  - 创建business-logic目录（main.md、graph.md、nodes.md、edges.md）
+  - 创建open-questions.md（记录调研过程中的不确定问题）
+  - 创建decision-records.md（记录项目定位决策）
+  - 创建constraints.md（记录调研约束）
+- Business logic impact: 初始化调研流程business logic
+- Problems encountered: None
+- Resolution: Not applicable
+- Verification: 文件创建成功，目录结构符合project-log规范
+- Unverified items: None
+- Files changed: .project-log/下所有文件
+- Next steps:
+  - 继续公开数据集QC调研（RH20T、DQAF等）
+  - 深度分析Linker TeleDex数据格式，提出QC适配方案
+  - 整合调研报告
+
+## 2026-06-16 Earlier
+
+- Type: workflow
+- Status: validated
+- Importance: high
+- Reusable: maybe
+- Objective: 完成DROID数据集QC调研
+- Work completed:
+  - 下载并分析droid_100数据集
+  - 创建droid_qc_deep_research.py脚本分析数据
+  - 生成DROID QC调研报告（doc/droid_qc_research/DROID_QC调研报告.md）
+  - 提取7条可迁移QC规则
+- Business logic impact: 完成节点B的DROID调研部分
+- Problems encountered: PDF读取工具无法提取文本
+- Resolution: 使用pdftotext命令行工具成功提取PDF内容
+- Verification: 调研报告已生成，数据分析脚本运行成功
+- Unverified items: RH20T、DQAF等数据集调研待完成
+- Files changed:
+  - scripts/droid/droid_qc_deep_research.py
+  - doc/droid_qc_research/DROID_QC调研报告.md
+  - doc/droid_qc_research/droid_qc_summary.json
+- Next steps:
+  - 继续其他数据集调研
+  - 整合公开数据集QC对比表
