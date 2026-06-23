@@ -196,12 +196,20 @@ def serialize_audit(audit: AuditEvent) -> dict:
 
 
 def serialize_ingest_job(job: ScanJob) -> dict:
+    if job.status == 'done':
+        progress = 100
+    elif job.status == 'classifying':
+        progress = 70
+    elif job.status == 'scanning':
+        progress = 15
+    else:
+        progress = 0
     return {
         'id': job.id,
         'bucket': job.bucket,
         'scope': job.scope,
         'status': job.status,
-        'progress': 100 if job.status == 'done' else 0,
+        'progress': progress,
         'confirmedLists': job.confirmed_lists,
         'totalEpisodes': job.total_episodes,
         'newEpisodes': job.new_episodes,

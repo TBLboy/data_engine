@@ -329,6 +329,24 @@ def database(db: Session = Depends(get_db), _: User = Depends(get_current_user))
     return database_payload(db)
 
 
+def _expire_stale_scan_jobs(db: Session, *, bucket: str, stale_after: timedelta = timedelta(minutes=30)) -> None:
+    cutoff = _utcnow() - stale_after
+    stale_jobs = db.query(ScanJob).filter(
+        ScanJob.bucket == bucket,
+        ScanJob.status.in_(['scanning', 'classifying']),
+        ScanJob.finished_at.is_(None),
+        ScanJob.started_at < cutoff,
+    ).all()
+    if not stale_jobs:
+        return
+    now = _utcnow()
+    for job in stale_jobs:
+        job.status = 'failed'
+        job.error_detail = 'stale queued job'
+        job.finished_at = now
+    db.commit()
+
+
 @router.post('/database/scan', response_model=IngestJobSchema)
 def scan_database(
     payload: IngestScanRequest,
@@ -340,6 +358,8 @@ def scan_database(
     bucket = payload.bucket.strip()
     if not bucket:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='bucket 不能为空')
+
+    _expire_stale_scan_jobs(db, bucket=bucket)
 
     existing_scan = db.query(ScanJob).filter(
         ScanJob.bucket == bucket,

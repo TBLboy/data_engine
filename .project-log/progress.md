@@ -26,8 +26,9 @@
   - 真实结构化上下文验证：`frameCount=394`、`q_motion=5.9`、`timelineSegments=3`
   - 真实端到端任务链验证：`scan -> dispatch -> claim -> media refresh -> submit` 已在 `yaocao` bucket + 临时 SQLite 库上跑通，结果为 `dispatch createdTaskCount=1`、`claim isMine=true`、`refresh 1 True`、`submit ok`、最终 `episode.qc_status=done` / `task.status=done`
   - 生产浏览器媒体验收：Playwright 观察到 `videos=3`、`refreshVisible=true`、`downloadButtons=3`
+  - 生产 HTTP scan 验证：最新 `queued_1782241730_user_admin` 已从 `scanning -> classifying -> done` 完整跑通，结果为 `confirmedLists=42`、`totalEpisodes=4097`、`newEpisodes=69`
 - Unverified items:
-  - 生产 HTTP scan worker 仍有稳定性问题；虽然多条 queued job 能跑到 `done`，但仍存在部分 queued job 长时间停在 `scanning/classifying`
+  - 仍需确认 queued scan worker 在连续多次触发下的长期稳定性；历史上存在部分旧 job 被标记为 `stale queued job`
   - 还未完成最终的生产级 secrets 管理收口（当前 compose 已改为环境变量注入，但部署流程尚未固化） 
 - Files changed:
   - `software/backend/app/schemas/qc.py`

@@ -62,6 +62,8 @@ Then start the application services:
 docker compose -f software/deploy/docker-compose.yml up --build -d backend frontend
 ```
 
+The compose file now includes healthchecks for `db` and `backend`, and `frontend` waits for backend health before starting. This avoids the transient 502 window where nginx starts before the API is reachable.
+
 ## Required environment changes before real deployment
 - Export `SECRET_KEY`, `POSTGRES_PASSWORD`, `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, and optionally `MINIO_DEFAULT_BUCKET` before `docker compose up`
 - Keep MinIO credentials out of the compose file; inject them from shell env, `.env`, or your secret manager

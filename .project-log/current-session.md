@@ -56,8 +56,8 @@
 - manual QC 真实上下文已从本地 processed 目录读取切换为基于控制面 `episode_inventory + episode_objects + lists` 的 MinIO 对象读取；后端直接从 MinIO 拉取 `manifest.json` / `metadata.json` / `telemetry.npz` 生成 metrics 与 timeline，不再参与旧本地扫描目录逻辑
 - 已继续推进旧本地字段清理：新增 `app/services/authz.py` 承接权限校验，旧 `app/services/ingestion.py` 与 `models/ingest.py` 已从运行路径删除；同时新增 Alembic revision `20260623_0003` 用于删除 `ingest_jobs`、`batches.storage_path`、`episodes.source_path/source_hash/ingest_status`
 - 已完成真实浏览器媒体验收：Playwright 直接打开生产态 manual QC 页面，观察到 `videos=3`、`refreshVisible=true`、`downloadButtons=3`，说明真实视频元素已经在浏览器侧渲染成功
-- 生产 HTTP 扫描入口已从 504 改为异步返回 queued job，且至少有多条 queued job 在生产 PostgreSQL 中真实跑到 `done`（如 `queued_1782227875_user_admin`、`queued_1782230632_user_admin`）；当前剩余问题收敛为 queued worker 存在不稳定性，并非业务链完全不可用
-- 已完成真实对象级验证：manual QC payload 针对真实 MinIO episode 已返回 3 路媒体 descriptors，并带有有效 `previewUrl`；当前由于临时验证库尚未生成 `qc_task`，`refreshable=false` 属于预期结果，后续需在完整派发链路下验证 refresh 行为
+- 生产 HTTP 扫描入口已进一步稳定：最新 job `queued_1782241730_user_admin` 已在生产环境从 `scanning -> classifying -> done` 完整走完，最终结果为 `confirmed_lists=42`、`total_episodes=4097`、`new_episodes=69`，说明公网/内网入口 + 后台 worker + PostgreSQL/MinIO 联动链已能在真实环境闭环完成
+- 生产扫描过程的可观测性已补齐：`scan_jobs.error_detail` 现在会在 running/classifying 阶段暴露 `prefixes=...` / `lists=... episodes=... new=...` 进度信息，前端 `ingestJobs` 也能看到非 0 进度，避免“后台在跑但前台永远 0/0/0”
 
 ## Current Risks
 

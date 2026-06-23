@@ -213,7 +213,7 @@ def _execute_minio_scan(
             'raw_episodes': set(),
             'processed_episodes': set(),
         })
-        object_rows: list[dict[str, object]] = []
+        object_rows_by_prefix: dict[str, list[dict[str, object]]] = defaultdict(list)
 
         for item in service.list_objects(normalized_bucket, recursive=True):
             object_key = getattr(item, 'object_name', '').strip()
@@ -231,12 +231,17 @@ def _execute_minio_scan(
                     episode_name = parts[index + 1]
                     prefix_info[parent_prefix][f'{child_name}_episodes'].add(episode_name)
 
-            object_rows.append({
+            object_row = {
                 'object_key': object_key,
                 'size_bytes': int(getattr(item, 'size', 0) or 0),
                 'content_hash': str(getattr(item, 'etag', '') or '').strip('"'),
                 'last_modified': getattr(item, 'last_modified', None),
-            })
+            }
+            for index in range(len(parts) - 1):
+                if parts[index] in {'raw', 'processed'} and EPISODE_PATTERN.match(parts[index + 1]):
+                    episode_scope_prefix = _prefix_from_parts(parts, index + 2)
+                    object_rows_by_prefix[episode_scope_prefix].append(object_row)
+                    break
 
         current_prefixes = sorted(prefix_info.keys(), key=lambda value: (_prefix_depth(value), value))
         kept_lists: set[str] = set()
@@ -265,6 +270,7 @@ def _execute_minio_scan(
 
         scan_job.total_prefixes = len(current_prefixes)
         scan_job.status = 'classifying'
+        scan_job.error_detail = f'prefixes={scan_job.total_prefixes} classifying'
         db.commit()
         db.refresh(scan_job)
 
@@ -364,9 +370,8 @@ def _execute_minio_scan(
                 processed_prefix = f'{list_prefix}processed/{episode_name}/' if episode_name in processed_episode_names else ''
                 episode_prefix = processed_prefix or raw_prefix
                 episode_objects = [
-                    row for row in object_rows
-                    if (raw_prefix and str(row['object_key']).startswith(raw_prefix))
-                    or (processed_prefix and str(row['object_key']).startswith(processed_prefix))
+                    *object_rows_by_prefix.get(raw_prefix, []),
+                    *object_rows_by_prefix.get(processed_prefix, []),
                 ]
                 normalized_roles: list[str] = []
                 manifest_hash = ''
@@ -482,6 +487,10 @@ def _execute_minio_scan(
             batch.episode_count = len(raw_episode_names | processed_episode_names)
             task_type.total_batches = db.query(Batch).filter(Batch.task_type_id == task_type.id).count()
             task_type.total_episodes = db.query(Episode).join(Batch, Episode.batch_id == Batch.id).filter(Batch.task_type_id == task_type.id).count()
+            scan_job.confirmed_lists = len(current_list_ids)
+            scan_job.total_episodes = len(current_episode_inventory_ids)
+            scan_job.new_episodes = new_episode_count
+            scan_job.error_detail = f'lists={scan_job.confirmed_lists} episodes={scan_job.total_episodes} new={scan_job.new_episodes}'
             db.commit()
 
         for list_record in db.query(ListRecord).filter(ListRecord.bucket == normalized_bucket).all():
