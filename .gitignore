@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environments
+.conda-env/
+backend/.conda-env/
+venv/
+.venv/
+
+# Local databases
+backend/data/*.db
+
+# Node / frontend build outputs
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/test-results/
+frontend-temp/node_modules/
+frontend-temp/dist/
+
+# Logs
+*.log
+logs/
+
+# Environment / local overrides
+.env
+.env.*
+*.local
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Temporary files
+*.swp
+*.swo

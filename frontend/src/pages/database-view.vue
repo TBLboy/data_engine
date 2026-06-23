@@ -1,0 +1,193 @@
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import AppLayout from '../components/AppLayout.vue'
+import { fetchDatabase, scanDatabase, type DatabasePayload } from '../api/client'
+
+const payload = ref<DatabasePayload | null>(null)
+const loading = ref(true)
+const error = ref('')
+const scanning = ref(false)
+const keyword = ref('')
+const status = ref('')
+const result = ref('')
+const batch = ref('')
+
+const scanForm = reactive({
+  sourcePath: '/home/tbl/Project/data_collect/data/raw/process',
+  batchName: ''
+})
+
+const formatError = (err: unknown, fallback: string) => {
+  if (!(err instanceof Error)) return fallback
+  try {
+    const parsed = JSON.parse(err.message) as { detail?: string }
+    return parsed.detail || fallback
+  } catch {
+    return err.message || fallback
+  }
+}
+
+const loadDatabase = async () => {
+  loading.value = true
+  error.value = ''
+  try {
+    payload.value = await fetchDatabase()
+  } catch (err) {
+    error.value = formatError(err, '加载数据总库失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+const submitScan = async () => {
+  scanning.value = true
+  try {
+    const job = await scanDatabase({
+      sourcePath: scanForm.sourcePath.trim(),
+      batchName: scanForm.batchName.trim()
+    })
+    ElMessage.success(`扫描完成：${job.detail}`)
+    await loadDatabase()
+  } catch (err) {
+    ElMessage.error(formatError(err, '扫描入库失败'))
+  } finally {
+    scanning.value = false
+  }
+}
+
+onMounted(loadDatabase)
+
+const episodes = computed(() => payload.value?.episodes ?? [])
+const batches = computed(() => payload.value?.batches ?? [])
+const taskTypes = computed(() => payload.value?.taskTypes ?? [])
+const reasonStats = computed(() => payload.value?.reasonStats ?? [])
+const ingestJobs = computed(() => payload.value?.ingestJobs ?? [])
+
+const filteredEpisodes = computed(() => episodes.value.filter((episode) => {
+  const textMatched = !keyword.value || `${episode.id}${episode.batchName}${episode.reasonCode}${episode.reviewer}`.toLowerCase().includes(keyword.value.toLowerCase())
+  const statusMatched = !status.value || episode.qcStatus === status.value
+  const resultMatched = !result.value || episode.qcResult === result.value
+  const batchMatched = !batch.value || episode.batchId === batch.value
+  return textMatched && statusMatched && resultMatched && batchMatched
+}))
+
+const statusType = (statusValue: string) => {
+  if (statusValue === 'done') return 'success'
+  if (statusValue === 'new') return 'info'
+  if (statusValue === 'assigned') return 'warning'
+  return 'primary'
+}
+
+const ingestStatusType = (statusValue: string) => {
+  if (statusValue === 'indexed') return 'success'
+  if (statusValue === 'failed') return 'danger'
+  if (statusValue === 'scanning') return 'warning'
+  return 'info'
+}
+</script>
+
+<template>
+  <AppLayout>
+    <div class="page-stack">
+      <section class="page-title-row database-hero">
+        <div>
+          <el-tag type="success" effect="light">Indexed Data Catalog</el-tag>
+          <h1>数据总库</h1>
+          <p>按任务、批次、QC 状态、审核员和原因码检索全部采集数据，并直接触发受控目录扫描入库。</p>
+        </div>
+        <div class="toolbar-actions">
+          <el-tag type="info" effect="light">导出能力暂未交付</el-tag>
+          <el-button type="primary" :loading="scanning" @click="submitScan">扫描入库</el-button>
+        </div>
+      </section>
+
+      <el-alert v-if="error" type="error" :closable="false" :title="error" />
+
+      <el-row :gutter="18" v-loading="loading">
+        <el-col :span="6"><el-card shadow="never" class="stat-card accent-blue"><span>已索引 Episodes</span><strong>{{ episodes.length }}</strong><small>processed-ready 样本</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="stat-card accent-green"><span>任务类型</span><strong>{{ taskTypes.length }}</strong><small>支持动态扫描</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="stat-card accent-orange"><span>失败原因种类</span><strong>{{ reasonStats.length }}</strong><small>L2/L3/L4/System</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="stat-card accent-purple"><span>批次数量</span><strong>{{ batches.length }}</strong><small>一次扫描形成一个批次</small></el-card></el-col>
+      </el-row>
+
+      <el-row :gutter="18">
+        <el-col :span="9">
+          <el-card shadow="never" class="product-card filter-card">
+            <template #header>扫描入库</template>
+            <div class="filter-grid">
+              <el-input v-model="scanForm.sourcePath" placeholder="输入允许扫描的 processed 目录" clearable />
+              <el-input v-model="scanForm.batchName" placeholder="批次名（可选，默认取目录名）" clearable />
+              <el-button type="primary" :loading="scanning" @click="submitScan">开始扫描</el-button>
+            </div>
+            <div style="margin-top: 10px; color: #909399; font-size: 13px; line-height: 1.6;">
+              允许目录以服务端配置为准，当前建议使用样例路径
+              <code>/home/tbl/Project/data_collect/data/raw/process</code>
+              或生产机上的
+              <code>/data/collection_data/process</code>。
+            </div>
+          </el-card>
+        </el-col>
+        <el-col :span="15">
+          <el-card shadow="never" class="product-card" v-loading="loading">
+            <template #header>最近入库任务</template>
+            <el-table :data="ingestJobs" stripe height="240">
+              <el-table-column prop="batchName" label="批次" min-width="180" />
+              <el-table-column prop="sourcePath" label="来源目录" min-width="260" show-overflow-tooltip />
+              <el-table-column label="状态" width="110">
+                <template #default="{ row }"><el-tag :type="ingestStatusType(row.status)">{{ row.status }}</el-tag></template>
+              </el-table-column>
+              <el-table-column prop="episodes" label="总数" width="80" />
+              <el-table-column prop="importedEpisodes" label="导入" width="80" />
+              <el-table-column prop="skippedEpisodes" label="跳过" width="80" />
+              <el-table-column prop="detail" label="详情" min-width="180" show-overflow-tooltip />
+              <el-table-column prop="startedAt" label="开始时间" width="160" />
+            </el-table>
+          </el-card>
+        </el-col>
+      </el-row>
+
+      <el-card shadow="never" class="product-card filter-card">
+        <div class="filter-grid">
+          <el-input v-model="keyword" placeholder="搜索 episode / batch / reason / reviewer" clearable />
+          <el-select v-model="batch" placeholder="批次" clearable>
+            <el-option v-for="item in batches" :key="item.id" :label="item.name" :value="item.id" />
+          </el-select>
+          <el-select v-model="status" placeholder="QC 状态" clearable>
+            <el-option label="new" value="new" /><el-option label="assigned" value="assigned" /><el-option label="in_review" value="in_review" /><el-option label="done" value="done" />
+          </el-select>
+          <el-select v-model="result" placeholder="QC 结果" clearable>
+            <el-option label="pass" value="pass" /><el-option label="fail" value="fail" /><el-option label="pending" value="pending" />
+          </el-select>
+        </div>
+      </el-card>
+
+      <el-card shadow="never" class="product-card" v-loading="loading">
+        <el-table :data="filteredEpisodes" stripe height="620">
+          <el-table-column prop="id" label="Episode" min-width="150" fixed />
+          <el-table-column prop="taskName" label="任务类型" min-width="160" />
+          <el-table-column prop="batchName" label="批次" min-width="180" />
+          <el-table-column prop="durationSec" label="时长(s)" width="100" />
+          <el-table-column prop="frameCount" label="帧数" width="100" />
+          <el-table-column label="QC状态" width="120"><template #default="{ row }"><el-tag :type="statusType(row.qcStatus)">{{ row.qcStatus }}</el-tag></template></el-table-column>
+          <el-table-column label="结果" width="110">
+            <template #default="{ row }">
+              <el-tag v-if="row.qcResult === 'pass'" type="success">pass</el-tag>
+              <el-tag v-else-if="row.qcResult === 'fail'" type="danger">fail</el-tag>
+              <el-tag v-else type="info">pending</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="reasonCode" label="原因码" min-width="160" />
+          <el-table-column prop="reviewer" label="审核员" width="120" />
+          <el-table-column prop="updatedAt" label="更新时间" min-width="160" />
+          <el-table-column label="操作" width="240" fixed="right">
+            <template #default="{ row }">
+              <router-link :to="`/manual-qc/${row.id}`"><el-button link type="primary">进入质检</el-button></router-link>
+              <router-link to="/qc-history"><el-button link>历史审计</el-button></router-link>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-card>
+    </div>
+  </AppLayout>
+</template>
