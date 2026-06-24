@@ -2,18 +2,25 @@ from __future__ import annotations
 
 import io
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import numpy as np
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models import AuditEvent, Batch, Episode, EpisodeInventory, EpisodeObject, ListRecord, QcReviewRevision, QcTask, ScanJob, TaskType, User
 from app.services.minio_client import get_minio_service
 
+settings = get_settings()
+APP_ZONE = ZoneInfo(settings.app_timezone)
+
 
 def format_time(value: datetime) -> str:
-    return value.strftime('%Y-%m-%d %H:%M')
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(APP_ZONE).strftime('%Y-%m-%d %H:%M')
 
 
 def format_optional_time(value: datetime | None) -> str | None:

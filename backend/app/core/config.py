@@ -14,6 +14,7 @@ DEFAULT_SECRET_KEY = 'robot-qc-dev-secret-change-in-prod'
 class Settings(BaseSettings):
     app_name: str = 'Robot QC API'
     app_env: str = 'development'
+    app_timezone: str = Field(default='Asia/Shanghai', alias='APP_TIMEZONE')
     api_prefix: str = '/api'
     host: str = '0.0.0.0'
     port: int = 8000

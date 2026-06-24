@@ -1,4 +1,91 @@
-## 2026-06-23 (Robot QC V1 manual QC media descriptor first landing)
+## 2026-06-24 (Robot QC V1 scan robustness and local-time display fix)
+
+- Type: implementation
+- Status: validated in real production compose runtime
+- Importance: critical
+- Reusable: yes
+- Objective: 修复 database 扫描任务会卡死在 `scanning` 的生产缺陷，并确保页面刷新/关闭后扫描仍能继续，同时把扫描任务时间从 UTC 错显修正为本地时间显示
+- Work completed:
+  - 复核 `backend/app/api/routes/qc.py`、`backend/app/services/scan_queue.py`、`backend/app/services/scanner.py`，确认当前 `/api/database/scan` 通过 FastAPI `BackgroundTasks` 触发长扫描，存在绑定 request 生命周期的风险
+  - 将扫描触发改为 `enqueue_scan_job()`：后端在 API 返回前只负责落库 queued job，随后用独立 daemon thread 启动 `process_scan_job()`，不再依赖 HTTP request 的后台任务收尾
+  - 保留同 bucket 单活扫描约束不变，但修复了“请求结束后 worker 没真正跑起来，任务永久停在 scanning”的缺陷
+  - 在 `backend/app/core/config.py` 新增 `APP_TIMEZONE` 配置，默认 `Asia/Shanghai`
+  - 在 `backend/app/services/payloads.py` 中把数据库内 UTC naive datetime 按 UTC 解释后转换到 `APP_TIMEZONE` 再格式化，修正 `startedAt` / `finishedAt` 的本地显示
+  - 在生产库中手动标记两条历史卡死任务失败：`queued_1782269665_user_admin`、`queued_1782270935_user_admin`，解除它们对 `yaocao` bucket 后续扫描的阻塞
+  - 修复后重新触发真实生产扫描 `queued_1782271083_user_admin`，并观察到其状态从 `scanning` 进入 `classifying`，最终到 `done`
+- Business logic impact: 扫描任务现在与前端页面生命周期解耦。用户点击 `扫描入库` 后，即使刷新页面、关闭页面或请求已返回，扫描仍会继续在服务进程内推进，避免再出现“页面已经结束但 job 永久卡在 scanning、后续点击都被单活保护挡住”的生产事故。同时扫描时间展示已切到本地时区，现场观察与实际触发时间一致
+- Problems encountered:
+  - 生产环境中出现 `queued_1782269665_user_admin` 长时间停在 `scanning` 且 `total_prefixes=0`、`error_detail=''`，说明 worker 根本没真正推进
+  - 前端显示的 `02:54` 实际是数据库 UTC 时间，用户本地观察时间已是上午，造成明显误判
+  - 首轮改成子进程 worker 的方案在当前容器运行时没有成功推进任务，因此改为更直接的进程内独立线程方案
+- Resolution:
+  - 将扫描 worker 启动方式收敛为 API 进程内 daemon thread，避免额外子进程启动环境差异
+  - 明确把 naive datetime 统一视作 UTC，再按 `APP_TIMEZONE` 转换输出
+  - 对已卡死任务执行手动过期，释放 bucket 扫描锁，再用新实现重跑验证
+- Verification:
+  - `cd software/backend && python3 -m compileall app`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up --build -d backend frontend`
+  - `curl -sS -c /tmp/robot_qc.cookies -H 'Content-Type: application/json' -d '{"username":"admin","password":"Admin123!"}' http://127.0.0.1:8080/api/auth/login`
+  - `curl -sS -b /tmp/robot_qc.cookies -H 'Content-Type: application/json' -d '{"bucket":"yaocao","scope":"full"}' http://127.0.0.1:8080/api/database/scan`
+  - `docker exec robot-qc-db psql -U robot_qc -d robot_qc -c "select id, status, total_prefixes, confirmed_lists, total_episodes, new_episodes, error_detail, started_at, finished_at from scan_jobs order by started_at desc limit 3;"`
+  - `curl -sS -b /tmp/robot_qc.cookies http://127.0.0.1:8080/api/database`
+- Unverified items:
+  - 目前验证的是“请求返回后扫描继续推进并最终完成”，未单独录制“浏览器关闭页签瞬间”场景，但由于新实现已与 HTTP request 生命周期解耦，这一场景与刷新页面在机制上等价
+  - 仍需继续观察长时间生产运行下是否还会产生新的 `stale queued job` 历史残留
+- Files changed:
+  - `software/backend/app/api/routes/qc.py`
+  - `software/backend/app/core/config.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/backend/app/services/scan_queue.py`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 继续在真实浏览器里复验 database 页扫描提示、manual QC 播放/刷新/提交 和 qc-history
+  - 继续观察生产扫描任务在多次触发下的稳定性，确认不再出现新的无进度卡死
+
+## 2026-06-24 (Robot QC V1 real MinIO production deployment and database-page UX follow-up)
+
+- Type: validation
+- Status: partially validated in real production compose runtime
+- Importance: critical
+- Reusable: yes
+- Objective: 在真实本机生产环境完成 MinIO + PostgreSQL + compose 部署收口，并继续收口 database 页面扫描入口与长列表可用性问题，给后续现场验收提供稳定基线
+- Work completed:
+  - 生成并落地生产私有配置 `software/deploy/.env`，写入 `SECRET_KEY`、`POSTGRES_PASSWORD`、MinIO endpoint/credentials、默认 bucket `yaocao`、`FRONTEND_ORIGIN` 与 `SESSION_COOKIE_SECURE`
+  - 扩写 `software/deploy/README.txt`，补齐 secret 生成、`.env` 写法、首次 bootstrap、已有 PostgreSQL 卷改密、真实 MinIO 验证与跨机器迁移流程
+  - 在真实 compose 环境中完成 PostgreSQL 角色密码同步与 schema/bootstrap 初始化，确认当前部署可直接连接真实 MinIO 数据运行
+  - 基于真实运行时确认 database 页面能读取真实 episode、批次与最近扫描任务，并确认扫描触发接口是 `POST /api/database/scan`，不是 `GET`
+  - 复核 `frontend/src/pages/database-view.vue`，确认顶部 `扫描入库` 与卡片内 `开始扫描` 都调用同一 `submitScan()`，属于重复入口
+  - 已删除顶部重复扫描按钮，仅保留扫描卡片中的单一主入口，并把按钮文案统一为 `扫描入库`
+  - 已为 database 页 episode 列表增加独立滚动容器，长表格区域现在具备自己的纵向滚动条
+  - 执行 `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`，确认前端改动可正常生产构建
+- Business logic impact: 这一步把“能跑”推进到了“真实本机生产部署 + 用户现场可用性收口”。部署层面已经有私有 env 和迁移手册，database 页面层面则从双入口和长表格难操作的演示态，收紧为更接近实际生产使用的单一主操作入口与可滚动列表
+- Problems encountered:
+  - 先前误把进度写到了仓库根目录 `/home/tbl/Project/data_collect/.project-log`，而本项目实际应写 `software/.project-log`
+  - 本机 Firefox/Playwright headless 仍无法稳定启动，报错包含 `RenderCompositorSWGL failed mapping default framebuffer`，阻塞了完整浏览器自动化链路
+  - database 页 episode 列表在真实大数据量场景下没有独立滚动条，导致现场浏览体验明显受影响
+- Resolution:
+  - 已停止向错误日志目录继续写入，并把本次记录改写到 `software/.project-log`
+  - 现场验收阶段改用“真实部署 + API 验证 + 页面源码复核 + 用户实机浏览”组合方式继续推进，而不把 Firefox 驱动问题误判成业务故障
+  - 直接删除重复按钮并为表格加独立滚动容器，优先收口当前最影响使用的页面问题
+- Verification:
+  - 读取并确认 `software/deploy/.env` 当前生产私有配置
+  - 读取并确认 `software/deploy/README.txt` 当前迁移部署手册内容
+  - 读取并复核 `software/frontend/src/pages/database-view.vue`
+  - `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`
+- Unverified items:
+  - 仍未完成 manual QC 播放/刷新/提交 与 qc-history 的完整浏览器自动化复验，原因是本机 Firefox/Playwright headless 启动异常
+  - 仍需继续观察真实生产扫描 worker 的长期稳定性，以及旧 `stale queued job` 历史残留是否还会再出现
+- Files changed:
+  - `software/deploy/.env`
+  - `software/deploy/README.txt`
+  - `software/frontend/src/pages/database-view.vue`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 继续在用户现场浏览器里验证 manual QC 的真实播放、刷新、提交与 qc-history 页面
+  - 继续观察真实生产扫描 job 的完成情况，并根据现场体验收口剩余 database/manual QC 交互问题
+
 
 - Type: implementation
 - Status: partially validated on real MinIO data

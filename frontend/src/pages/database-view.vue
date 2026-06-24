@@ -98,7 +98,6 @@ const ingestStatusType = (statusValue: string) => {
         </div>
         <div class="toolbar-actions">
           <el-tag type="info" effect="light">导出能力暂未交付</el-tag>
-          <el-button type="primary" :loading="scanning" @click="submitScan">扫描入库</el-button>
         </div>
       </section>
 
@@ -120,7 +119,7 @@ const ingestStatusType = (statusValue: string) => {
               <el-select v-model="scanForm.scope" placeholder="扫描范围">
                 <el-option label="全量扫描" value="full" />
               </el-select>
-              <el-button type="primary" :loading="scanning" @click="submitScan">开始扫描</el-button>
+              <el-button type="primary" :loading="scanning" @click="submitScan">扫描入库</el-button>
             </div>
             <div style="margin-top: 10px; color: #909399; font-size: 13px; line-height: 1.6;">
               当前扫描直接面向 MinIO 数据湖，默认 bucket 为
@@ -165,32 +164,48 @@ const ingestStatusType = (statusValue: string) => {
         </div>
       </el-card>
 
-      <el-card shadow="never" class="product-card" v-loading="loading">
-        <el-table :data="filteredEpisodes" stripe height="620">
-          <el-table-column prop="id" label="Episode" min-width="150" fixed />
-          <el-table-column prop="taskName" label="任务类型" min-width="160" />
-          <el-table-column prop="batchName" label="批次" min-width="180" />
-          <el-table-column prop="durationSec" label="时长(s)" width="100" />
-          <el-table-column prop="frameCount" label="帧数" width="100" />
-          <el-table-column label="QC状态" width="120"><template #default="{ row }"><el-tag :type="statusType(row.qcStatus)">{{ row.qcStatus }}</el-tag></template></el-table-column>
-          <el-table-column label="结果" width="110">
-            <template #default="{ row }">
-              <el-tag v-if="row.qcResult === 'pass'" type="success">pass</el-tag>
-              <el-tag v-else-if="row.qcResult === 'fail'" type="danger">fail</el-tag>
-              <el-tag v-else type="info">pending</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="reasonCode" label="原因码" min-width="160" />
-          <el-table-column prop="reviewer" label="审核员" width="120" />
-          <el-table-column prop="updatedAt" label="更新时间" min-width="160" />
-          <el-table-column label="操作" width="240" fixed="right">
-            <template #default="{ row }">
-              <router-link :to="`/manual-qc/${row.id}`"><el-button link type="primary">进入质检</el-button></router-link>
-              <router-link to="/qc-history"><el-button link>历史审计</el-button></router-link>
-            </template>
-          </el-table-column>
-        </el-table>
+      <el-card shadow="never" class="product-card episode-table-card" v-loading="loading">
+        <el-table :data="filteredEpisodes" stripe height="620" scrollbar-always-on>
+            <el-table-column prop="id" label="Episode" min-width="150" fixed />
+            <el-table-column prop="taskName" label="任务类型" min-width="160" />
+            <el-table-column prop="batchName" label="批次" min-width="180" />
+            <el-table-column prop="durationSec" label="时长(s)" width="100" />
+            <el-table-column prop="frameCount" label="帧数" width="100" />
+            <el-table-column label="QC状态" width="120"><template #default="{ row }"><el-tag :type="statusType(row.qcStatus)">{{ row.qcStatus }}</el-tag></template></el-table-column>
+            <el-table-column label="结果" width="110">
+              <template #default="{ row }">
+                <el-tag v-if="row.qcResult === 'pass'" type="success">pass</el-tag>
+                <el-tag v-else-if="row.qcResult === 'fail'" type="danger">fail</el-tag>
+                <el-tag v-else type="info">pending</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="reasonCode" label="原因码" min-width="160" />
+            <el-table-column prop="reviewer" label="审核员" width="120" />
+            <el-table-column prop="updatedAt" label="更新时间" min-width="160" />
+            <el-table-column label="操作" width="240" fixed="right">
+              <template #default="{ row }">
+                <router-link :to="`/manual-qc/${row.id}`"><el-button link type="primary">进入质检</el-button></router-link>
+                <router-link to="/qc-history"><el-button link>历史审计</el-button></router-link>
+              </template>
+            </el-table-column>
+          </el-table>
       </el-card>
     </div>
   </AppLayout>
 </template>
+
+<style scoped>
+.episode-table-card :deep(.el-scrollbar__bar.is-vertical) {
+  opacity: 1;
+  right: 4px;
+  width: 10px;
+}
+
+.episode-table-card :deep(.el-scrollbar__thumb) {
+  background-color: #4b5563;
+}
+
+.episode-table-card :deep(.el-scrollbar__thumb:hover) {
+  background-color: #374151;
+}
+</style>

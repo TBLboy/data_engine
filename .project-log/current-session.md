@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-- 2026-06-23 (MinIO control-plane schema/models first implementation block landed and validated)
+- 2026-06-24 (scan robustness and local-time display fix in production)
 
 ## Current Objective
 
@@ -45,7 +45,15 @@
 - 已完成 MinIO 数据湖化第一轮业务分析：当前系统仍以本地 `source_path/storage_path` 和本地文件读取为主，尚未具备对象存储对象清单、bucket/prefix 关联、presigned/代理访问等能力
 - 已明确后续业务方向：MinIO 仅存原始对象数据，PostgreSQL 负责 episode 元数据、批次、账号、任务、QC 结果、审计与对象映射；前端继续只调后端 API，不直接耦合 MinIO 路径
 - 已完成 MinIO 连通性与对象布局实查：凭据可正常列出 bucket，当前主要业务数据集中在 `yaocao` bucket；样例结构已确认是“任务前缀/processed/episode_xxx”与“任务前缀/raw/episode_xxx”两层并存，其中 manual QC 真正依赖的是 `processed` 前缀下的 `manifest.json`、`metadata.json`、`telemetry.npz`、多路 `mp4` 与时间戳/深度对象
-- 已完成 MinIO 基础规则沉淀：`list` 暂按 `bucket + list_prefix` 视作一次采集/上传来源批次，不等于最终业务任务；episode 需区分“可接纳 / 可处理 / QC 就绪”三层状态，只有 processed 且关键对象齐全时才进入 manual QC
+- 生产部署已收口到真实本机环境：`software/deploy/.env` 已写入私有 `SECRET_KEY`、`POSTGRES_PASSWORD`、MinIO endpoint/credentials 与默认 bucket `yaocao`，compose 生产栈现在可直接在本机启动并连接真实 MinIO 数据
+- `software/deploy/README.txt` 已扩展为迁移部署手册，覆盖 secret 生成、`.env` 结构、首次 bootstrap、已有 PostgreSQL 卷改密、真实 MinIO 验证与跨机器迁移步骤
+- 已完成真实 MinIO 生产栈现场验收：数据库页面可读取真实 episode/批次/最近扫描任务；并确认扫描触发接口是 `POST /api/database/scan`，`GET /api/database/scan` 不提供状态读取
+- 当前完整浏览器自动验收仍受本机 Firefox/Playwright headless 启动异常阻塞，错误包含 `RenderCompositorSWGL failed mapping default framebuffer`；因此本轮 database 页面验证以真实部署、API 观测、源码复核和用户现场浏览为主
+- 已收口 `database` 页面重复扫描入口：顶部 `扫描入库` 已删除，仅保留扫描卡片内的单一主入口，并统一文案为 `扫描入库`
+- 已修复 production 扫描任务鲁棒性缺陷：`/api/database/scan` 不再依赖 request-bound `BackgroundTasks` 执行长扫描，而是改为在服务进程内独立线程启动扫描 worker；页面刷新、关闭或请求返回后，扫描都会继续推进，不会因为 HTTP 生命周期结束而卡死在 `scanning`
+- 已修复扫描任务时间展示错误：后端现在按 `APP_TIMEZONE`（默认 `Asia/Shanghai`）把 UTC 数据库时间转换后再返回前端，`startedAt/finishedAt` 与本地实际观察时间已对齐
+- 已在生产库中手动失效两条历史卡死任务：`queued_1782269665_user_admin`、`queued_1782270935_user_admin`，并保留失败原因说明，避免它们持续阻塞同 bucket 的新扫描
+- 已在修复后重新触发真实生产扫描 `queued_1782271083_user_admin`，验证其状态按预期从 `scanning -> classifying -> done` 推进，最终结果为 `confirmed_lists=45`、`total_episodes=4417`、`new_episodes=0`
 - 已明确 `yaocao` bucket 全量扫描原则：扫描器不能假设 list 固定在第一层或第二层，而应递归遍历所有层级 prefix，并用“直接子级命中 `raw/`、`processed/`，且其下存在 `episode_xxxxxx/`”的结构特征识别 list，确保 `yaocao/<list>/...` 与 `yaocao/K1/<list>/...` 都不会漏扫
 - 已明确任务类型归类原则：当前对象元数据尚未看到可直接充当稳定业务任务主键的单字段，V1 应由 prefix 命名、episode 元数据与后续人工确认共同生成 `candidate_task_type/final_task_type`，最终以 PostgreSQL 落库结果为准
 

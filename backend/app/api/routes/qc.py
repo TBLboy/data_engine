@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from urllib.parse import quote
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -58,7 +58,7 @@ from app.services.payloads import (
     sync_batch_metrics,
     task_pool_payload,
 )
-from app.services.scan_queue import process_scan_job
+from app.services.scan_queue import enqueue_scan_job
 
 router = APIRouter(prefix='/api', tags=['qc'])
 settings = get_settings()
@@ -350,7 +350,6 @@ def _expire_stale_scan_jobs(db: Session, *, bucket: str, stale_after: timedelta 
 @router.post('/database/scan', response_model=IngestJobSchema)
 def scan_database(
     payload: IngestScanRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -386,11 +385,7 @@ def scan_database(
     db.commit()
     db.refresh(scan_job)
 
-    background_tasks.add_task(
-        process_scan_job,
-        scan_job.id,
-        current_user.id,
-    )
+    enqueue_scan_job(scan_job.id, current_user.id)
     return serialize_ingest_job(scan_job)
 
 
