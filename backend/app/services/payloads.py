@@ -150,6 +150,7 @@ def serialize_episode(episode: Episode) -> dict:
         'taskName': episode.task_name,
         'durationSec': episode.duration_sec,
         'frameCount': episode.frame_count,
+        'fps': None,
         'qcStatus': episode.qc_status,
         'qcResult': episode.qc_result,
         'reviewer': episode.reviewer,
@@ -823,7 +824,12 @@ def manual_qc_context_payload(db: Session, episode_id: str, current_user: User |
         episode.duration_sec = real_context['durationSec']
         episode.frame_count = real_context['frameCount']
         return {
-            'episode': serialize_episode(episode),
+            'episode': {
+                **serialize_episode(episode),
+                'durationSec': real_context['durationSec'],
+                'frameCount': real_context['frameCount'],
+                'fps': real_context['fps'],
+            },
             'metrics': real_context['metrics'],
             'timelineSegments': real_context['timelineSegments'],
             'revisions': [serialize_revision(item) for item in revisions],
@@ -832,7 +838,10 @@ def manual_qc_context_payload(db: Session, episode_id: str, current_user: User |
         }
 
     return {
-        'episode': serialize_episode(episode),
+        'episode': {
+            **serialize_episode(episode),
+            'fps': 30.0,
+        },
         'metrics': [
             {'key': 'q_motion', 'label': 'Q_motion', 'value': '8.6', 'level': 'good', 'description': '轨迹质量综合分'},
             {'key': 'smoothness', 'label': '平滑度 LDLJ', 'value': '7.9', 'level': 'good', 'description': '动作连续性良好'},

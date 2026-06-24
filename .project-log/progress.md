@@ -1,3 +1,46 @@
+## 2026-06-24 (Robot QC V1 manual QC synchronized player landing)
+
+- Type: implementation
+- Status: validated by build and production QC-context API
+- Importance: critical
+- Reusable: yes
+- Objective: 把 manual QC 页面从“三个独立视频 + 假 frame 控制条”升级成统一同步播放器，让 frame 控制栏真正驱动三路视频，并用真实 `fps/durationSec/frameCount` 消除当前时间轴与视频时长不一致问题
+- Work completed:
+  - 后端 `EpisodeRowSchema` 新增 `fps` 字段，`payloads.py` 在真实 QC context 中把 `fps` / `durationSec` / `frameCount` 一并返回给前端；fallback mock context 也补上默认 `fps=30.0`
+  - `frontend/src/pages/manual-qc.vue` 已重构为受控同步播放器：新增视频 refs、全局 `currentFrame/currentTimeSec/playing` 状态、统一 `playAll/pauseAll/syncVideosToFrame` 控制函数
+  - 去掉三路视频的原生 `controls`，禁止用户通过单个视频本地控制把三路画面拖不同步
+  - 底部 frame 区按钮现在真正驱动三路视频：`播放/暂停`、`上一帧/下一帧`、`-1s/+1s`、slider 拖动都统一作用于当前 variant 下的所有视频
+  - 当前时间文本改为使用真实 `currentFrame / fps` 与 `durationSec` 计算，并在 UI 中显式展示当前秒数、总时长和 fps
+  - variant 切换时会先暂停并按当前帧位置把新 variant 同步到同一 inspection point，避免 RGB / Depth 之间切换后时间漂移
+- Business logic impact: manual QC 页面现在正式从“多视频展示页”进入“多视角同步检查工具”的语义。三路视频不再各播各的，frame control bar 成为唯一播放控制权，这使得逐帧核查、同步判断和时间轴定位真正可用，也与业务逻辑文档里定义的统一同步播放器约束保持一致
+- Problems encountered:
+  - 现有页面中 frame 区原本只修改前端变量，完全没有驱动 `<video>` 元素，因此播放、暂停、拖动和逐帧操作都不生效
+  - 前端原本把当前时间硬编码为 `currentFrame / 30`，与真实 episode 的 `durationSec/frameCount/fps` 不一致，导致用户观察到视频显示 9s 但 frame 区只到 3s 多
+  - 引入 `fps` 字段后，mock 数据和前端类型约束需要同步修正，否则前端构建会报错
+- Resolution:
+  - 用统一受控播放器重构 `manual-qc.vue`，让三路视频从“本地独立控件”转为“受 frame bar 控制的显示窗口”
+  - 后端把真实 `fps` 暴露给前端，前端彻底移除硬编码 `30fps` 的时间轴逻辑
+  - 同步修正 `types/qc.ts`、`schemas/qc.py` 和 fallback payload
+- Verification:
+  - `cd /home/tbl/Project/data_collect/software/backend && python3 -m compileall app`
+  - `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up --build -d backend frontend`
+  - `curl -sS -b /tmp/robot_qc.cookies http://127.0.0.1:8080/api/episodes/batch_5a19fc03a292a170_episode_000013/qc-context`
+  - 复核返回值确认：`durationSec=10.0167`、`frameCount=153`、`fps=15.1745`
+- Unverified items:
+  - 还未做真实浏览器层面的肉眼验收，尤其是“三路视频是否在 UI 中稳定同步播放”和“slider 拖动是否肉眼无漂移”，需要你下一步现场点测
+  - 当前实现没有加入更复杂的自动纠偏（例如某一路落后时的周期性强制 resync）；若实际浏览器解码差异明显，后续可能还需要补更强同步策略
+- Files changed:
+  - `software/backend/app/schemas/qc.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/frontend/src/types/qc.ts`
+  - `software/frontend/src/pages/manual-qc.vue`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 让用户在浏览器里实测 manual QC 的播放、暂停、拖动、逐帧与 variant 切换
+  - 若同步效果稳定，再继续测试刷新预览、认领/释放锁与提交动作
+
 ## 2026-06-24 (Robot QC V1 task type management landing)
 
 - Type: implementation

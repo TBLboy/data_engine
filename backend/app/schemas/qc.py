@@ -109,6 +109,7 @@ class EpisodeRowSchema(BaseModel):
     taskName: str
     durationSec: float
     frameCount: int
+    fps: float | None = None
     qcStatus: str
     qcResult: str
     reviewer: str

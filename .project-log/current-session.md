@@ -65,7 +65,7 @@
 - 已明确任务类型归类原则：当前对象元数据尚未看到可直接充当稳定业务任务主键的单字段，V1 应由 prefix 命名、episode 元数据与后续人工确认共同生成 `candidate_task_type/final_task_type`，最终以 PostgreSQL 落库结果为准
 
 - 已明确 manual QC 的 MinIO 对象访问协议：预览/播放类 MP4 采用后端签发的短时 presigned URL，`manifest.json`/`metadata.json`/`telemetry.npz` 等结构化对象继续由后端读取解析，显式下载/导出保持后端受控接口
-- 已进一步收口 Node D manual QC API 合同：`/api/episodes/{episode_id}/qc-context` 直接返回 embedded `media[]` descriptors；预览 URL 刷新走 `POST /api/episodes/{episode_id}/media/refresh` 按 `objectId` 定向更新；显式下载走独立 `GET /api/episodes/{episode_id}/objects/{object_id}/download`
+- 已落地 manual QC 同步播放器首版：底部 frame 控制栏成为唯一播放控制权，三路视频去掉独立 controls，统一按共享 `currentFrame/currentTimeSec/playing` 同步播放、暂停、逐帧和拖动 seek，并开始使用后端返回的真实 `fps/durationSec/frameCount` 驱动时间轴显示
 - Node F 控制面业务规则已闭环：扫描、状态推进、object_role、classification_rules 与 manual QC 对象访问协议均已落定，下一步进入 Node D 实现规划与 API/前端合同改造
 - 已在 scan API 切换后继续收口下游链路：`database/dashboard` 扫描任务视图已全部改为 bucket/scope 语义，`BatchSummary` 已切到 `bucket + storagePrefix`，frontend mock 已同步为 MinIO 字段
 - manual QC 真实上下文已从本地 processed 目录读取切换为基于控制面 `episode_inventory + episode_objects + lists` 的 MinIO 对象读取；后端直接从 MinIO 拉取 `manifest.json` / `metadata.json` / `telemetry.npz` 生成 metrics 与 timeline，不再参与旧本地扫描目录逻辑

@@ -117,6 +117,20 @@
 - Status: active
 - Document: `control-plane-schema-v1.md`
 
+### 2026-06-24 - manual QC 页面采用统一同步播放器，而非独立视频播放器
+
+- Decision: manual QC 页面中的多路视频必须由统一 frame control bar 控制，三路画面按共享 `currentFrame/currentTimeSec/playing` 状态同步播放；不允许用户通过单个视频窗口的本地 controls 独立播放、暂停或 seek
+- Context: 当前页面虽然已经能加载真实三路视频，但底部 frame 区与视频窗口没有真正联动，且前端把秒数计算硬编码为 `currentFrame / 30`，导致 frame 区显示时长与真实视频时长不一致
+- Alternatives considered:
+  - 保留三个视频各自独立播放，再让 frame 栏只做参考显示
+  - 允许用户继续点击单个视频 controls，同时尽量同步其他视频
+  - 继续使用硬编码 fps 近似映射 frame/time
+- Reason: manual QC 的核心不是“看三个普通视频”，而是“检查同一时刻下的多视角一致性”。只要允许单画面独立播放或独立 seek，就会天然破坏同步检查语义，也会让 frame bar 失去事实源地位
+- Evidence / Verification: 代码复核确认当前 `manual-qc.vue` 中视频仍使用原生 `<video controls>`，而 frame bar 只修改前端变量、未控制视频元素；当前时间文本也直接使用 `currentFrame / 30` 计算，未消费 backend 已提供的 `fps` / `durationSec`
+- Impacted nodes: D
+- Status: active
+- Document: `control-plane-schema-v1.md`
+
 ### 2026-06-23 - classification_rules 种子策略采用分层匹配 + 人工覆盖保留
 
 - Decision: `classification_rules` 的 V1 种子采用三层策略：高置信单义 token 可 authoritative 自动定类；复合或歧义 token 只写 `candidate_task_type`；无命中列表进入 unclassified 队列。匹配按 `priority DESC`、`pattern` 长度 DESC、`basename` 优先、再按规则 id 稳定决胜；人工设置的 `final_task_type_id` 在后续 rescan 中不得被自动覆盖

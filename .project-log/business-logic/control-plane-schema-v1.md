@@ -890,15 +890,111 @@ Rules:
 4. Download events must be auditable as explicit user actions.
 5. Frontend should expose download only through deliberate UI actions, never as implicit player behavior.
 
-### 8.11 API impact additions
+### 8.12 Manual QC synchronized playback contract
 
-Additional V1 endpoints/capabilities:
+The manual QC page must not behave like three independent consumer video players. Its purpose is frame-accurate multi-view inspection of one episode, so playback control must be unified.
 
-- `GET /api/episodes/{episode_id}/qc-context` — returns telemetry context plus media descriptors with embedded `previewUrl`
-- `POST /api/episodes/{episode_id}/media/refresh` — refreshes expired/soon-expiring preview URLs for specific `objectId` values
-- `GET /api/episodes/{episode_id}/objects/{object_id}/download` — controlled backend download for non-preview or explicit export flows
+#### 8.12.1 Single playback authority
 
-## 9. API Impact
+The frame control bar is the only playback authority for the QC page.
+
+Rules:
+
+1. The page owns one canonical playback state:
+   - `currentFrame`
+   - `currentTimeSec`
+   - `playing`
+2. All visible video panels are controlled by this shared state.
+3. Users must not be allowed to start, pause, or seek one video independently from the others.
+4. Native per-video playback controls should be disabled in the QC view.
+5. Video panels remain display surfaces only; they may still support auxiliary actions such as fullscreen, refresh preview, and controlled download if those actions do not change playback state.
+
+#### 8.12.2 Multi-view synchronization rules
+
+For one episode, all currently displayed views of the selected variant (for example three RGB videos, or three depth-colormap videos) must stay synchronized.
+
+Required behaviors:
+
+- pressing **play** starts all displayed videos together
+- pressing **pause** pauses all displayed videos together
+- pressing **previous frame / next frame** moves all displayed videos by one frame together
+- pressing **-1s / +1s** shifts all displayed videos by the same time delta together
+- dragging the frame slider seeks all displayed videos to the same target time together
+
+Synchronization is evaluated against the episode-level playback state, not against independent video-local time.
+
+#### 8.12.3 Timebase and frame semantics
+
+The frame bar must be driven by episode metadata returned from backend QC context, not by frontend hardcoded assumptions.
+
+Required backend fields already available in QC context:
+
+- `frameCount`
+- `durationSec`
+- `fps`
+
+Frontend playback rules:
+
+1. `totalFrames = frameCount`
+2. `frameDurationSec = 1 / fps`
+3. `currentTimeSec = currentFrame / fps`
+4. slider max and frame buttons are based on `frameCount`
+5. visible duration text must come from real `durationSec`, not a hardcoded 30fps conversion
+
+The frontend must not hardcode `30fps` as the timebase.
+
+#### 8.12.4 Bidirectional linkage
+
+The QC player must support both directions of synchronization:
+
+- **control bar -> video**: user actions on frame controls update every video element
+- **video clock -> control bar**: during active playback, the canonical `currentFrame/currentTimeSec` must advance from the real media clock so the slider, current frame, and time label stay accurate
+
+This means the slider is not cosmetic; it is the canonical scrubber for the page.
+
+#### 8.12.5 Variant switching
+
+The page currently supports switching between `rgb` and `depth_colormap` variants.
+
+Rules:
+
+1. Variant switching does not create a separate independent playback session.
+2. The new variant should open at the same canonical playback time/frame as the previous variant.
+3. If one variant has fewer playable media panels, synchronization still follows the shared episode timebase.
+4. Variant switching must not reset QC conclusions, review lock state, or note text.
+
+#### 8.12.6 Manual QC interaction priority
+
+The page priority order is:
+
+1. synchronized playback correctness
+2. frame/time accuracy
+3. stable seek / play / pause behavior
+4. only then auxiliary functions such as fullscreen, refresh preview, or download
+
+If there is a conflict between native video convenience and synchronized inspection correctness, synchronized inspection wins.
+
+#### 8.12.7 Acceptance criteria
+
+A manual QC synchronized player is considered acceptable only if all of the following hold:
+
+- moving the frame slider causes all displayed videos to jump to the same inspection point
+- pressing play/pause affects all displayed videos together
+- current frame and current seconds stay numerically consistent with real `fps` and `durationSec`
+- dragging to the last frame does not produce a visibly incorrect shorter duration than the video metadata
+- users cannot accidentally desynchronize one panel by clicking its local play control
+
+#### 8.12.8 Implementation note for Node D
+
+This contract implies `manual-qc.vue` must evolve from “multiple plain `<video>` tags plus a decorative frame bar” into a controlled synchronized multi-view player.
+
+At implementation time, expected frontend responsibilities are:
+
+- keep refs to all active video elements
+- remove native independent playback controls
+- centralize play / pause / seek in one controller
+- compute frame/time from backend QC metadata
+- update the frame bar from real media playback progress
 
 New endpoints:
 - `POST /api/minio/scan` — trigger a full bucket scan (returns `scan_job.id`)

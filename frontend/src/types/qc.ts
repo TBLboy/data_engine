@@ -60,6 +60,7 @@ export interface EpisodeRow {
   taskName: string
   durationSec: number
   frameCount: number
+  fps?: number | null
   qcStatus: QcStatus
   qcResult: QcResult
   reviewer: string

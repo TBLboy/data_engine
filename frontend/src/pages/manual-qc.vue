@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
@@ -10,7 +10,7 @@ const route = useRoute()
 const router = useRouter()
 const result = ref<'pass' | 'fail'>('pass')
 const primaryReason = ref('')
-const currentFrame = ref(426)
+const currentFrame = ref(0)
 const playing = ref(false)
 const note = ref('')
 const loading = ref(true)
@@ -22,10 +22,17 @@ const downloadingObjectId = ref('')
 const error = ref('')
 const payload = ref<ManualQcContext | null>(null)
 const selectedVariant = ref<'rgb' | 'depth_colormap'>('rgb')
+const syncingSlider = ref(false)
+const videoRefs = ref<Record<string, HTMLVideoElement | null>>({})
+let playbackLoopId: number | null = null
 
 const episodeId = computed(() => String(route.params.id))
-const totalFrames = computed(() => payload.value?.episode.frameCount ?? 1269)
-const progress = computed(() => Math.round((currentFrame.value / totalFrames.value) * 100))
+const fps = computed(() => payload.value?.episode.fps || 30)
+const totalFrames = computed(() => Math.max(0, payload.value?.episode.frameCount ?? 0))
+const durationSec = computed(() => payload.value?.episode.durationSec ?? 0)
+const maxFrame = computed(() => Math.max(totalFrames.value - 1, 0))
+const progress = computed(() => (maxFrame.value ? Math.round((currentFrame.value / maxFrame.value) * 100) : 0))
+const currentTimeSec = computed(() => currentFrame.value / fps.value)
 const metricCards = computed(() => payload.value?.metrics ?? [])
 const timelineSegments = computed(() => payload.value?.timelineSegments ?? [])
 const qcRevisions = computed(() => payload.value?.revisions ?? [])
@@ -45,6 +52,66 @@ const lockLabel = computed(() => {
   return '当前无人认领'
 })
 
+const stopPlaybackLoop = () => {
+  if (playbackLoopId !== null) {
+    cancelAnimationFrame(playbackLoopId)
+    playbackLoopId = null
+  }
+}
+
+const activeVideoElements = () => mediaByVariant.value
+  .map((item) => videoRefs.value[item.objectId])
+  .filter((item): item is HTMLVideoElement => Boolean(item))
+
+const syncVideosToFrame = async () => {
+  const targetTime = durationSec.value ? Math.min(currentTimeSec.value, durationSec.value) : currentTimeSec.value
+  activeVideoElements().forEach((video) => {
+    if (Math.abs(video.currentTime - targetTime) > 0.03) {
+      video.currentTime = targetTime
+    }
+  })
+  await nextTick()
+}
+
+const updateFrameFromVideoClock = () => {
+  const [video] = activeVideoElements()
+  if (!video || !playing.value) {
+    stopPlaybackLoop()
+    return
+  }
+  const nextFrame = Math.min(Math.round(video.currentTime * fps.value), maxFrame.value)
+  currentFrame.value = nextFrame
+  playbackLoopId = requestAnimationFrame(updateFrameFromVideoClock)
+}
+
+const pauseAll = () => {
+  activeVideoElements().forEach((video) => video.pause())
+  playing.value = false
+  stopPlaybackLoop()
+}
+
+const playAll = async () => {
+  await syncVideosToFrame()
+  await Promise.all(activeVideoElements().map(async (video) => {
+    await video.play()
+  }))
+  playing.value = true
+  stopPlaybackLoop()
+  playbackLoopId = requestAnimationFrame(updateFrameFromVideoClock)
+}
+
+const setVideoRef = (objectId: string) => (element: Element | { $el?: Element } | null) => {
+  if (element instanceof HTMLVideoElement) {
+    videoRefs.value[objectId] = element
+    return
+  }
+  if (element && '$el' in element && element.$el instanceof HTMLVideoElement) {
+    videoRefs.value[objectId] = element.$el
+    return
+  }
+  videoRefs.value[objectId] = null
+}
+
 const formatError = (err: unknown, fallback: string) => {
   if (!(err instanceof Error)) return fallback
   try {
@@ -60,7 +127,11 @@ const loadContext = async () => {
   error.value = ''
   try {
     payload.value = await fetchManualQcContext(episodeId.value)
-    currentFrame.value = Math.min(426, totalFrames.value)
+    currentFrame.value = Math.min(0, maxFrame.value)
+    playing.value = false
+    stopPlaybackLoop()
+    await nextTick()
+    await syncVideosToFrame()
   } catch (err) {
     error.value = formatError(err, '加载人工质检上下文失败')
   } finally {
@@ -83,6 +154,8 @@ const refreshMedia = async () => {
         return next ? { ...item, ...next } : item
       })
     }
+    await nextTick()
+    await syncVideosToFrame()
     ElMessage.success('媒体预览已刷新')
   } catch (err) {
     ElMessage.error(formatError(err, '刷新媒体预览失败'))
@@ -151,9 +224,44 @@ const release = async () => {
   }
 }
 
+const stepFrame = async (delta: number) => {
+  pauseAll()
+  currentFrame.value = Math.max(0, Math.min(maxFrame.value, currentFrame.value + delta))
+  await syncVideosToFrame()
+}
+
+const stepSeconds = async (deltaSeconds: number) => {
+  await stepFrame(Math.round(deltaSeconds * fps.value))
+}
+
+const togglePlayback = async () => {
+  if (playing.value) {
+    pauseAll()
+    return
+  }
+  try {
+    await playAll()
+  } catch (err) {
+    pauseAll()
+    ElMessage.error(formatError(err, '同步播放失败'))
+  }
+}
+
 onMounted(loadContext)
 
+watch(currentFrame, async () => {
+  if (syncingSlider.value) return
+  await syncVideosToFrame()
+})
+
+watch(selectedVariant, async () => {
+  pauseAll()
+  await nextTick()
+  await syncVideosToFrame()
+})
+
 onBeforeUnmount(() => {
+  pauseAll()
   if (!reviewLock.value?.isMine || submitting.value || releasing.value) {
     return
   }
@@ -238,7 +346,16 @@ const submit = async () => {
                 <span>{{ item.label }}</span>
                 <b>{{ item.variant === 'depth_colormap' ? 'Depth Colormap' : 'RGB' }}</b>
               </div>
-              <video class="video-placeholder" :class="{ depth: item.variant === 'depth_colormap' }" :src="item.previewUrl" controls playsinline preload="metadata" />
+              <video
+                :ref="setVideoRef(item.objectId)"
+                class="video-placeholder"
+                :class="{ depth: item.variant === 'depth_colormap' }"
+                :src="item.previewUrl"
+                playsinline
+                preload="metadata"
+                muted
+                @click.prevent
+              />
               <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:8px; font-size:12px; color:#909399;">
                 <span>{{ item.slot }} · expires {{ item.previewExpiresAt || '--' }}</span>
                 <el-button link type="primary" :loading="downloadingObjectId === item.objectId" @click="downloadMedia(item.objectId)">下载对象</el-button>
@@ -252,17 +369,26 @@ const submit = async () => {
           <div class="timeline-header">
             <div>
               <strong>Frame {{ currentFrame }} / {{ totalFrames }}</strong>
-              <span>{{ progress }}% · 当前时间 {{ (currentFrame / 30).toFixed(2) }}s</span>
+              <span>{{ progress }}% · 当前时间 {{ currentTimeSec.toFixed(2) }}s / {{ durationSec.toFixed(2) }}s · {{ fps.toFixed(2) }} fps</span>
             </div>
             <div class="player-actions">
-              <el-button @click="currentFrame = Math.max(0, currentFrame - 30)">-1s</el-button>
-              <el-button @click="currentFrame = Math.max(0, currentFrame - 1)">上一帧</el-button>
-              <el-button type="primary" @click="playing = !playing">{{ playing ? '暂停' : '播放' }}</el-button>
-              <el-button @click="currentFrame = Math.min(totalFrames, currentFrame + 1)">下一帧</el-button>
-              <el-button @click="currentFrame = Math.min(totalFrames, currentFrame + 30)">+1s</el-button>
+              <el-button @click="stepSeconds(-1)">-1s</el-button>
+              <el-button @click="stepFrame(-1)">上一帧</el-button>
+              <el-button type="primary" @click="togglePlayback">{{ playing ? '暂停' : '播放' }}</el-button>
+              <el-button @click="stepFrame(1)">下一帧</el-button>
+              <el-button @click="stepSeconds(1)">+1s</el-button>
             </div>
           </div>
-          <el-slider v-model="currentFrame" :max="totalFrames" />
+          <el-slider
+            v-model="currentFrame"
+            :max="maxFrame"
+            @change="async () => {
+              syncingSlider = true
+              pauseAll()
+              await syncVideosToFrame()
+              syncingSlider = false
+            }"
+          />
           <div class="segment-row">
             <div v-for="segment in timelineSegments" :key="segment.label" class="segment-chip" :class="segment.level">
               {{ segment.start }}-{{ segment.end }}s · {{ segment.label }}
