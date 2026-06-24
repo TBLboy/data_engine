@@ -863,6 +863,11 @@ def build_history_export_payload(db: Session, selected_batch_id: str = 'all', sc
     }
 
 
+def reviewer_account_payload(db: Session) -> list[dict]:
+    reviewers = db.query(User).filter(User.role == 'reviewer', User.is_active == 1).order_by(User.username.asc()).all()
+    return [serialize_user(item) for item in reviewers]
+
+
 def dispatch_preview_payload(db: Session, batch_id: str) -> dict:
     batch = db.query(Batch).filter(Batch.id == batch_id).one()
     created = db.query(func.count(QcTask.id)).filter(QcTask.batch_id == batch_id).scalar() or 0
@@ -890,6 +895,7 @@ def task_pool_payload(db: Session, current_user: User | None = None) -> dict:
         'dispatchPreviews': [dispatch_preview_payload(db, item.id) for item in batches],
         'qcTasks': [serialize_task(item, current_user) for item in db.query(QcTask).order_by(QcTask.created_at.desc()).all()],
         'reviewerWorkloads': reviewer_workload_payload(db),
+        'reviewerAccounts': reviewer_account_payload(db),
     }
 
 

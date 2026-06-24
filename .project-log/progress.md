@@ -1,3 +1,48 @@
+## 2026-06-24 (Robot QC V1 task-pool assignee source and stat-card display fix)
+
+- Type: implementation
+- Status: validated by backend compile, frontend build, runtime payload checks, and production compose redeploy
+- Importance: high
+- Reusable: yes
+- Objective: 修复任务派发中心两个直接影响测试的问题：1）新建 reviewer 账号无法出现在“派发到”下拉中；2）四块统计卡片出现无意义滚动条，影响观感
+- Work completed:
+  - 后端 `TaskPoolPayloadSchema`、前端 `TaskPoolPayload` 已新增 `reviewerAccounts` 字段，用于承载启用中的 reviewer 账号目录
+  - `backend/app/services/payloads.py` 新增 `reviewer_account_payload()`，现在 `task_pool_payload()` 会直接从 `users` 表读取所有启用中的 `reviewer` 账号，而 `reviewerWorkloads` 继续只负责右侧工作量统计
+  - `frontend/src/pages/task-pool.vue` 已把“派发到”下拉的数据来源从 `reviewerWorkloads` 改成 `reviewerAccounts`，因此新建 reviewer 不再要求先有历史审核记录才能被派发
+  - 同一页面里把四块统计卡片改成局部固定展示：新增 `task-pool-summary-row` / `task-pool-stat-card` 样式，收口卡片 body 的溢出显示，避免出现无意义横纵滚动条
+  - 顺手把四块统计卡片的计数改成统一 `queueSummary` 聚合，避免模板里多次 `currentTasks.filter(...)` 重复扫描
+  - backend/frontend 生产镜像已重建，compose 运行中的 `robot-qc-backend` / `robot-qc-frontend` 已完成重新部署
+- Business logic impact: 任务派发页的“可派发审核员名单”现在正式回到账号目录语义，而不是“历史出现过的人名统计”。这意味着后续管理员新增 reviewer 后，可以立即参与任务派发测试和真实运营；同时四块统计卡片的展示也回到固定看板语义，不再带来滚动条噪音
+- Problems encountered:
+  - 任务派发下拉最初错误地把 `reviewerWorkloads` 当作候选人列表，而该字段本质上是从 `Episode.reviewer` 聚合出的历史工作量统计
+  - 首轮运行态验证时报出 PostgreSQL 类型错误：`users.is_active` 在当前真实库里仍是整型语义，因此 `User.is_active == True` 需要调整为 `== 1`
+  - 任务派发页本身没有局部样式块，新增统计卡片样式时需要在页面内补 scoped style，而不去动全局壳层样式
+- Resolution:
+  - 明确拆分 reviewer 账号目录与 reviewer 负载统计两条数据语义
+  - 运行态按真实库兼容 `User.is_active == 1`
+  - 用 task-pool 页局部样式收口统计卡片溢出，而不是扩大到全局样式系统
+- Verification:
+  - `cd /home/tbl/Project/data_collect/software && python3 -m compileall backend/app`
+  - `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml build backend frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up -d backend frontend`
+  - `docker exec robot-qc-backend python -c "from app.core.db import SessionLocal; from app.services.payloads import task_pool_payload; db=SessionLocal(); p=task_pool_payload(db); print('reviewerAccounts=', [item['name'] for item in p['reviewerAccounts']]); print('reviewerWorkloads=', [item['name'] for item in p['reviewerWorkloads']]); db.close()"`
+  - `docker exec robot-qc-frontend sh -lc "grep -Rni 'reviewerAccounts\|task-pool-summary-row\|task-pool-stat-card' /usr/share/nginx/html/assets/task-pool* 2>/dev/null || true"`
+- Unverified items:
+  - 还未做浏览器肉眼验收来确认四块统计卡片滚动条在你当前窗口尺寸下是否完全消失
+  - 还未实点一次真实任务派发按钮来确认 reviewer 新名单在 UI 下拉中可见且能成功提交
+- Files changed:
+  - `software/backend/app/schemas/qc.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/frontend/src/api/client.ts`
+  - `software/frontend/src/types/qc.ts`
+  - `software/frontend/src/pages/task-pool.vue`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 让用户在真实浏览器里刷新 `task-pool` 页面，确认 reviewer 下拉已出现 `审核员01/02/03`
+  - 继续按用户指出的具体体验问题，逐项优化任务派发中心页面
+
 ## 2026-06-24 (Robot QC V1 database page server-side pagination landing)
 
 - Type: implementation

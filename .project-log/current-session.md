@@ -63,7 +63,8 @@
 - 已在生产 API 层验证任务类型管理闭环：创建任务类型成功、`待分类` 批次池查询成功、attach/detach 往返成功、普通任务类型删除后批次成功回到 `待分类`、`待分类` 自身编辑/删除被拒绝
 - 已明确 `yaocao` bucket 全量扫描原则：扫描器不能假设 list 固定在第一层或第二层，而应递归遍历所有层级 prefix，并用“直接子级命中 `raw/`、`processed/`，且其下存在 `episode_xxxxxx/`”的结构特征识别 list，确保 `yaocao/<list>/...` 与 `yaocao/K1/<list>/...` 都不会漏扫
 - 已完成 `database` 页面长期性能方案首版落地：`/api/database` 现已支持 `page/page_size/keyword/batch_id/qc_status/qc_result` 服务端分页与服务端筛选，前端 `database-view.vue` 改为按页请求并接入 `el-pagination`，不再在浏览器内对全量 4000+ episode 做本地过滤与整表渲染
-- 已完成 `database` 页面性能链路实测与部署确认：运行中 backend 容器内 `database_payload(page=2,page_size=50)` 已返回 `50` 条 episode、`totalEpisodes=4416`，backend payload 构造仍维持百毫秒级；backend/frontend 镜像均已重建并在 production compose 中重新启动
+- 已修复 `task-pool` 派发名单来源错误：任务派发页面现改为读取启用中的 reviewer 账号目录，而不再错误复用 `reviewerWorkloads` 历史统计；新建的 `审核员01/02/03` 已在运行中 backend 的 `task_pool_payload()` 中确认出现在 `reviewerAccounts`
+- 已收口 `task-pool` 四块统计卡片显示方式：待派发 / 已派发 / 审核锁激活 / 已完成 现在使用局部固定展示样式，不再在卡片体内出现无意义滚动条；相关 frontend/backend 镜像均已重建并在 production compose 中重新启动
 
 - 已明确 manual QC 的 MinIO 对象访问协议：预览/播放类 MP4 采用后端签发的短时 presigned URL，`manifest.json`/`metadata.json`/`telemetry.npz` 等结构化对象继续由后端读取解析，显式下载/导出保持后端受控接口
 - 已落地 manual QC 同步播放器首版：底部 frame 控制栏成为唯一播放控制权，三路视频去掉独立 controls，统一按共享 `currentFrame/currentTimeSec/playing` 同步播放、暂停、逐帧和拖动 seek，并开始使用后端返回的真实 `fps/durationSec/frameCount` 驱动时间轴显示

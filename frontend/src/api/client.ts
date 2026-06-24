@@ -145,6 +145,7 @@ export interface TaskPoolPayload {
   dispatchPreviews: DispatchPreview[]
   qcTasks: QcTask[]
   reviewerWorkloads: ReviewerWorkload[]
+  reviewerAccounts: UserProfile[]
 }
 
 export interface HistoryPayload {

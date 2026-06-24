@@ -159,6 +159,14 @@ export interface ReviewerWorkload {
   avgMinutes: number
 }
 
+export interface TaskPoolPayload {
+  batches: BatchSummary[]
+  dispatchPreviews: DispatchPreview[]
+  qcTasks: QcTask[]
+  reviewerWorkloads: ReviewerWorkload[]
+  reviewerAccounts: UserProfile[]
+}
+
 export interface IngestJob {
   id: string
   bucket: string

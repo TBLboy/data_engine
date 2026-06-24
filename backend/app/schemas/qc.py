@@ -355,6 +355,7 @@ class TaskPoolPayloadSchema(BaseModel):
     dispatchPreviews: list[DispatchPreviewSchema]
     qcTasks: list[QcTaskSchema]
     reviewerWorkloads: list[ReviewerWorkloadSchema]
+    reviewerAccounts: list[UserProfileSchema]
 
 
 class HistoryPayloadSchema(BaseModel):

@@ -54,6 +54,7 @@ const batches = computed(() => payload.value?.batches ?? [])
 const dispatchPreviews = computed(() => payload.value?.dispatchPreviews ?? [])
 const qcTasks = computed(() => payload.value?.qcTasks ?? [])
 const reviewerWorkloads = computed(() => payload.value?.reviewerWorkloads ?? [])
+const reviewerAccounts = computed(() => payload.value?.reviewerAccounts ?? [])
 const selectedBatch = computed(() => batches.value.find((batch) => batch.id === selectedBatchId.value) ?? batches.value[0])
 const dispatchPreview = computed(() => dispatchPreviews.value.find((preview) => preview.batchId === selectedBatch.value?.id) ?? dispatchPreviews.value[0])
 const currentTasks = computed(() => qcTasks.value.filter((task) => task.batchId === selectedBatch.value?.id))
@@ -81,9 +82,22 @@ const taskSummary = computed(() => ({
   inReview: dispatchPreview.value?.inReviewTaskCount ?? 0,
   done: dispatchPreview.value?.doneTaskCount ?? 0
 }))
-const reviewerOptions = computed(() => reviewerWorkloads.value.map((item) => item.name))
-const lockedTaskCount = computed(() => currentTasks.value.filter((task) => task.reviewLock.isLocked).length)
-const availableTaskCount = computed(() => currentTasks.value.filter((task) => !task.reviewLock.isLocked).length)
+const reviewerOptions = computed(() => reviewerAccounts.value.map((item) => item.name))
+const queueSummary = computed(() => {
+  const summary = { pending: 0, assigned: 0, inReviewLocked: 0, done: 0, availableAssigned: 0 }
+  for (const task of currentTasks.value) {
+    if (task.status === 'new') summary.pending += 1
+    if (task.status === 'assigned') {
+      summary.assigned += 1
+      if (!task.reviewLock.isLocked) summary.availableAssigned += 1
+    }
+    if (task.status === 'done') summary.done += 1
+    if (task.reviewLock.isLocked) summary.inReviewLocked += 1
+  }
+  return summary
+})
+const lockedTaskCount = computed(() => queueSummary.value.inReviewLocked)
+const availableTaskCount = computed(() => queueSummary.value.availableAssigned)
 const lockTagType = (task: TaskPoolPayload['qcTasks'][number]) => {
   if (task.reviewLock.isMine) return 'success'
   if (task.reviewLock.isLocked) return 'danger'
@@ -173,28 +187,35 @@ const reassignTask = async (taskId: string) => {
         </div>
       </el-card>
 
-      <el-row :gutter="18" v-loading="loading">
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-blue"><span>待派发</span><strong>{{ currentTasks.filter((t) => t.status === 'new').length }}</strong><small>pending_assign</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-orange"><span>已派发</span><strong>{{ currentTasks.filter((t) => t.status === 'assigned').length }}</strong><small>available {{ availableTaskCount }}</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-purple"><span>审核锁激活</span><strong>{{ lockedTaskCount }}</strong><small>active review lock</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-green"><span>已完成</span><strong>{{ currentTasks.filter((t) => t.status === 'done').length }}</strong><small>revision 已写入</small></el-card></el-col>
+      <el-row :gutter="18" v-loading="loading" class="task-pool-summary-row">
+        <el-col :span="6"><el-card shadow="never" class="stat-card accent-blue task-pool-stat-card"><span>待派发</span><strong>{{ queueSummary.pending }}</strong><small>pending_assign</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="stat-card accent-orange task-pool-stat-card"><span>已派发</span><strong>{{ queueSummary.assigned }}</strong><small>available {{ availableTaskCount }}</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="stat-card accent-purple task-pool-stat-card"><span>审核锁激活</span><strong>{{ lockedTaskCount }}</strong><small>active review lock</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="stat-card accent-green task-pool-stat-card"><span>已完成</span><strong>{{ queueSummary.done }}</strong><small>revision 已写入</small></el-card></el-col>
       </el-row>
 
       <el-row :gutter="18">
         <el-col :span="16">
-          <el-card shadow="never" class="product-card" v-loading="loading">
+          <el-card shadow="never" class="product-card task-pool-table-card" v-loading="loading">
             <template #header>
               <div class="card-header"><span>QC 任务队列</span><el-tag type="success">支持派发与进入质检</el-tag></div>
             </template>
-            <el-table :data="currentTasks" stripe height="460">
+            <el-table :data="currentTasks" stripe height="460" scrollbar-always-on>
               <el-table-column prop="id" label="任务ID" width="110" />
               <el-table-column prop="episodeId" label="Episode" min-width="150" />
               <el-table-column prop="taskName" label="任务类型" min-width="150" />
               <el-table-column prop="batchName" label="批次" min-width="180" />
+              <el-table-column prop="assignee" label="审核员" width="100" />
+              <el-table-column label="派发到" width="200">
+                <template #default="{ row }">
+                  <el-select v-model="assigneeDrafts[row.id]" placeholder="选择审核员" size="small" style="width:170px">
+                    <el-option v-for="name in reviewerOptions" :key="name" :label="name" :value="name" />
+                  </el-select>
+                </template>
+              </el-table-column>
               <el-table-column label="派发模式" width="100">
                 <template #default="{ row }"><el-tag :type="dispatchTag(row.dispatchMode)" size="small">{{ row.dispatchMode === 'full' ? '全量' : `抽检 ${row.samplingRatio}%` }}</el-tag></template>
               </el-table-column>
-              <el-table-column prop="assignee" label="审核员" width="100" />
               <el-table-column label="优先级" width="90">
                 <template #default="{ row }"><el-tag :type="row.priority === 'high' ? 'danger' : 'info'">{{ row.priority }}</el-tag></template>
               </el-table-column>
@@ -211,14 +232,7 @@ const reassignTask = async (taskId: string) => {
                 </template>
               </el-table-column>
               <el-table-column prop="createdAt" label="创建时间" width="160" />
-              <el-table-column label="派发到" width="160">
-                <template #default="{ row }">
-                  <el-select v-model="assigneeDrafts[row.id]" placeholder="选择审核员" size="small">
-                    <el-option v-for="name in reviewerOptions" :key="name" :label="name" :value="name" />
-                  </el-select>
-                </template>
-              </el-table-column>
-              <el-table-column label="操作" width="240" fixed="right">
+              <el-table-column label="操作" width="200" fixed="right">
                 <template #default="{ row }">
                   <router-link :to="`/manual-qc/${row.episodeId}`"><el-button link type="primary">进入质检</el-button></router-link>
                   <el-button link :disabled="row.reviewLock.isLocked" :loading="assigningTaskId === row.id" @click="reassignTask(row.id)">派发</el-button>
@@ -249,3 +263,30 @@ const reassignTask = async (taskId: string) => {
     </div>
   </AppLayout>
 </template>
+
+<style scoped>
+.task-pool-summary-row {
+  overflow: visible;
+}
+
+.task-pool-stat-card {
+  min-height: 132px;
+}
+
+.task-pool-stat-card :deep(.el-card__body) {
+  overflow: hidden;
+}
+
+.task-pool-table-card :deep(.el-scrollbar__bar.is-vertical),
+.task-pool-table-card :deep(.el-scrollbar__bar.is-horizontal) {
+  opacity: 1;
+}
+
+.task-pool-table-card :deep(.el-scrollbar__thumb) {
+  background-color: #4b5563;
+}
+
+.task-pool-table-card :deep(.el-scrollbar__thumb:hover) {
+  background-color: #374151;
+}
+</style>
