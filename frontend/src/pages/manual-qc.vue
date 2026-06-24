@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { QuestionFilled } from '@element-plus/icons-vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -423,7 +424,14 @@ const submit = async () => {
           <div class="score-ring"><strong>{{ metricCards[0]?.value || '--' }}</strong><span>{{ metricCards[0]?.label || 'Q_motion' }}</span></div>
           <div class="metric-list compact-list">
             <div v-for="metric in metricCards" :key="metric.key" class="metric-item" :class="metric.level">
-              <div><strong>{{ metric.label }}</strong><span>{{ metric.description }}</span></div>
+              <div class="metric-copy">
+                <div class="metric-label-row">
+                  <strong>{{ metric.label }}</strong>
+                  <el-tooltip :content="metric.description" placement="top" effect="light">
+                    <el-icon class="metric-help-icon"><QuestionFilled /></el-icon>
+                  </el-tooltip>
+                </div>
+              </div>
               <b>{{ metric.value }}</b>
             </div>
           </div>
@@ -460,3 +468,27 @@ const submit = async () => {
     </div>
   </AppLayout>
 </template>
+
+<style scoped>
+.metric-copy {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.metric-label-row {
+  position: relative;
+  width: 100%;
+  padding-right: 16px;
+}
+
+.metric-item :deep(.metric-help-icon) {
+  position: absolute;
+  top: -2px;
+  right: 0;
+  color: #94a3b8;
+  cursor: help;
+  font-size: 13px;
+}
+</style>
