@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-- 2026-06-24 (scan robustness and local-time display fix in production)
+- 2026-06-24 (task type management landing and verification)
 
 ## Current Objective
 
@@ -53,7 +53,14 @@
 - 已修复 production 扫描任务鲁棒性缺陷：`/api/database/scan` 不再依赖 request-bound `BackgroundTasks` 执行长扫描，而是改为在服务进程内独立线程启动扫描 worker；页面刷新、关闭或请求返回后，扫描都会继续推进，不会因为 HTTP 生命周期结束而卡死在 `scanning`
 - 已修复扫描任务时间展示错误：后端现在按 `APP_TIMEZONE`（默认 `Asia/Shanghai`）把 UTC 数据库时间转换后再返回前端，`startedAt/finishedAt` 与本地实际观察时间已对齐
 - 已在生产库中手动失效两条历史卡死任务：`queued_1782269665_user_admin`、`queued_1782270935_user_admin`，并保留失败原因说明，避免它们持续阻塞同 bucket 的新扫描
-- 已在修复后重新触发真实生产扫描 `queued_1782271083_user_admin`，验证其状态按预期从 `scanning -> classifying -> done` 推进，最终结果为 `confirmed_lists=45`、`total_episodes=4417`、`new_episodes=0`
+- 已补上 database 页面按角色隐藏扫描入口：`admin/qc_manager` 可见扫描卡片，`reviewer/viewer` 只保留只读检索与历史任务视图
+- 已修复 `raw_data` 被误识别成独立批次的问题：扫描器现在会把 `raw_data` / `processed_data` / `data` 这类技术包装目录折叠回上一层业务 list，不再把它们当业务批次名或分类基准
+- 已落地任务类型管理首版：新增独立一级页面 `任务类型管理`，仅对 `admin/qc_manager` 显示；支持任务类型列表、详情、创建、重命名、删除，以及从 `待分类` 加入批次、从任务类型移出批次回到 `待分类`
+- 已新增任务类型管理后端 API：`GET/POST/PATCH/DELETE /api/task-types`、`GET /api/task-types/{id}/batches`、`GET /api/batches?task_type_id=...`、`POST /api/task-types/{id}/batches:attach`、`POST /api/task-types/{id}/batches/{batchId}:detach`
+- 已把 `task_type:unclassified` 固化为系统保底任务类型：禁止编辑、禁止删除；删除普通任务类型时，其关联批次会自动回收到 `待分类`，不会破坏 batch / episode / QC 历史
+- 已收口扫描器与任务类型解耦：扫描器继续同步 MinIO 数据，但新 batch 默认落到 `待分类`；对已人工分类 batch，rescan 不再自动覆盖其正式任务类型
+- 已增强 `database` 页筛选交互：批次、QC 状态、QC 结果下拉框均支持键盘输入筛选，方便后期大量 batch 下快速定位
+- 已在生产 API 层验证任务类型管理闭环：创建任务类型成功、`待分类` 批次池查询成功、attach/detach 往返成功、普通任务类型删除后批次成功回到 `待分类`、`待分类` 自身编辑/删除被拒绝
 - 已明确 `yaocao` bucket 全量扫描原则：扫描器不能假设 list 固定在第一层或第二层，而应递归遍历所有层级 prefix，并用“直接子级命中 `raw/`、`processed/`，且其下存在 `episode_xxxxxx/`”的结构特征识别 list，确保 `yaocao/<list>/...` 与 `yaocao/K1/<list>/...` 都不会漏扫
 - 已明确任务类型归类原则：当前对象元数据尚未看到可直接充当稳定业务任务主键的单字段，V1 应由 prefix 命名、episode 元数据与后续人工确认共同生成 `candidate_task_type/final_task_type`，最终以 PostgreSQL 落库结果为准
 

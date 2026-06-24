@@ -1,3 +1,107 @@
+## 2026-06-24 (Robot QC V1 task type management landing)
+
+- Type: implementation
+- Status: validated in production API/runtime and frontend build
+- Importance: critical
+- Reusable: yes
+- Objective: 把“任务类型是人工维护主数据、扫描器只同步数据”的业务逻辑真正落到代码，补出任务类型管理入口、后端管理 API、批次回收到 `待分类` 的操作闭环，并增强数据总库筛选能力
+- Work completed:
+  - 后端 `TaskType` 模型新增 `is_active` 字段，`Batch` 新增 `is_active` 字段，并新增 Alembic revision `20260624_0004_task_type_management.py`
+  - `classification_seed.py` 已同步支持 `TaskType.is_active`，保证系统保底项 `task_type:unclassified` 正常存在
+  - 扫描器 `scanner.py` 已调整：新 batch 默认落入 `task_type:unclassified` / `待分类`；已人工分类 batch 在后续 rescan 中不自动覆盖正式任务类型
+  - 新增任务类型管理后端 API：`GET/POST/PATCH/DELETE /api/task-types`、`GET /api/task-types/{id}/batches`、`GET /api/batches?task_type_id=...`、`POST /api/task-types/{id}/batches:attach`、`POST /api/task-types/{id}/batches/{batchId}:detach`
+  - `待分类` 被收敛为不可编辑、不可删除的系统保底任务类型；删除普通任务类型时，其关联 batch 自动回收到 `待分类`
+  - `payloads.py` 已新增任务类型详情与待分类批次池 payload，并把 `database/dashboard/history` 等查询继续限制在 active batch / active list 上，避免历史脏数据重新污染主视图
+  - 前端新增独立一级页面 `frontend/src/pages/task-types.vue`，完成任务类型列表、详情、创建、编辑、删除、从待分类加入批次、移出批次回到待分类等主流程
+  - `AppLayout.vue` 和 `router/index.ts` 已加入 `任务类型管理` 菜单与路由，并限制为 `admin/qc_manager`
+  - `database-view.vue` 已补 `filterable`：批次、QC 状态、QC 结果下拉框支持键盘输入筛选
+- Business logic impact: 系统正式从“任务类型主要由扫描归类和 seed 决定”推进到“任务类型由人维护、扫描器只同步数据”。现在管理员和质检主管已经有了独立的任务类型管理入口，可以把待分类批次加入正式任务类型、把错分批次移回待分类再重新加入正确任务、删除任务类型时保留底层 batch/episode/QC 历史不丢失
+- Problems encountered:
+  - 首轮实现中 `qc.py` 因插入任务类型 API 过程破坏了 `router` / account 相关结构，导致 backend 容器启动失败，已逐步修复
+  - `schemas/qc.py` 中插入新 schema 时一度破坏了 `BatchSummarySchema` 定义和 Pydantic rebuild 顺序，导致 backend 启动失败与 body 解析异常，已修复
+  - `attach` 接口最初因 Pydantic body rebuild 问题返回 500，后改为直接接收 `dict` + 显式校验 `batchIds`
+- Resolution:
+  - 逐步修复 backend 路由结构与 schema 定义，重新构建容器并通过生产 API 复核
+  - 对复杂 body 解析改用更直接的输入校验，优先保证生产接口稳定性
+  - 保持 `待分类` 为固定任务类型而不是空值/NULL，简化回收与查询语义
+- Verification:
+  - `cd /home/tbl/Project/data_collect/software/backend && python3 -m compileall app migrations/versions`
+  - `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up --build -d backend frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml run --rm -e APP_ENV=development backend python -m alembic upgrade head`
+  - `curl -sS -b /tmp/robot_qc.cookies http://127.0.0.1:8080/api/task-types`
+  - `curl -sS -b /tmp/robot_qc.cookies http://127.0.0.1:8080/api/batches?task_type_id=task_type:unclassified`
+  - `curl -sS -X POST -b /tmp/robot_qc.cookies -H 'Content-Type: application/json' -d '{"name":"测试任务类型","description":"用于验证任务管理"}' http://127.0.0.1:8080/api/task-types`
+  - `curl -sS -X POST -b /tmp/robot_qc.cookies -H 'Content-Type: application/json' -d '{"batchIds":["batch_1ca97b61f80e9b11"]}' http://127.0.0.1:8080/api/task-types/task_type:测试任务类型/batches:attach`
+  - `curl -sS -X POST -b /tmp/robot_qc.cookies http://127.0.0.1:8080/api/task-types/task_type:测试任务类型/batches/batch_1ca97b61f80e9b11:detach`
+  - `curl -sS -X DELETE -b /tmp/robot_qc.cookies http://127.0.0.1:8080/api/task-types/task_type:测试任务类型`
+  - `curl -sS -i -X PATCH -b /tmp/robot_qc.cookies -H 'Content-Type: application/json' -d '{"name":"不可编辑","description":"x"}' http://127.0.0.1:8080/api/task-types/task_type:unclassified`
+  - `curl -sS -i -X DELETE -b /tmp/robot_qc.cookies http://127.0.0.1:8080/api/task-types/task_type:unclassified`
+- Unverified items:
+  - 还未进行真实浏览器层面的任务类型管理完整点击验收；当前验证主要完成于生产 API 与前端构建层
+  - `raw_data` 历史脏批次仍物理存在数据库中，但已从 active 查询面和待分类池中排除；若后续需要彻底清理，仍需单独数据迁移
+- Files changed:
+  - `software/backend/app/api/routes/qc.py`
+  - `software/backend/app/models/task_type.py`
+  - `software/backend/app/models/batch.py`
+  - `software/backend/app/schemas/qc.py`
+  - `software/backend/app/services/classification_seed.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/backend/app/services/scanner.py`
+  - `software/backend/migrations/versions/20260624_0004_task_type_management.py`
+  - `software/frontend/src/api/client.ts`
+  - `software/frontend/src/api/mock.ts`
+  - `software/frontend/src/components/AppLayout.vue`
+  - `software/frontend/src/router/index.ts`
+  - `software/frontend/src/types/qc.ts`
+  - `software/frontend/src/pages/task-types.vue`
+  - `software/frontend/src/pages/database-view.vue`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 让用户在浏览器里实机验收 `任务类型管理` 页面与 `database` 页检索增强
+  - 如浏览器体验确认通过，再决定是否补 batch 详情页或任务类型统计增强
+
+## 2026-06-24 (Robot QC V1 scan role gating and raw_data batch cleanup)
+
+- Type: implementation
+- Status: validated in production API runtime
+- Importance: high
+- Reusable: yes
+- Objective: 进一步收口扫描权限与扫描结果质量，避免普通质检员误触发入库，并修复 `raw_data` 技术目录被错误识别为独立业务批次的问题
+- Work completed:
+  - 在 `frontend/src/pages/database-view.vue` 接入 `useSessionStore()`，新增 `canScanDatabase` 角色判断，仅对 `admin` 和 `qc_manager` 显示扫描卡片与 `扫描入库` 按钮
+  - 复核真实异常记录 `batch_7bc7918c36426ae5_episode_000000`，确认其来源是 list prefix `double_linkerhand_task_fengqintudou_.../raw_data/` 被扫描器直接当成业务 list，导致 batch 名错误落成 `raw_data`
+  - 在 `backend/app/services/scanner.py` 新增技术包装目录归一化规则：`raw_data`、`processed_data`、`data` 不再作为最终业务 list 名，而会折叠回上一层 prefix
+  - 保留历史脏数据在库中但标为 inactive，同时在 `backend/app/services/payloads.py` 中把 `database/dashboard` 的 batch/episode 查询改为只返回 active list 对应的数据，避免旧脏记录继续污染页面
+  - 通过生产 API 复核确认：`database` 返回中已经看不到 `raw_data` 批次，也看不到 `batch_7bc7918c36426ae5_episode_000000` 这条异常 episode
+- Business logic impact: 现在扫描链路的对外语义更稳定了。角色层面，普通质检员不会再看到扫描入口；数据层面，MinIO 中技术包装目录不会再被误当成业务批次名称，历史脏记录也不会再出现在主页面检索结果里
+- Problems encountered:
+  - 首轮 `raw_data` 修复过程中，一次扫描任务因局部改动误伤 `_ensure_task_type` 定义而失败，随后已修正并重新部署
+  - 历史脏批次 `batch_7bc7918c36426ae5` 在数据库里仍然存在 1 条 episode 记录，因此不能只修扫描规则，还需要同步收口查询层
+- Resolution:
+  - 恢复 `_ensure_task_type` 正常定义后重新部署 backend
+  - 采取“扫描规则修正 + 查询层只返回 active list 数据”的双保险方式，先消除用户可见问题，再保留后续物理清理空间
+- Verification:
+  - `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up --build -d frontend`
+  - `cd /home/tbl/Project/data_collect/software/backend && python3 -m compileall app`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up --build -d backend`
+  - `curl -sS -b /tmp/robot_qc.cookies http://127.0.0.1:8080/api/database`
+  - `curl -sS -b /tmp/robot_qc.cookies http://127.0.0.1:8080/api/dashboard`
+  - 生产库复核：`lists.is_active`、异常 batch/episode 记录状态查询
+- Unverified items:
+  - 历史 `raw_data` 脏批次仍物理保留在库内，但已从 API 主视图剔除；若要彻底清库，还需单独设计数据迁移/清洗步骤
+- Files changed:
+  - `software/frontend/src/pages/database-view.vue`
+  - `software/backend/app/services/scanner.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 继续做 manual QC 播放、刷新、提交与 qc-history 的真实浏览器验收
+  - 如需彻底消除历史脏数据，再补一轮数据库清洗迁移
+
 ## 2026-06-24 (Robot QC V1 scan robustness and local-time display fix)
 
 - Type: implementation

@@ -28,6 +28,5 @@ None yet.
 - Node F 已完成实现前业务规则闭环：扫描器算法、episode 状态推进、object_role/qc_ready 清单、classification_rules 框架与真实 basename 首版 seed 盘点、manual QC 对象访问协议均已补齐
 - D 不再直接从 C 承接，改为从 F 承接（即基于 MinIO 控制面而非基于纯文件系统的 QC 方案）
 - Node D 已具备进入实现规划的前置约束：manual QC 预览类媒体走短时 presigned URL，结构化对象与显式下载保持后端受控访问
-- Node D 的 manual QC API 合同已收口：`qc-context` 直接携带 embedded media descriptors，预览刷新按 `objectId` 定向更新，下载保持独立受控接口
-- B3（报告 03）暂缓，不阻塞后续节点
-- nodes.md、edges.md、decision-records.md 已同步更新
+- Node F 当前新增一条关键约束：任务类型从“扫描器自动正式归类”收敛为“人工维护主数据”，扫描器只负责同步数据并把未确认 batch 放入 `待分类`
+- Node D 后续实现除了 MinIO 控制面和 manual QC，还必须新增任务类型管理系统：任务类型主数据管理、批次从 `待分类` 加入/移出、删除任务类型后的回收语义、数据总库批次检索增强

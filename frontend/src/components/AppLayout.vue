@@ -4,7 +4,8 @@ import {
   Finished,
   Monitor,
   Setting,
-  VideoCamera
+  VideoCamera,
+  CollectionTag
 } from '@element-plus/icons-vue'
 import { computed } from 'vue'
 import { ElMessage } from 'element-plus'
@@ -18,6 +19,7 @@ const session = useSessionStore()
 const menuItems = [
   { path: '/dashboard', label: '工作台', icon: Monitor },
   { path: '/database', label: '数据总库', icon: Files },
+  { path: '/task-types', label: '任务类型管理', icon: CollectionTag, roles: ['admin', 'qc_manager'] },
   { path: '/task-pool', label: '人工质检与派发', icon: VideoCamera },
   { path: '/qc-history', label: '历史审计', icon: Finished },
   { path: '/accounts', label: '账号管理', icon: Setting, roles: ['admin', 'qc_manager'] }

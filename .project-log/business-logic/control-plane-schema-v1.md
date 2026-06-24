@@ -5,7 +5,7 @@
 ## 1. Design Principles
 
 - **MinIO is opaque to business logic.** PostgreSQL owns all business queries, state transitions, QC dispatch, and audit.
-- **The mapping layer is thin.** New tables bridge "what's in the bucket" to "what's in the QC system", nothing more.
+- **Task type is human-owned business metadata.** `task_types` are managed by `admin/qc_manager`, not auto-created by the scanner.
 - **Existing `episodes`/`batches`/`ingest_jobs`/`qc_tasks` are kept.** The new tables answer "what exists in MinIO"; the old tables continue to answer "what can be QCed / what was QCed".
 - **Prefix is identity, not the object key.** An episode is identified by its prefix (e.g., `yaocao/K1/.../episode_000099/`); individual objects under that prefix are mapped one-to-many.
 - **Scanner semantics are monotonic.** V1 assumes "multiple small writes" are common, so object discovery and episode readiness should move forward by UPSERT rather than depend on synchronized one-shot uploads.
@@ -85,9 +85,9 @@ Confirmed structural match — `bucket + list_prefix` that actually contains `ra
 | `has_processed` | `BOOLEAN NOT NULL DEFAULT FALSE` | |
 | `total_raw_episodes` | `INTEGER DEFAULT 0` | episode count under this list's `raw/` |
 | `total_processed_episodes` | `INTEGER DEFAULT 0` | episode count under `processed/` |
-| `candidate_task_type` | `VARCHAR(128) DEFAULT ''` | keyword-inferred from prefix |
+| `candidate_task_type` | `VARCHAR(128) DEFAULT ''` | keyword-inferred suggestion only; for operator review |
 | `candidate_source` | `VARCHAR(32) DEFAULT ''` | `prefix_keyword` / `manual` / `metadata` |
-| `final_task_type_id` | `VARCHAR(64) FK → task_types.id` | NULL until manually confirmed or rule-matched |
+| `final_task_type_id` | `VARCHAR(64) FK → task_types.id` | actual business assignment set/changed by operator; defaults to `task_type:unclassified` for new/unknown batches |
 | `is_active` | `BOOLEAN DEFAULT TRUE` | set FALSE if list structure disappears in a scan |
 | `created_at` | `DATETIME NOT NULL` | |
 | `updated_at` | `DATETIME NOT NULL` | |
@@ -143,24 +143,24 @@ Index: `UNIQUE (episode_inventory_id, object_key)`. Index: `(episode_inventory_i
 
 ### 3.6 `classification_rules`
 
-How `candidate_task_type` keyword matches a `final_task_type`.
+`classification_rules` no longer define the final business task type automatically. In the revised model they are optional suggestion rules only, used to produce a human-facing candidate label for later review.
 
 | Column | Type | Purpose |
 |--------|------|---------|
 | `id` | `INTEGER PK AUTOINCREMENT` | |
 | `pattern` | `VARCHAR(256) NOT NULL` | case-insensitive substring match against normalized list_prefix |
-| `target_task_type_id` | `VARCHAR(64) FK → task_types.id NOT NULL` | |
+| `target_task_type_id` | `VARCHAR(64) FK → task_types.id NOT NULL` | suggested target only |
 | `candidate_label` | `VARCHAR(128) NOT NULL DEFAULT ''` | business-facing candidate label written into `lists.candidate_task_type` |
 | `match_scope` | `VARCHAR(32) NOT NULL DEFAULT 'basename'` | `basename` / `full_prefix` |
 | `priority` | `INTEGER DEFAULT 0` | higher = tried first |
-| `is_authoritative` | `BOOLEAN DEFAULT TRUE` | if TRUE, match can write `final_task_type_id` automatically in V1 |
+| `is_authoritative` | `BOOLEAN DEFAULT FALSE` | retained only for backward compatibility; V2 direction is no automatic final assignment |
 | `is_active` | `BOOLEAN DEFAULT TRUE` | |
 | `created_by` | `VARCHAR(64) NOT NULL` | username |
 | `created_at` | `DATETIME NOT NULL` | |
 
 Index: `(is_active, priority DESC)`.
 
-If no rule matches, `lists.final_task_type_id` stays NULL and the list appears in the unclassified group for manual assignment.
+If no rule matches, `lists.candidate_task_type=''`. In all cases the final business assignment should be governed by operator-managed task type management, with new or unknown batches entering `task_type:unclassified` / `待分类`.
 
 ## 4. Scanner Specification
 
@@ -240,7 +240,7 @@ After dedup, every kept candidate is UPSERTed into `lists`:
 - `total_raw_episodes` / `total_processed_episodes` are counts of unique episode names under each side.
 - A previously confirmed list not seen in the current scan is not deleted; it becomes stale and may later be marked `is_active=FALSE` by post-scan reconciliation.
 
-### 4.2 Phase B: Classification
+### 4.2 Phase B: Classification Suggestion
 
 #### 4.2.1 Normalization contract
 
@@ -267,12 +267,10 @@ This means V1 classification is driven by business-action tokens, not by machine
 5. On match:
    - set `lists.candidate_task_type = classification_rules.candidate_label`
    - set `lists.candidate_source = 'prefix_keyword'`
-   - if `is_authoritative=TRUE`, also set `lists.final_task_type_id = target_task_type_id`
-   - if `is_authoritative=FALSE`, keep `final_task_type_id=NULL` and require manual confirmation
 6. If no rule matches:
    - set `candidate_task_type=''`
-   - leave `final_task_type_id=NULL`
-   - keep the list available for manual assignment
+   - set `candidate_source=''`
+7. Scanner classification only produces suggestions. Final business assignment belongs to operator-managed task type management, and new or unknown batches should default to `待分类`.
 
 V1 does not combine multiple matching rules. Precedence is encoded entirely by `priority` and pattern specificity.
 
@@ -282,17 +280,17 @@ The initial seed set must follow these principles:
 
 - **Prefer action/object tokens, not device tokens.** `huanggua`, `tudoutiao`, `fanqie`, `qie`, `dao`, `grasp`, `place` are candidate business cues; `k1`, `double_linkerhand`, and timestamps are not.
 - **Prefer basename matching first.** Most semantic signals are expected in the final list folder name; parent prefixes like `K1/` should not affect business classification.
-- **Use authoritative auto-match only for high-confidence one-to-one mappings.** If one token clearly maps to one task type in current operations, V1 may auto-fill `final_task_type_id`.
-- **Leave ambiguous compound names as non-authoritative or unmatched.** If a basename combines multiple produce names or verbs in a way that may map to different business tasks, the rule should only produce `candidate_task_type` or no match at all.
-- **Manual confirmation is part of the normal path, not an exception.** Seed rules are meant to reduce queue size, not eliminate review.
+- **Do not let scanner suggestions become the formal task type automatically.** Even high-confidence prefix rules should be treated as operator-facing suggestions in the revised model.
+- **Leave ambiguous compound names as suggest-only or unmatched.** If a basename combines multiple produce names or verbs in a way that may map to different business tasks, the rule should only produce `candidate_task_type` or no match at all.
+- **Manual confirmation is the main path.** Task type is now human-owned business metadata; seed rules only reduce review effort.
 
 #### 4.2.4 Seed rule categories
 
 The initial seed rules are divided into three categories.
 
-**Category A: high-confidence authoritative rules**
+**Category A: human-facing suggestion rules**
 
-Use when one normalized token or fixed token pair maps stably to one task type already present in `task_types`.
+Use when one normalized token or fixed token pair strongly suggests one task type already present in `task_types`, but the final assignment should still be treated as operator-owned business metadata.
 
 Examples of intended shape:
 - `huanggua` → 黄瓜相关任务
@@ -301,8 +299,8 @@ Examples of intended shape:
 
 Behavior:
 - write `candidate_task_type`
-- auto-fill `final_task_type_id`
-- list enters classified state without manual intervention
+- keep final assignment in operator workflows
+- list enters `待分类` / manual review path until a person confirms or rebinds it
 
 **Category B: suggest-only compound rules**
 
@@ -316,8 +314,7 @@ Examples of intended shape:
 Behavior:
 - write `candidate_task_type`
 - set `candidate_source='prefix_keyword'`
-- keep `final_task_type_id=NULL`
-- list remains in manual classification queue
+- keep final business assignment for manual confirmation
 
 **Category C: no-match fallback**
 
@@ -325,22 +322,21 @@ Use when the prefix only provides device, site, or timestamp information, or con
 
 Behavior:
 - `candidate_task_type=''`
-- `final_task_type_id=NULL`
-- list is shown as unclassified
+- batch/list enters `待分类`
 
 #### 4.2.5 Initial seed table shape
 
 The business-logic seed document should be expressed as rows with these columns:
 
-| Pattern | Scope | Candidate label | Target task_type | Priority | Authoritative | Intended use |
-|---|---|---|---|---:|---|---|
-| `huanggua` | `basename` | `huanggua` | `task_type:huanggua` | 100 | yes | 单一食材高置信任务 |
-| `tudoutiao` | `basename` | `tudoutiao` | `task_type:tudoutiao` | 100 | yes | 单一食材高置信任务 |
-| `fanqie` | `basename` | `fanqie` | `task_type:fanqie` | 80 | no | 仅给候选，避免与复合任务抢判 |
-| `luobo` | `basename` | `luobo` | `task_type:luobo` | 80 | no | 仅给候选，避免与复合任务抢判 |
-| `qingdaofanqieluobo` | `basename` | `qingdaofanqieluobo` | none | 120 | no | 复合任务，需人工确认 |
+| Pattern | Scope | Candidate label | Suggested task_type | Priority | Intended use |
+|---|---|---|---|---:|---|
+| `huanggua` | `basename` | `huanggua` | `task_type:huanggua` | 100 | 单一食材高置信建议 |
+| `tudoutiao` | `basename` | `tudoutiao` | `task_type:tudoutiao` | 100 | 单一食材高置信建议 |
+| `fanqie` | `basename` | `fanqie` | `task_type:fanqie` | 80 | 仅给候选，避免与复合任务抢判 |
+| `luobo` | `basename` | `luobo` | `task_type:luobo` | 80 | 仅给候选，避免与复合任务抢判 |
+| `qingdaofanqieluobo` | `basename` | `qingdaofanqieluobo` | none | 120 | 复合任务，需人工确认 |
 
-The exact `task_type` IDs remain bound to the real `task_types` table at migration time, but the business rule format is fixed now.
+The exact `task_type` IDs remain bound to the real `task_types` table at management time, but scanner output should still be treated as suggestion-only.
 
 #### 4.2.6 Conflict handling
 
@@ -351,13 +347,13 @@ V1 conflict policy:
 3. If both still tie, `basename` scope wins over `full_prefix`.
 4. If still tied, the lower `classification_rules.id` wins deterministically.
 
-This makes compound exact phrases able to outrank shorter ingredient tokens.
+This only affects candidate suggestion ordering; it must not auto-override operator-managed final task assignment.
 
 #### 4.2.8 Task catalog and list binding semantics
 
 V1 must distinguish three concepts that are easy to conflate:
 
-1. `task_types` = canonical business task catalog, managed by operators/admins
+1. `task_types` = canonical business task catalog, managed by `admin` / `qc_manager`
 2. `lists` = scanner-discovered MinIO collection/upload units
 3. `qc_tasks` = downstream review work items dispatched from ingested `episodes`
 
@@ -365,79 +361,143 @@ They are related but not interchangeable.
 
 Cardinality rules:
 
-- one `task_type` may be referenced by many `lists`
-- one `list` may have zero or one `final_task_type_id`
-- one `list` must not be bound to multiple `task_types` in V1
+- one `task_type` may be referenced by many `lists` / `batches`
+- one `list` contributes to exactly one downstream batch in V1
+- one batch must have one current task type, but that relationship is operator-adjustable
 - one `qc_task` is created from downstream episode dispatch, never directly from a MinIO list row
 
 Operational meaning:
 
-- creating a task means creating or enabling a row in `task_types`; it does not create a MinIO list
+- creating a task type means creating or enabling a row in `task_types`; it does not create a MinIO list
 - scanning MinIO may discover new `lists`; it does not by itself create new canonical task definitions
-- assigning a list means setting `lists.final_task_type_id`
-- clearing an assignment means setting `lists.final_task_type_id=NULL` while preserving `candidate_task_type` for audit and re-review
+- new or unknown batches default to `task_type:unclassified` / `待分类`
+- assigning a batch/list to a task type is an operator action
+- deleting a task type means reassigning its batches back to `待分类`, not deleting the underlying batch/episode/QC history
 
 #### 4.2.9 Task creation, retirement and manual association rules
 
 V1 task/list operations follow these rules:
 
-1. **Create task type**: allowed. Admin creates a new canonical `task_type` row when business needs a new task label, even if no current list is bound yet.
-2. **Manual list association**: allowed. Operator may set `lists.final_task_type_id` explicitly for any classified or unclassified list.
-3. **Manual unbind**: allowed. Operator may clear `final_task_type_id` and return the list to the manual classification queue.
-4. **List delete**: not allowed as a normal business operation. `lists` are scanner-owned inventory rows and are never manually hard-deleted in V1.
-5. **Task type delete**: physical delete is not the default operation. If a task type has ever been referenced by any `lists`, `episodes`, `batches` or QC history, it must be treated as retired/disabled rather than hard-deleted.
-6. **Historical stability**: changing or clearing `lists.final_task_type_id` only affects future ingest/dispatch. Already ingested `episodes`, historical `batches`, and existing QC records keep their original task assignment.
-7. **Reference safety**: a task type may be physically deleted only when it has never been referenced by any list or downstream business row.
+1. **Create task type**: allowed. `admin` / `qc_manager` may create a new canonical `task_type` row at any time, even if no current batch is bound yet.
+2. **Rename task type**: allowed. Updating task type name/description is normal business maintenance and must not destroy linked batch/episode/QC history.
+3. **Manual batch association**: allowed. Operator may set or change the current task type for any batch that is still in the classification workflow.
+4. **Manual rebind to `待分类`**: allowed. Operator may explicitly send a batch back to `task_type:unclassified`.
+5. **List delete**: not allowed as a normal business operation. `lists` are scanner-owned inventory rows and are never manually hard-deleted in V1.
+6. **Task type delete**: allowed as a business action, but its linked batches should be reassigned to `task_type:unclassified` / `待分类` rather than deleted together with the task type.
+7. **Historical stability**: changing the current batch task type must not destroy existing episode rows, QC revisions, or audit history.
 
-This means the product-level "delete task" action should be implemented as **retire/disable for future use**, not as destructive row removal.
+This means the product-level "delete task type" action should be implemented as **reassign linked batches to `待分类` + remove/disable the task type from future selection**, not as destructive data removal.
 
 #### 4.2.10 Classification review and checking workflow
 
-V1 must support an explicit review loop for task/list associations:
+V1 must support an explicit review loop for task/batch associations:
 
-1. **Check unclassified lists**: query all active lists with `final_task_type_id IS NULL`.
-2. **Check suggest-only lists**: query lists where `candidate_task_type != ''` but `final_task_type_id IS NULL`.
-3. **Check bound lists by task**: query active lists grouped by `final_task_type_id` to verify that one business task currently covers which MinIO lists.
-4. **Check stale bindings**: query inactive lists or lists whose latest scan no longer matches prior object distribution, so operators can verify the old binding is still meaningful.
-5. **Check downstream effect**: list detail should show how many `episode_inventory` rows are `qc_ready`, how many have already been ingested, and which downstream batch/task assignments already exist.
+1. **Check unclassified batches**: query all active batches with current task type = `task_type:unclassified`.
+2. **Check suggested batches**: query active batches where `candidate_task_type != ''` but current task type is still `待分类`.
+3. **Check bound batches by task**: query active batches grouped by current task type to verify one business task currently covers which batches.
+4. **Check stale bindings**: query inactive lists or batches whose latest scan no longer matches prior object distribution, so operators can verify the current binding is still meaningful.
+5. **Check downstream effect**: batch detail should show how many `episode_inventory` rows are `qc_ready`, how many have already been ingested, and which downstream QC assignments already exist.
 
-The checking surface is not optional in V1 because prefix-based auto-classification is intentionally conservative and requires operator review.
+The checking surface is not optional in V1 because scanner suggestions are intentionally conservative and final business assignment is owned by operators.
 
 #### 4.2.11 Minimal admin/API contract for task/list operations
 
 Recommended V1 capabilities:
 
-- `GET /api/task-types` — list canonical task catalog, including whether each task is still selectable for future binding
+- `GET /api/task-types` — list canonical task catalog, including whether each task is still selectable for future batch binding
 - `POST /api/task-types` — create a new canonical task type
-- `PATCH /api/task-types/{task_type_id}` — rename or retire/restore a task type
-- `GET /api/minio/lists?finalTaskTypeId=...` — inspect which lists are currently bound to one task type
-- `POST /api/minio/lists/{list_id}/classify` — set or clear `final_task_type_id`
-- `GET /api/minio/lists/{list_id}` — inspect one list's raw/processed counts, candidate/final classification, state counts and downstream ingest status
+- `PATCH /api/task-types/{task_type_id}` — rename, update description, or retire/restore a task type
+- `GET /api/task-types/{task_type_id}/batches` — inspect which batches are currently bound to one task type
+- `POST /api/batches/{batch_id}/task-type` — set or clear the current task type for one batch
+- `GET /api/minio/lists/{list_id}` — inspect one list's raw/processed counts, candidate classification, state counts and downstream ingest status
 
-`POST /api/minio/lists/{list_id}/classify` should accept both bind and unbind semantics. Recommended request shape:
-
-```json
-{
-  "finalTaskTypeId": "task_type:huanggua"
-}
-```
-
-or to clear:
+`POST /api/batches/{batch_id}/task-type` should accept both bind and rebind-to-unclassified semantics. Recommended request shape:
 
 ```json
 {
-  "finalTaskTypeId": null
+  "taskTypeId": "task_type:huanggua"
 }
 ```
 
-Response should return the updated list classification snapshot so frontend does not need to re-derive state locally.
+or to send back to unclassified:
 
-#### 4.2.12 Manual override policy
+```json
+{
+  "taskTypeId": "task_type:unclassified"
+}
+```
 
-When an operator manually sets `lists.final_task_type_id`:
+Response should return the updated batch classification snapshot so frontend does not need to re-derive state locally.
 
-- the manual value becomes the business truth for that list
-- future rescans must not overwrite that manual `final_task_type_id` unless the operator explicitly clears or changes it
+#### 4.2.13 Task type management workflow (implementation-grade)
+
+This workflow formalizes how operators manage task types and batch assignment.
+
+**Actors**
+
+- `admin`
+- `qc_manager`
+
+Only these two roles may change task type metadata or batch-to-task relationships.
+
+**System guardrail**
+
+- `task_type:unclassified` / `待分类` is permanent and undeletable.
+- It is the sink for every new or released batch.
+
+**Workflow A: create a new task type**
+
+1. Operator opens task type management.
+2. Operator creates a task type with name, description, and active status.
+3. The new task type initially contains zero batches.
+4. No MinIO scan side effect occurs.
+
+**Workflow B: add batches into a task type**
+
+1. Operator opens one target task type.
+2. System shows only candidate batches currently assigned to `待分类`.
+3. Batches already assigned to another formal task type must not be selectable in this add-flow.
+4. Operator selects one or more unclassified batches and confirms add.
+5. Batch current task type changes from `task_type:unclassified` to the target task type.
+6. Audit log records operator, source task type, target task type, batch ids, and timestamp.
+
+**Workflow C: remove batches from a task type**
+
+1. Operator opens one task type.
+2. Operator removes one or more batches from that task.
+3. Removed batches are not deleted.
+4. Their current task type changes back to `task_type:unclassified`.
+5. Audit log records operator, previous task type, returned-to-unclassified action, batch ids, and timestamp.
+
+**Workflow D: correct a misclassified batch**
+
+1. Operator first uses `数据总库` to search the batch name and confirm its current task type.
+2. Operator opens the current task type management page.
+3. Operator removes that batch from the current task type; the batch returns to `待分类`.
+4. Operator opens the correct task type.
+5. Operator adds that batch from the `待分类` candidate pool into the correct task type.
+6. The visible effect is a task-type transfer, but the audited system behavior remains “remove to unclassified” then “add from unclassified”.
+
+**Workflow E: delete a task type**
+
+1. Operator chooses delete on one task type.
+2. System validates that the target is not `task_type:unclassified`.
+3. System counts all batches currently assigned to this task type.
+4. On confirmation, every such batch is reassigned to `task_type:unclassified`.
+5. Task type is then deleted or disabled for future use, depending on implementation choice.
+6. Episode rows, QC tasks, revisions, and audit history are preserved.
+7. Audit log records the deletion plus the count/list of reassigned batches.
+
+**Workflow F: data catalog assisted lookup**
+
+`数据总库` is the discovery surface for operators before they perform reclassification:
+
+- batch filter must support keyboard search (`filterable`)
+- QC status filter must support keyboard search
+- QC result filter must support keyboard search
+- batch search result must clearly expose the current task type for the selected batch/episodes
+
+This lookup surface is required because long batch names and large batch counts make pure dropdown browsing non-viable in production.
 - auto-match may continue refreshing `candidate_task_type` for audit/reference, but not the confirmed final value
 - per prior decision Q-DD-003, already ingested episodes keep their historical task assignment
 
@@ -652,7 +712,7 @@ Once `episode_inventory` has entries in `qc_ready` state, a separate ingest step
 INSERT/UPDATE episodes:
   episode.id = generate from episode_inventory.id or episode_id_from_manifest
   episode.batch_id = (existing batch for this list, or create new batch)
-  episode.task_name = final_task_type.name if present, else lists.candidate_task_type
+  episode.task_name = current operator-managed batch task type name, else '待分类'
   episode.source_path = episode_inventory.episode_prefix  (MinIO prefix, not local path)
   episode.source_hash = episode_inventory.manifest_hash
   episode.ingest_status = 'indexed'

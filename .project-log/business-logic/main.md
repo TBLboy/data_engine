@@ -55,10 +55,12 @@ A → B1 + B2 + B3 → C → F → D → E
 - MinIO 在 V1 中仅作为原始对象存储层，不承担业务查询职责
 - PostgreSQL 是唯一业务查询入口和系统事实源
 - 前端继续只调后端 API，不直接耦合 MinIO 路径
-- `yaocao` 为 V1 默认 bucket，不做多 bucket 路由
+- `task_types` 是人工维护的业务目录，由 `admin/qc_manager` 管理；扫描器不再负责自动创建正式任务类型，未分类或新增批次统一进入 `待分类`
 - bucket 全量扫描采用全层级递归发现 + 结构特征识别 list
 - Episode 生命周期采用 ingestable / processable / qc_ready 三层模型
-- 任务类型由 PostgreSQL 控制面归类并落库，不把 MinIO 路径字符串直接当最终业务分类键
+- 扫描器只负责把 MinIO 数据同步到 PostgreSQL，并保持已人工分类 batch 的任务类型不被自动覆盖
+- 批次与任务类型关系是可人工改挂的业务关系，而不是扫描器不可变的自动归类结果
+- 删除任务类型默认执行“回收到 `待分类`”语义，不直接破坏已有 batch/episode/QC 历史数据
 - MinIO 凭据通过环境变量注入，不写入仓库代码
 
 ## Verification Status

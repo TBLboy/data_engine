@@ -3,19 +3,21 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.security import create_session_token, hash_password, verify_password, verify_session_token
-from app.models import AuditEvent, Batch, Episode, EpisodeInventory, EpisodeObject, ListRecord, QcReviewRevision, QcTask, ScanJob, User
+from app.models import AuditEvent, Batch, Episode, EpisodeInventory, EpisodeObject, ListRecord, QcReviewRevision, QcTask, ScanJob, TaskType, User
 from app.schemas.qc import (
     AccountListPayloadSchema,
     AccountSchema,
     AssignTaskRequest,
     AuthLoginRequest,
+    BatchSummarySchema,
+    BatchTaskTypeUpdateRequest,
     CreateAccountRequest,
     DashboardPayloadSchema,
     DatabasePayloadSchema,
@@ -37,6 +39,10 @@ from app.schemas.qc import (
     ResetPasswordRequest,
     SessionPayloadSchema,
     TaskPoolPayloadSchema,
+    TaskTypeCreateRequest,
+    TaskTypeDetailPayloadSchema,
+    TaskTypeSchema,
+    TaskTypeUpdateRequest,
     UpdateAccountStatusRequest,
 )
 from app.services.authz import require_roles
@@ -54,14 +60,18 @@ from app.services.payloads import (
     serialize_account,
     serialize_ingest_job,
     serialize_task,
+    serialize_task_type,
     serialize_user,
     sync_batch_metrics,
     task_pool_payload,
+    task_type_detail_payload,
+    unclassified_batch_payload,
 )
 from app.services.scan_queue import enqueue_scan_job
 
 router = APIRouter(prefix='/api', tags=['qc'])
 settings = get_settings()
+UNCLASSIFIED_TASK_TYPE_ID = 'task_type:unclassified'
 
 
 @router.get('/health')
@@ -144,6 +154,265 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='账号已停用')
     return user
+
+
+def _get_task_type_or_404(db: Session, task_type_id: str) -> TaskType:
+    task_type = db.query(TaskType).filter(TaskType.id == task_type_id).first()
+    if not task_type:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='任务类型不存在')
+    return task_type
+
+
+def _normalize_task_type_name(name: str) -> str:
+    normalized = name.strip()
+    if not normalized:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='任务类型名称不能为空')
+    return normalized
+
+
+def _task_type_id_from_name(name: str) -> str:
+    slug = ''.join(char.lower() if char.isalnum() else '_' for char in name).strip('_')
+    slug = '_'.join(part for part in slug.split('_') if part)
+    if not slug:
+        slug = f'task_{int(_utcnow().timestamp())}'
+    return f'task_type:{slug}'
+
+
+def _ensure_task_type_name_available(db: Session, name: str, *, exclude_id: str | None = None) -> None:
+    query = db.query(TaskType).filter(TaskType.name == name)
+    if exclude_id:
+        query = query.filter(TaskType.id != exclude_id)
+    if query.first():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='任务类型名称已存在')
+
+
+def _audit_event_id(prefix: str, target: str) -> str:
+    return f'audit_{prefix}_{target}_{int(_utcnow().timestamp())}'
+
+
+def _reassign_batch_task_type(db: Session, *, batch: Batch, task_type: TaskType) -> None:
+    batch.task_type_id = task_type.id
+    for episode in batch.episodes:
+        episode.task_name = task_type.name
+        episode.updated_at = _utcnow()
+    for task in batch.qc_tasks:
+        task.task_name = task_type.name
+        task.batch_name = batch.name
+
+
+def _refresh_task_type_stats(db: Session, *task_type_ids: str) -> None:
+    unique_ids = {task_type_id for task_type_id in task_type_ids if task_type_id}
+    for task_type_id in unique_ids:
+        task_type = db.query(TaskType).filter(TaskType.id == task_type_id).first()
+        if not task_type:
+            continue
+        task_type.total_batches = db.query(Batch).filter(Batch.task_type_id == task_type.id, Batch.is_active == True).count()
+        task_type.total_episodes = db.query(Episode).join(Batch, Episode.batch_id == Batch.id).filter(Batch.task_type_id == task_type.id, Batch.is_active == True).count()
+
+
+@router.get('/task-types', response_model=list[TaskTypeSchema])
+def list_task_types(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    return [serialize_task_type(item) for item in db.query(TaskType).order_by(TaskType.id.asc()).all()]
+
+
+@router.post('/task-types', response_model=TaskTypeSchema, status_code=status.HTTP_201_CREATED)
+def create_task_type(
+    payload: TaskTypeCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    name = _normalize_task_type_name(payload.name)
+    description = payload.description.strip()
+    _ensure_task_type_name_available(db, name)
+    task_type = TaskType(
+        id=_task_type_id_from_name(name),
+        name=name,
+        description=description or name,
+        is_active=True,
+        total_batches=0,
+        total_episodes=0,
+    )
+    if db.query(TaskType).filter(TaskType.id == task_type.id).first():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='任务类型标识已存在，请更换名称')
+    db.add(task_type)
+    now = _utcnow()
+    db.add(AuditEvent(
+        id=_audit_event_id('task_type_create', task_type.id),
+        operator=current_user.name,
+        action='创建任务类型',
+        target=task_type.id,
+        detail=f'name={task_type.name}',
+        time=now,
+    ))
+    db.commit()
+    db.refresh(task_type)
+    return serialize_task_type(task_type)
+
+
+@router.patch('/task-types/{task_type_id}', response_model=TaskTypeSchema)
+def update_task_type(
+    task_type_id: str,
+    payload: TaskTypeUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    task_type = _get_task_type_or_404(db, task_type_id)
+    if task_type.id == UNCLASSIFIED_TASK_TYPE_ID:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='待分类任务类型不可编辑')
+    name = _normalize_task_type_name(payload.name)
+    description = payload.description.strip()
+    _ensure_task_type_name_available(db, name, exclude_id=task_type.id)
+    task_type.name = name
+    task_type.description = description or name
+    for batch in db.query(Batch).filter(Batch.task_type_id == task_type.id).all():
+        for episode in batch.episodes:
+            episode.task_name = task_type.name
+            episode.updated_at = _utcnow()
+        for task in batch.qc_tasks:
+            task.task_name = task_type.name
+    now = _utcnow()
+    db.add(AuditEvent(
+        id=_audit_event_id('task_type_update', task_type.id),
+        operator=current_user.name,
+        action='更新任务类型',
+        target=task_type.id,
+        detail=f'name={task_type.name}',
+        time=now,
+    ))
+    db.commit()
+    db.refresh(task_type)
+    return serialize_task_type(task_type)
+
+
+@router.delete('/task-types/{task_type_id}', response_model=TaskTypeSchema)
+def delete_task_type(
+    task_type_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    task_type = _get_task_type_or_404(db, task_type_id)
+    if task_type.id == UNCLASSIFIED_TASK_TYPE_ID:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='待分类任务类型不可删除')
+    unclassified = _get_task_type_or_404(db, UNCLASSIFIED_TASK_TYPE_ID)
+    affected_batches = db.query(Batch).filter(Batch.task_type_id == task_type.id, Batch.is_active == True).all()
+    for batch in affected_batches:
+        _reassign_batch_task_type(db, batch=batch, task_type=unclassified)
+    task_type.is_active = False
+    now = _utcnow()
+    db.add(AuditEvent(
+        id=_audit_event_id('task_type_delete', task_type.id),
+        operator=current_user.name,
+        action='删除任务类型',
+        target=task_type.id,
+        detail=f'batch_ids={"|".join(batch.id for batch in affected_batches)} -> {UNCLASSIFIED_TASK_TYPE_ID}',
+        time=now,
+    ))
+    _refresh_task_type_stats(db, task_type.id, unclassified.id)
+    db.commit()
+    db.refresh(task_type)
+    return serialize_task_type(task_type)
+
+
+@router.get('/task-types/{task_type_id}/batches', response_model=TaskTypeDetailPayloadSchema)
+def task_type_batches(
+    task_type_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    task_type = _get_task_type_or_404(db, task_type_id)
+    return task_type_detail_payload(db, task_type)
+
+
+@router.get('/batches', response_model=list[BatchSummarySchema])
+def list_batches(
+    task_type_id: str = Query(UNCLASSIFIED_TASK_TYPE_ID),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    if task_type_id == UNCLASSIFIED_TASK_TYPE_ID:
+        return unclassified_batch_payload(db)
+    task_type = _get_task_type_or_404(db, task_type_id)
+    return task_type_detail_payload(db, task_type)['batches']
+
+
+@router.post('/task-types/{task_type_id}/batches:attach', response_model=TaskTypeDetailPayloadSchema)
+def attach_batches_to_task_type(
+    task_type_id: str,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    batch_ids = payload.get('batchIds') if isinstance(payload, dict) else None
+    if not isinstance(batch_ids, list) or not all(isinstance(item, str) for item in batch_ids):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='batchIds 必须是字符串数组')
+    require_roles(current_user, 'admin', 'qc_manager')
+    task_type = _get_task_type_or_404(db, task_type_id)
+    if task_type.id == UNCLASSIFIED_TASK_TYPE_ID:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='不能向待分类执行加入操作')
+    unclassified = _get_task_type_or_404(db, UNCLASSIFIED_TASK_TYPE_ID)
+    batches = db.query(Batch).filter(Batch.id.in_(batch_ids), Batch.is_active == True).all()
+    if len(batches) != len(set(batch_ids)):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='存在批次不存在')
+    for batch in batches:
+        if batch.task_type_id != UNCLASSIFIED_TASK_TYPE_ID:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f'批次 {batch.name} 不在待分类池中')
+    for batch in batches:
+        _reassign_batch_task_type(db, batch=batch, task_type=task_type)
+    now = _utcnow()
+    db.add(AuditEvent(
+        id=_audit_event_id('task_type_attach', task_type.id),
+        operator=current_user.name,
+        action='批次加入任务类型',
+        target=task_type.id,
+        detail=f'from={unclassified.id} batches={"|".join(batch.id for batch in batches)}',
+        time=now,
+    ))
+    _refresh_task_type_stats(db, task_type.id, unclassified.id)
+    db.commit()
+    db.refresh(task_type)
+    return task_type_detail_payload(db, task_type)
+
+
+@router.post('/task-types/{task_type_id}/batches/{batch_id}:detach', response_model=TaskTypeDetailPayloadSchema)
+def detach_batch_from_task_type(
+    task_type_id: str,
+    batch_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    task_type = _get_task_type_or_404(db, task_type_id)
+    if task_type.id == UNCLASSIFIED_TASK_TYPE_ID:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='待分类中的批次不能继续移出')
+    batch = db.query(Batch).filter(Batch.id == batch_id, Batch.is_active == True).first()
+    if not batch:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='批次不存在')
+    if batch.task_type_id != task_type.id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='该批次不属于当前任务类型')
+    unclassified = _get_task_type_or_404(db, UNCLASSIFIED_TASK_TYPE_ID)
+    _reassign_batch_task_type(db, batch=batch, task_type=unclassified)
+    now = _utcnow()
+    db.add(AuditEvent(
+        id=_audit_event_id('task_type_detach', batch.id),
+        operator=current_user.name,
+        action='批次移出任务类型',
+        target=batch.id,
+        detail=f'from={task_type.id} to={unclassified.id}',
+        time=now,
+    ))
+    _refresh_task_type_stats(db, task_type.id, unclassified.id)
+    db.commit()
+    db.refresh(task_type)
+    return task_type_detail_payload(db, task_type)
 
 
 def _validate_account_role(role: str) -> str:

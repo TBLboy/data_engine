@@ -20,17 +20,17 @@ RULE_SPECS = [
 ]
 
 TASK_TYPE_SPECS = [
-    {'id': 'task_type:unclassified', 'name': '待分类', 'description': '尚未完成任务类型确认的采集任务'},
-    {'id': 'task_type:huanggua', 'name': '黄瓜', 'description': '单一黄瓜食材采集任务'},
-    {'id': 'task_type:huangguakuai', 'name': '黄瓜块', 'description': '黄瓜块食材采集任务'},
-    {'id': 'task_type:tudou', 'name': '土豆', 'description': '单一土豆食材采集任务'},
-    {'id': 'task_type:tudoutiao', 'name': '土豆条', 'description': '土豆条食材采集任务'},
-    {'id': 'task_type:luobo', 'name': '萝卜', 'description': '单一萝卜食材采集任务'},
-    {'id': 'task_type:fanqie_luobo', 'name': '番茄萝卜', 'description': '番茄与萝卜复合采集任务'},
-    {'id': 'task_type:huanggua_luobo', 'name': '黄瓜萝卜', 'description': '黄瓜与萝卜复合采集任务'},
-    {'id': 'task_type:misezhuobu_tudoutiao', 'name': '米色桌布土豆条', 'description': '带场景前缀的土豆条流程任务'},
-    {'id': 'task_type:fengqin_tudou', 'name': '风琴土豆', 'description': '风琴土豆流程任务'},
-    {'id': 'task_type:tiaoliaoping', 'name': '调料瓶', 'description': '调料瓶相关采集任务'},
+    {'id': 'task_type:unclassified', 'name': '待分类', 'description': '尚未完成任务类型确认的采集任务', 'is_active': True},
+    {'id': 'task_type:huanggua', 'name': '黄瓜', 'description': '单一黄瓜食材采集任务', 'is_active': True},
+    {'id': 'task_type:huangguakuai', 'name': '黄瓜块', 'description': '黄瓜块食材采集任务', 'is_active': True},
+    {'id': 'task_type:tudou', 'name': '土豆', 'description': '单一土豆食材采集任务', 'is_active': True},
+    {'id': 'task_type:tudoutiao', 'name': '土豆条', 'description': '土豆条食材采集任务', 'is_active': True},
+    {'id': 'task_type:luobo', 'name': '萝卜', 'description': '单一萝卜食材采集任务', 'is_active': True},
+    {'id': 'task_type:fanqie_luobo', 'name': '番茄萝卜', 'description': '番茄与萝卜复合采集任务', 'is_active': True},
+    {'id': 'task_type:huanggua_luobo', 'name': '黄瓜萝卜', 'description': '黄瓜与萝卜复合采集任务', 'is_active': True},
+    {'id': 'task_type:misezhuobu_tudoutiao', 'name': '米色桌布土豆条', 'description': '带场景前缀的土豆条流程任务', 'is_active': True},
+    {'id': 'task_type:fengqin_tudou', 'name': '风琴土豆', 'description': '风琴土豆流程任务', 'is_active': True},
+    {'id': 'task_type:tiaoliaoping', 'name': '调料瓶', 'description': '调料瓶相关采集任务', 'is_active': True},
 ]
 
 
@@ -43,6 +43,7 @@ def seed_classification_rules(db: Session, *, created_by: str = 'system') -> Non
                 id=spec['id'],
                 name=spec['name'],
                 description=spec['description'],
+                is_active=bool(spec.get('is_active', True)),
                 total_batches=0,
                 total_episodes=0,
             )
@@ -51,6 +52,7 @@ def seed_classification_rules(db: Session, *, created_by: str = 'system') -> Non
         else:
             task_type.name = spec['name']
             task_type.description = spec['description']
+            task_type.is_active = bool(spec.get('is_active', True))
 
     now = datetime.utcnow()
     for spec in RULE_SPECS:

@@ -80,9 +80,9 @@ execution_chain:
   - 基于实查对象结构定义 list = bucket + list_prefix
   - 确定全量扫描采用全层级递归发现 + 结构特征识别
   - 定义 episode 三层生命周期状态（ingestable/processable/qc_ready）
-  - 确定 task_type 作为 PostgreSQL 控制面字段（非 MinIO 路径字符串）
-  - 记录三条规则到 decision-records.md
-  - 明确 PostgreSQL 控制面模型：MinIO 只存原始对象
+  - 确定 task_type 不再由扫描器 authoritative 自动落定，而由 `admin/qc_manager` 通过任务类型管理系统维护
+  - 确定 `待分类` 作为保底任务类型，承接新扫描 batch、移出任务的 batch、删除任务类型后回收的 batch
+  - 确定错分 batch 的标准纠正流程：先在数据总库确认当前归属，再从原任务类型移出回到 `待分类`，最后加入正确任务类型
 inputs:
   - MinIO 实查结果（Node C 产出）
   - 用户关于"一个任务可能拆散到多个list"、"多次少量写入"的输入

@@ -8,7 +8,7 @@ from datetime import datetime
 from minio.error import S3Error
 from sqlalchemy.orm import Session
 
-from app.models import AuditEvent, Batch, ClassificationRule, DiscoveredPrefix, Episode, EpisodeInventory, EpisodeObject, ListRecord, ScanJob, TaskType, User
+from app.models import AuditEvent, Batch, ClassificationRule, DiscoveredPrefix, Episode, EpisodeInventory, EpisodeObject, ListRecord, QcReviewRevision, QcTask, ScanJob, TaskType, User
 from app.services.authz import require_roles
 from app.services.minio_client import MinioService, get_minio_service
 
@@ -62,6 +62,21 @@ def _batch_name(list_prefix: str) -> str:
     return list_prefix.strip('/').split('/')[-1]
 
 
+def _is_technical_wrapper(segment: str) -> bool:
+    normalized = segment.strip().lower()
+    return normalized in {'raw_data', 'processed_data', 'data'}
+
+
+def _canonical_list_prefix(prefix: str) -> str:
+    normalized = prefix.strip('/')
+    if not normalized:
+        return ''
+    parts = normalized.split('/')
+    if len(parts) >= 2 and _is_technical_wrapper(parts[-1]):
+        return '/'.join(parts[:-1]) + '/'
+    return normalized + '/'
+
+
 def _ensure_task_type(db: Session, task_type_id: str, label: str) -> TaskType:
     task_type = db.query(TaskType).filter(TaskType.id == task_type_id).first()
     if task_type:
@@ -75,6 +90,38 @@ def _ensure_task_type(db: Session, task_type_id: str, label: str) -> TaskType:
     )
     db.add(task_type)
     return task_type
+
+
+def _cleanup_replaced_batch(
+    db: Session,
+    *,
+    canonical_batch_id: str,
+    canonical_batch_name: str,
+    legacy_batch_id: str,
+    legacy_episode_id: str,
+) -> None:
+    legacy_episode = db.query(Episode).filter(Episode.id == legacy_episode_id).first()
+    canonical_episode = db.query(Episode).filter(Episode.id == legacy_episode_id.replace(legacy_batch_id, canonical_batch_id, 1)).first()
+    legacy_batch = db.query(Batch).filter(Batch.id == legacy_batch_id).first()
+    if not legacy_episode or not canonical_episode or not legacy_batch:
+        return
+    if db.query(QcTask).filter(QcTask.batch_id == legacy_batch_id).count() > 0:
+        return
+    if db.query(QcReviewRevision).filter(QcReviewRevision.episode_id == legacy_episode.id).count() > 0:
+        return
+    inventory = db.query(EpisodeInventory).filter(EpisodeInventory.ingested_episode_id == legacy_episode.id).first()
+    if inventory:
+        inventory.ingested_episode_id = canonical_episode.id
+    db.delete(legacy_episode)
+    legacy_task_type = legacy_batch.task_type
+    db.delete(legacy_batch)
+    if legacy_task_type:
+        legacy_task_type.total_batches = db.query(Batch).filter(Batch.task_type_id == legacy_task_type.id).count()
+        legacy_task_type.total_episodes = db.query(Episode).join(Batch, Episode.batch_id == Batch.id).filter(Batch.task_type_id == legacy_task_type.id).count()
+    canonical_batch = db.query(Batch).filter(Batch.id == canonical_batch_id).first()
+    if canonical_batch:
+        canonical_batch.episode_count = db.query(Episode).filter(Episode.batch_id == canonical_batch_id).count()
+        canonical_batch.name = canonical_batch_name
 
 
 def _normalize_classification_text(list_prefix: str) -> tuple[str, str]:
@@ -254,7 +301,7 @@ def _execute_minio_scan(
             has_direct_episodes = bool(prefix_info[prefix]['raw_episodes'] or prefix_info[prefix]['processed_episodes'])
             has_kept_descendant = any(other != prefix and other.startswith(prefix) for other in kept_lists)
             if has_direct_episodes or not has_kept_descendant:
-                kept_lists.add(prefix)
+                kept_lists.add(_canonical_list_prefix(prefix))
 
         for prefix in current_prefixes:
             children = prefix_info[prefix]['children']
@@ -331,23 +378,17 @@ def _execute_minio_scan(
                 list_record.candidate_task_type = ''
                 list_record.candidate_source = ''
 
-            resolved_task_type_id = list_record.final_task_type_id
-            resolved_task_type_label = list_record.candidate_task_type or '待分类'
-            if not resolved_task_type_id:
-                if list_record.candidate_task_type:
-                    resolved_task_type_id = f"task_type:{list_record.candidate_task_type}"
-                else:
-                    resolved_task_type_id = 'task_type:unclassified'
-            task_type = _ensure_task_type(db, resolved_task_type_id, resolved_task_type_label)
+            task_type = _ensure_task_type(db, 'task_type:unclassified', '待分类')
             list_record.final_task_type_id = task_type.id
 
             batch_id = _batch_id(list_id)
             batch = db.query(Batch).filter(Batch.id == batch_id).first()
+            canonical_batch_name = _batch_name(list_prefix)
             if not batch:
                 batch = Batch(
                     id=batch_id,
                     task_type_id=task_type.id,
-                    name=_batch_name(list_prefix),
+                    name=canonical_batch_name,
                     imported_at=now,
                     episode_count=0,
                     sampled_episode_count=0,
@@ -360,8 +401,9 @@ def _execute_minio_scan(
                 )
                 db.add(batch)
             else:
-                batch.task_type_id = task_type.id
-                batch.name = _batch_name(list_prefix)
+                if batch.task_type_id == 'task_type:unclassified':
+                    batch.task_type_id = task_type.id
+                batch.name = canonical_batch_name
 
             for episode_name in sorted(raw_episode_names | processed_episode_names):
                 episode_inventory_id = _episode_inventory_id(normalized_bucket, list_prefix, episode_name)
@@ -483,6 +525,17 @@ def _execute_minio_scan(
                     episode.task_name = task_type.name
                     episode.updated_at = now
                 inventory.ingested_episode_id = episode.id
+
+            if list_prefix != _canonical_list_prefix(list_prefix):
+                legacy_batch_id = _batch_id(_list_id(normalized_bucket, list_prefix))
+                legacy_episode_id = _episode_id(legacy_batch_id, 'episode_000000')
+                _cleanup_replaced_batch(
+                    db,
+                    canonical_batch_id=batch_id,
+                    canonical_batch_name=canonical_batch_name,
+                    legacy_batch_id=legacy_batch_id,
+                    legacy_episode_id=legacy_episode_id,
+                )
 
             batch.episode_count = len(raw_episode_names | processed_episode_names)
             task_type.total_batches = db.query(Batch).filter(Batch.task_type_id == task_type.id).count()

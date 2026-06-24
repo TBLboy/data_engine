@@ -108,8 +108,10 @@ state:
   - 真实 `yaocao` basename 首版盘点已完成：36 个结构命中、35 个业务样式 basename、1 个 `raw_data` 技术子分支
   - authoritative seed 范围已收敛到单义单物料 token：`huanggua`、`huangguakuai`、`tudou`、`tudoutiao`、`luobo`
   - suggest-only / no-match 首版边界已明确，可直接产出 migration seed 草案
-  - manual QC 对象访问协议已确定：预览用短时 presigned URL，结构化对象与显式下载走后端受控路径
-  - Node D API 合同已收口：`ManualQcContext` 需扩展 embedded `media[]` descriptors，刷新按 `objectId` 定向更新，显式下载走独立受控 endpoint
+  - task_type 不再作为扫描器自动决定的正式归类结果，而是转为 `admin/qc_manager` 维护的业务主数据
+  - 新批次默认进入 `待分类`，已人工分类 batch 的任务类型在后续 rescan 中保持不变
+  - 任务类型管理业务流已补充：创建/重命名/删除任务类型、从 `待分类` 加入 batch、从任务移出 batch 回到 `待分类`、错分 batch 通过“移出再加入”纠正
+  - 数据总库在这一业务流中承担“确认批次当前归属”的查询职责，后续需要补批次/QC状态/QC结果下拉框的键盘检索能力
 inputs:
   - MinIO 实查结果（Node C 产出）
   - 三条基础业务规则

@@ -55,8 +55,32 @@ class TaskTypeSchema(BaseModel):
     id: str
     name: str
     description: str
+    isActive: bool
     totalBatches: int
     totalEpisodes: int
+
+
+class TaskTypeCreateRequest(BaseModel):
+    name: str
+    description: str = ''
+
+
+class TaskTypeUpdateRequest(BaseModel):
+    name: str
+    description: str = ''
+
+
+class TaskTypeBatchOperationRequest(BaseModel):
+    batchIds: list[str]
+
+
+class TaskTypeDetailPayloadSchema(BaseModel):
+    taskType: TaskTypeSchema
+    batches: list['BatchSummarySchema']
+
+
+class BatchTaskTypeUpdateRequest(BaseModel):
+    taskTypeId: str
 
 
 class BatchSummarySchema(BaseModel):
@@ -316,6 +340,10 @@ class DatabasePayloadSchema(BaseModel):
     taskTypes: list[TaskTypeSchema]
     reasonStats: list[ReasonStatSchema]
     ingestJobs: list[IngestJobSchema]
+
+
+TaskTypeDetailPayloadSchema.model_rebuild()
+TaskTypeBatchOperationRequest.model_rebuild()
 
 
 class TaskPoolPayloadSchema(BaseModel):

@@ -30,6 +30,32 @@
 - Why superseded: 调研报告绝大部分已完成，当前项目重心已从"调研"转移到"MinIO 数据湖控制面设计 + 实施"。B3（数据策展框架）暂缓
 - Status: superseded（调研阶段决策已完成使命）
 
+### 2026-06-24 - 任务类型从“扫描器自动归类结果”调整为“人工维护主数据”
+
+- Decision: `task_types` 不再被定义为扫描器自动决定的正式业务分类，而是改为由 `admin` / `qc_manager` 人工维护的业务目录。扫描器的职责收窄为“同步 MinIO 数据到 PostgreSQL”，不再自动创建或自动决定正式任务类型；新批次和未确认批次统一归入 `待分类`
+- Context: 当前实现里 `task_type`、扫描归类规则、batch 外键和前端展示维度耦合过深，导致任务类型难以增删改，也不适合后续形成由质检主管主导的任务类型管理体系
+- Alternatives considered:
+  - 保持当前自动归类为正式任务类型的方案
+  - 允许扫描器继续 authoritative 自动决定 batch 所属任务类型
+  - 只在前端隐藏自动归类痕迹，不改底层语义
+- Reason: 用户明确要求任务类型管理必须成为高频运营能力，`admin/qc_manager` 需要随时新增、删除、重命名任务类型，并能把批次从一个任务类型改挂到另一个任务类型。如果正式任务类型继续由扫描器决定，后续主数据管理会始终被底层扫描逻辑牵制
+- Evidence / Verification: 当前代码复核确认 `TaskType` 主要来自 seed 与扫描阶段自动绑定，前端仅有展示/筛选/派发使用能力，没有完整任务类型主数据管理后台
+- Impacted nodes: F, D
+- Status: active
+
+### 2026-06-24 - 扫描器与任务类型彻底解耦，批次删除/删除任务类型默认回收到“待分类”
+
+- Decision: 扫描器只负责 list / episode / object / batch 的发现与同步，不再把 prefix 规则直接落成正式任务类型。若 batch 已被人工分类，则后续 rescan 不覆盖其任务类型；若 batch 未分类或属于新发现数据，则统一进入 `待分类`。删除某个任务类型时，不物理删除其批次，而是把该任务类型下所有 batch 自动回收到 `待分类`
+- Context: 真实业务需要同时支持新增数据入库、批次人工调整、任务类型增删改和历史 QC 保留；如果任务类型删除会直接波及 batch/episode 物理删除，审计和历史追溯会被破坏
+- Alternatives considered:
+  - 删除任务类型时联动删除批次和 episode
+  - 删除任务类型时保留 batch 原任务类型字符串作为悬空值
+  - 让扫描器每次重扫都重新覆盖 batch 所属任务类型
+- Reason: `待分类` 必须成为系统保底池，承接所有未确认或被回收的数据；这样既允许运营侧灵活调整目录，也能保持历史 batch/episode/QC 数据稳定存在
+- Evidence / Verification: 当前 V1 运行状态已确认 batch 是扫描产物而非人工录入对象，且页面上的任务派发、manual QC、qc-history 均依赖 batch/episode 稳定存在
+- Impacted nodes: F, D
+- Status: active
+
 ### 2026-06-23 - MinIO 数据湖接入采用 PostgreSQL 控制面模型
 
 - Decision: MinIO 在 V1 中只承担原始对象存储层；业务查询、任务归类、episode 状态推进、QC 派发与对象映射统一由 PostgreSQL 控制面承接

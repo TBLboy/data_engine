@@ -8,6 +8,7 @@ const router = createRouter({
     { path: '/login', name: 'login', component: () => import('../pages/login.vue'), meta: { public: true } },
     { path: '/dashboard', name: 'dashboard', component: () => import('../pages/dashboard.vue') },
     { path: '/database', name: 'database', component: () => import('../pages/database-view.vue') },
+    { path: '/task-types', name: 'task-types', component: () => import('../pages/task-types.vue'), meta: { roles: ['admin', 'qc_manager'] } },
     { path: '/manual-qc/:id', name: 'manual-qc', component: () => import('../pages/manual-qc.vue') },
     { path: '/task-pool', name: 'task-pool', component: () => import('../pages/task-pool.vue') },
     { path: '/qc-history', name: 'qc-history', component: () => import('../pages/qc-history.vue') },

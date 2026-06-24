@@ -24,8 +24,14 @@ export interface TaskType {
   id: string
   name: string
   description: string
+  isActive: boolean
   totalBatches: number
   totalEpisodes: number
+}
+
+export interface TaskTypeDetailPayload {
+  taskType: TaskType
+  batches: BatchSummary[]
 }
 
 export interface BatchSummary {

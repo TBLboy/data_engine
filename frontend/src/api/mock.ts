@@ -22,9 +22,9 @@ export const currentUser: UserProfile = {
 }
 
 export const taskTypes: TaskType[] = [
-  { id: 'double_hand_grasp', name: '双臂灵巧手抓取', description: 'TeleDex 双臂 + 双灵巧手采集任务', totalBatches: 8, totalEpisodes: 426 },
-  { id: 'transfer_place', name: '转运放置', description: '抓取、转运、放置完整流程', totalBatches: 5, totalEpisodes: 218 },
-  { id: 'drawer_open', name: '抽屉开合', description: '含接触、拉拽和终态判断', totalBatches: 3, totalEpisodes: 96 }
+  { id: 'double_hand_grasp', name: '双臂灵巧手抓取', description: 'TeleDex 双臂 + 双灵巧手采集任务', isActive: true, totalBatches: 8, totalEpisodes: 426 },
+  { id: 'transfer_place', name: '转运放置', description: '抓取、转运、放置完整流程', isActive: true, totalBatches: 5, totalEpisodes: 218 },
+  { id: 'drawer_open', name: '抽屉开合', description: '含接触、拉拽和终态判断', isActive: true, totalBatches: 3, totalEpisodes: 96 }
 ]
 
 export const batches: BatchSummary[] = [

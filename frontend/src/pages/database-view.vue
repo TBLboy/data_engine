@@ -3,7 +3,9 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
 import { fetchDatabase, scanDatabase, type DatabasePayload } from '../api/client'
+import { useSessionStore } from '../stores/session'
 
+const session = useSessionStore()
 const payload = ref<DatabasePayload | null>(null)
 const loading = ref(true)
 const error = ref('')
@@ -17,6 +19,8 @@ const scanForm = reactive({
   bucket: 'yaocao',
   scope: 'full'
 })
+
+const canScanDatabase = computed(() => ['admin', 'qc_manager'].includes(session.user?.role ?? 'viewer'))
 
 const formatError = (err: unknown, fallback: string) => {
   if (!(err instanceof Error)) return fallback
@@ -111,7 +115,7 @@ const ingestStatusType = (statusValue: string) => {
       </el-row>
 
       <el-row :gutter="18">
-        <el-col :span="9">
+        <el-col v-if="canScanDatabase" :span="9">
           <el-card shadow="never" class="product-card filter-card">
             <template #header>扫描 MinIO</template>
             <div class="filter-grid">
@@ -130,7 +134,7 @@ const ingestStatusType = (statusValue: string) => {
             </div>
           </el-card>
         </el-col>
-        <el-col :span="15">
+        <el-col :span="canScanDatabase ? 15 : 24">
           <el-card shadow="never" class="product-card" v-loading="loading">
             <template #header>最近扫描任务</template>
             <el-table :data="ingestJobs" stripe height="240">
@@ -152,13 +156,13 @@ const ingestStatusType = (statusValue: string) => {
       <el-card shadow="never" class="product-card filter-card">
         <div class="filter-grid">
           <el-input v-model="keyword" placeholder="搜索 episode / batch / reason / reviewer" clearable />
-          <el-select v-model="batch" placeholder="批次" clearable>
+          <el-select v-model="batch" placeholder="批次" clearable filterable>
             <el-option v-for="item in batches" :key="item.id" :label="item.name" :value="item.id" />
           </el-select>
-          <el-select v-model="status" placeholder="QC 状态" clearable>
+          <el-select v-model="status" placeholder="QC 状态" clearable filterable>
             <el-option label="new" value="new" /><el-option label="assigned" value="assigned" /><el-option label="in_review" value="in_review" /><el-option label="done" value="done" />
           </el-select>
-          <el-select v-model="result" placeholder="QC 结果" clearable>
+          <el-select v-model="result" placeholder="QC 结果" clearable filterable>
             <el-option label="pass" value="pass" /><el-option label="fail" value="fail" /><el-option label="pending" value="pending" />
           </el-select>
         </div>

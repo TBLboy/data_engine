@@ -1,4 +1,4 @@
-from sqlalchemy import DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
@@ -19,6 +19,7 @@ class Batch(Base):
     qc_status: Mapped[str] = mapped_column(String(32), default='new', nullable=False)
     pass_rate: Mapped[float] = mapped_column(nullable=False, default=0)
     top_reason: Mapped[str] = mapped_column(String(128), default='-', nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     task_type = relationship('TaskType', back_populates='batches')
     episodes = relationship('Episode', back_populates='batch')

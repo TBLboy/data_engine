@@ -25,6 +25,40 @@
 - Question: Node D 中 `ManualQcContext.media[]`、预览 URL 刷新与显式下载的 API 合同应该如何收口？
 - Resolution: `GET /api/episodes/{episode_id}/qc-context` 直接返回 embedded `media[]` descriptors，字段至少包含 `objectId`、`role`、`label`、`variant`、`slot`、`mimeType`、`previewUrl`、`previewExpiresAt`、`refreshable`、`downloadable`、`sortOrder` 以及可选媒体元数据。URL 刷新通过 `POST /api/episodes/{episode_id}/media/refresh` 按 `objectId` 定向更新；显式下载走独立 `GET /api/episodes/{episode_id}/objects/{object_id}/download`。前端不拼接 bucket/key，不请求通用 access endpoint，也不把 preview 与 download 语义混用
 
+### Q-20260624-011（Resolved 2026-06-24）
+
+- Related node: F
+- Related edge: C->F
+- Question: 任务类型与 batch 的人工管理模型应该如何正式落地？尤其是“新 batch 默认进 `待分类`”、“已人工分类 batch 的 rescan 不覆盖”、“删除任务类型后批次自动回收到 `待分类`”这三条规则，对 schema/API/UI 的最终约束分别是什么？
+- Resolution: 已确定方向。任务类型改为 `admin/qc_manager` 人工维护主数据；扫描器只同步数据，不自动决定正式任务类型；新 batch 默认进入 `task_type:unclassified` / `待分类`；从任务中移除 batch 或删除任务类型时，batch 都回收到 `待分类`；错分 batch 的标准纠正流程是“先移出到待分类，再加入正确任务”；`数据总库` 负责按批次确认当前归属，后续任务类型管理页负责改挂与维护
+
+### Q-20260624-008
+
+- Related node: F
+- Related edge: C->F
+- Question: 当前 `yaocao` bucket 继续增长后，V1 的“全量递归扫描 + 幂等落库”是否还能承担日常入库？如果不能，后续应该如何拆分成全量校准、增量发现和定向重扫三种模式？
+- Why it matters: 目前扫描发现阶段仍是全量递归遍历所有对象，数据量增长后扫描耗时会持续上升。若不提前规划增量模式，生产现场每次新上传一批数据都要等待全量扫描，入库体验和系统负载都会越来越差
+- Current status: Open
+- Answer: Pending。当前判断是 V1 方案适合作为稳妥兜底，但长期生产主路径大概率需要升级为“低频全量校准 + 高频增量入库/指定 list 重扫”的分层模式
+
+### Q-20260624-009
+
+- Related node: F
+- Related edge: C->F
+- Question: 是否应该把 MinIO 上传规范正式收紧为“bucket 下一层每个目录必须直接代表一个 list，禁止 `K1/<list>` 这类二层嵌套”，从而把新数据发现阶段降级为只列 bucket 下一层 prefix 名单？
+- Why it matters: 如果上传规范可以严格约束，后续就不需要每次为发现新 list 而递归扫全部对象，只需要列出 bucket 下一层目录并和 PostgreSQL 已知 list 做差集，再对新增 list 做深扫入库，成本会明显更低
+- Current status: Open
+- Answer: Pending。用户建议这一方向可行，但还需要结合真实上传流程、采集侧约束、历史兼容成本和异常数据处理方式综合评估，不能只从扫描性能单点决定
+
+### Q-20260624-010
+
+- Related node: F
+- Related edge: C->F
+- Question: 当 MinIO 中某个 list / episode / 对象被删除或替换后，PostgreSQL 应该如何同步？是立即物理删除、标记 inactive、保留历史版本，还是区分“用户主动删除”和“暂时缺失”？
+- Why it matters: 动态数据关联系统不能只处理新增入库，还必须定义删除与失活语义，否则 MinIO 和 PostgreSQL 会越来越不一致；同时若处理过于激进，又可能破坏历史 QC 记录、审计链和可追溯性
+- Current status: Open
+- Answer: Pending。当前更倾向先做状态同步而非直接物理删除，即优先引入 inactive/missing/soft-delete 一类语义，再在后续明确何时允许彻底清理历史记录
+
 ## Resolved Questions
 
 ### Q-20260623-006（Resolved 2026-06-23）

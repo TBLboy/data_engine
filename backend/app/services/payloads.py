@@ -7,11 +7,13 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 from sqlalchemy import case, func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import get_settings
 from app.models import AuditEvent, Batch, Episode, EpisodeInventory, EpisodeObject, ListRecord, QcReviewRevision, QcTask, ScanJob, TaskType, User
 from app.services.minio_client import get_minio_service
+
+UNCLASSIFIED_TASK_TYPE_ID = 'task_type:unclassified'
 
 settings = get_settings()
 APP_ZONE = ZoneInfo(settings.app_timezone)
@@ -53,6 +55,7 @@ def serialize_task_type(task_type: TaskType) -> dict:
         'id': task_type.id,
         'name': task_type.name,
         'description': task_type.description,
+        'isActive': bool(task_type.is_active),
         'totalBatches': task_type.total_batches,
         'totalEpisodes': task_type.total_episodes,
     }
@@ -75,6 +78,22 @@ def _batch_storage_location(db: Session, batch: Batch) -> tuple[str, str]:
             episode_inventory, bucket = inventory
             return bucket, episode_inventory.processed_prefix or episode_inventory.raw_prefix or episode_inventory.episode_prefix
     return '', ''
+
+
+def _active_batch_query(db: Session):
+    return db.query(Batch).join(ListRecord, Batch.id == ('batch_' + func.substr(ListRecord.id, 6))).filter(ListRecord.is_active == True, Batch.is_active == True)
+
+
+def _active_episode_query(db: Session):
+    return db.query(Episode).join(Batch, Episode.batch_id == Batch.id).join(ListRecord, Batch.id == ('batch_' + func.substr(ListRecord.id, 6))).filter(ListRecord.is_active == True, Batch.is_active == True)
+
+
+def _batch_query(db: Session):
+    return db.query(Batch).join(ListRecord, Batch.id == ('batch_' + func.substr(ListRecord.id, 6))).filter(ListRecord.is_active == True, Batch.is_active == True)
+
+
+def _task_type_batch_query(db: Session, task_type_id: str):
+    return _batch_query(db).filter(Batch.task_type_id == task_type_id)
 
 
 def serialize_batch(db: Session, batch: Batch) -> dict:
@@ -493,12 +512,27 @@ def _build_real_manual_qc_context(db: Session, episode_id: str) -> dict | None:
     }
 
 
+def task_type_detail_payload(db: Session, task_type: TaskType) -> dict:
+    batches = _task_type_batch_query(db, task_type.id).options(joinedload(Batch.episodes)).order_by(Batch.imported_at.desc()).all()
+    return {
+        'taskType': serialize_task_type(task_type),
+        'batches': [serialize_batch(db, item) for item in batches],
+    }
+
+
+def unclassified_batch_payload(db: Session) -> list[dict]:
+    batches = _task_type_batch_query(db, UNCLASSIFIED_TASK_TYPE_ID).options(joinedload(Batch.episodes)).order_by(Batch.imported_at.desc()).all()
+    return [serialize_batch(db, item) for item in batches]
+
+
 def dashboard_payload(db: Session, current_user: User) -> dict:
+    batches = _active_batch_query(db).options(joinedload(Batch.episodes)).order_by(Batch.imported_at.desc()).all()
+    active_batch_ids = {item.id for item in batches}
     return {
         'currentUser': serialize_user(current_user),
-        'taskTypes': [serialize_task_type(item) for item in db.query(TaskType).order_by(TaskType.id).all()],
-        'batches': [serialize_batch(db, item) for item in db.query(Batch).order_by(Batch.imported_at.desc()).all()],
-        'qcTasks': [serialize_task(item, current_user) for item in db.query(QcTask).order_by(QcTask.created_at.desc()).all()],
+        'taskTypes': [serialize_task_type(item) for item in db.query(TaskType).filter(TaskType.is_active == True).order_by(TaskType.id).all()],
+        'batches': [serialize_batch(db, item) for item in batches],
+        'qcTasks': [serialize_task(item, current_user) for item in db.query(QcTask).filter(QcTask.batch_id.in_(active_batch_ids)).order_by(QcTask.created_at.desc()).all()],
         'reasonStats': reason_stats_payload_from_db(db),
         'reviewerWorkloads': reviewer_workload_payload(db),
         'ingestJobs': [serialize_ingest_job(item) for item in db.query(ScanJob).order_by(ScanJob.started_at.desc()).all()],
@@ -506,10 +540,11 @@ def dashboard_payload(db: Session, current_user: User) -> dict:
 
 
 def database_payload(db: Session) -> dict:
+    batches = _active_batch_query(db).options(joinedload(Batch.episodes)).order_by(Batch.imported_at.desc()).all()
     return {
-        'episodes': [serialize_episode(item) for item in db.query(Episode).order_by(Episode.updated_at.desc()).all()],
-        'batches': [serialize_batch(db, item) for item in db.query(Batch).order_by(Batch.imported_at.desc()).all()],
-        'taskTypes': [serialize_task_type(item) for item in db.query(TaskType).order_by(TaskType.id).all()],
+        'episodes': [serialize_episode(item) for item in _active_episode_query(db).order_by(Episode.updated_at.desc()).all()],
+        'batches': [serialize_batch(db, item) for item in batches],
+        'taskTypes': [serialize_task_type(item) for item in db.query(TaskType).filter(TaskType.is_active == True).order_by(TaskType.id).all()],
         'reasonStats': reason_stats_payload_from_db(db),
         'ingestJobs': [serialize_ingest_job(item) for item in db.query(ScanJob).order_by(ScanJob.started_at.desc()).all()],
     }
@@ -568,10 +603,10 @@ def reason_stats_payload_from_db(db: Session) -> list[dict]:
 
 
 def history_payload(db: Session) -> dict:
-    revisions = db.query(QcReviewRevision).order_by(QcReviewRevision.time.desc(), QcReviewRevision.revision_no.desc()).all()
+    revisions = db.query(QcReviewRevision).join(Episode, QcReviewRevision.episode_id == Episode.id).join(Batch, Episode.batch_id == Batch.id).filter(Batch.is_active == True).order_by(QcReviewRevision.time.desc(), QcReviewRevision.revision_no.desc()).all()
     audits = db.query(AuditEvent).order_by(AuditEvent.time.desc()).all()
-    episodes = db.query(Episode).order_by(Episode.updated_at.desc()).all()
-    batches = db.query(Batch).order_by(Batch.imported_at.desc()).all()
+    episodes = db.query(Episode).join(Batch, Episode.batch_id == Batch.id).filter(Batch.is_active == True).order_by(Episode.updated_at.desc()).all()
+    batches = _batch_query(db).options(joinedload(Batch.episodes)).order_by(Batch.imported_at.desc()).all()
     return {
         'auditRecords': [serialize_audit(item) for item in audits],
         'qcRevisions': [serialize_revision(item) for item in revisions],

@@ -7,6 +7,7 @@ from app.services.scanner import resume_minio_scan
 
 
 def enqueue_scan_job(scan_job_id: str, operator_id: str) -> None:
+    print(f'[scan_queue] enqueue {scan_job_id} operator={operator_id}', flush=True)
     worker = threading.Thread(
         target=process_scan_job,
         args=(scan_job_id, operator_id),
@@ -14,14 +15,18 @@ def enqueue_scan_job(scan_job_id: str, operator_id: str) -> None:
         daemon=True,
     )
     worker.start()
+    print(f'[scan_queue] started thread {worker.name}', flush=True)
 
 
 def process_scan_job(scan_job_id: str, operator_id: str) -> None:
+    print(f'[scan_queue] process start {scan_job_id}', flush=True)
     db = SessionLocal()
     try:
         operator = db.query(User).filter(User.id == operator_id).one()
         resume_minio_scan(db, scan_job_id=scan_job_id, operator=operator)
+        print(f'[scan_queue] process done {scan_job_id}', flush=True)
     except Exception as exc:
+        print(f'[scan_queue] process failed {scan_job_id}: {exc}', flush=True)
         db.rollback()
         failed_job = db.query(ScanJob).filter(ScanJob.id == scan_job_id).first()
         if failed_job:

@@ -15,6 +15,7 @@ import type {
   ReasonStat,
   ReviewerWorkload,
   TaskType,
+  TaskTypeDetailPayload,
   TimelineSegment,
   UserProfile
 } from '../types/qc'
@@ -110,6 +111,22 @@ export interface IngestScanRequest {
   bucket: string
   scope: string
 }
+
+export interface TaskTypeCreateRequest {
+  name: string
+  description?: string
+}
+
+export interface TaskTypeUpdateRequest {
+  name: string
+  description?: string
+}
+
+export interface TaskTypeBatchOperationRequest {
+  batchIds: string[]
+}
+
+export interface TaskTypeDetailResponse extends TaskTypeDetailPayload {}
 
 export interface TaskPoolPayload {
   batches: BatchSummary[]
@@ -232,6 +249,52 @@ export async function scanDatabase(payload: IngestScanRequest) {
   return request<IngestJob>('/database/scan', {
     method: 'POST',
     body: JSON.stringify(payload)
+  })
+}
+
+export async function fetchTaskTypes() {
+  return request<TaskType[]>('/task-types')
+}
+
+export async function createTaskType(payload: TaskTypeCreateRequest) {
+  return request<TaskType>('/task-types', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export async function updateTaskType(taskTypeId: string, payload: TaskTypeUpdateRequest) {
+  return request<TaskType>(`/task-types/${taskTypeId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload)
+  })
+}
+
+export async function deleteTaskType(taskTypeId: string) {
+  return request<TaskType>(`/task-types/${taskTypeId}`, {
+    method: 'DELETE'
+  })
+}
+
+export async function fetchTaskTypeDetail(taskTypeId: string) {
+  return request<TaskTypeDetailResponse>(`/task-types/${taskTypeId}/batches`)
+}
+
+export async function fetchBatchesByTaskType(taskTypeId = 'task_type:unclassified') {
+  const params = new URLSearchParams({ task_type_id: taskTypeId })
+  return request<BatchSummary[]>(`/batches?${params.toString()}`)
+}
+
+export async function attachBatchesToTaskType(taskTypeId: string, payload: TaskTypeBatchOperationRequest) {
+  return request<TaskTypeDetailResponse>(`/task-types/${taskTypeId}/batches:attach`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export async function detachBatchFromTaskType(taskTypeId: string, batchId: string) {
+  return request<TaskTypeDetailResponse>(`/task-types/${taskTypeId}/batches/${batchId}:detach`, {
+    method: 'POST'
   })
 }
 

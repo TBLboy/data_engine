@@ -47,6 +47,17 @@
 - 不支持前端直接访问 MinIO，所有媒体对象通过后端 API（presigned URL 或代理流）暴露，不把 bucket/prefix/key 规则暴露给前端
 - 对象存储与 PostgreSQL 之间的关联键由控制面字段定义，不直接使用 MinIO 路径字符串作为业务主键
 
+## Task Type Management Constraints
+
+- `task_type:unclassified` / `待分类` 是系统保底任务类型，必须永久存在，不能被删除
+- 正式任务类型主数据只面向 `admin` 与 `qc_manager` 开放管理；`reviewer`、`viewer` 无权创建、删除、重命名或改挂批次
+- 扫描器不自动创建正式任务类型，不自动把新 batch 归入正式任务类型；新 batch 默认进入 `待分类`
+- 已经归入正式任务类型的 batch，不得作为“新增批次”候选再次出现在其他任务类型的加入列表里
+- 删除任务类型时，关联 batch 必须回收到 `待分类`，不得联动删除 batch / episode / QC 历史数据
+- 从任务类型中移除 batch，本质上等价于把该 batch 重新归入 `待分类`
+- 批次改错分的标准操作流应保持可追溯：先从原任务类型移出回到 `待分类`，再从 `待分类` 加入正确任务类型
+- 数据总库中的批次、QC 状态、QC 结果筛选必须支持键盘输入检索，以适应大规模 batch 数量下的快速定位需求
+
 ## Documentation Constraints
 
 - 调研报告需使用Markdown格式
