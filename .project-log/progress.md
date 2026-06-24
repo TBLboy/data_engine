@@ -1,3 +1,49 @@
+## 2026-06-24 (Robot QC V1 database page server-side pagination landing)
+
+- Type: implementation
+- Status: validated by backend compile, frontend build, runtime payload checks, and production compose redeploy
+- Importance: critical
+- Reusable: yes
+- Objective: 把 `database` 页面从“全量 episodes 拉到前端后本地过滤 + 一次性渲染整表”的短期模式，升级为适合数据持续增长与多用户远程使用的正式方案：服务端分页、服务端筛选、前端按页渲染
+- Work completed:
+  - 后端 `DatabasePayloadSchema` 与前端 `DatabasePayload` 已扩展分页字段：`totalEpisodes`、`page`、`pageSize`
+  - `frontend/src/api/client.ts` 新增 `DatabaseQuery`，`fetchDatabase()` 现可携带 `page/page_size/keyword/batch_id/qc_status/qc_result` 查询参数
+  - `backend/app/api/routes/qc.py` 的 `GET /api/database` 已切换为正式分页接口，支持页码、页大小、关键字、批次、QC 状态、QC 结果查询
+  - `backend/app/services/payloads.py` 的 `database_payload()` 已从“全量 episodes 返回”改为“服务端过滤 + total 统计 + offset/limit 返回当前页”；同时保留批次、任务类型、原因统计和最近扫描任务等页面所需 summary 信息
+  - `frontend/src/pages/database-view.vue` 已移除本地 `filteredEpisodes` 全量过滤路径，切换为由筛选条件驱动远端请求，并新增 `el-pagination`，当前只渲染当前页 episode
+  - 搜索关键字增加 250ms 前端 debounce，避免输入每个字符都立即打请求；批次/QC 状态/QC 结果/每页条数变化时自动回到第一页重新拉取
+  - backend/frontend 生产镜像已重建，compose 运行中的 `robot-qc-backend` / `robot-qc-frontend` 已完成重新部署
+- Business logic impact: `database` 页面正式从“浏览器端持有全量 episode 事实源”切换到“后端分页查询是事实源、前端只渲染当前页”。这意味着后续数据继续增长时，单次打开页面不再需要把全部 episode 拉到浏览器再过滤，远程用户和多用户场景下的网络与大表渲染压力会明显更可控
+- Problems encountered:
+  - 先前已确认 backend payload 构造本身已压到百毫秒级，但页面切换仍卡顿，说明瓶颈已转到前端大表渲染
+  - `database` 页面原逻辑把关键字、批次、状态、结果全部压在本地 `computed.filter()` 上，导致每次进入页面都要重新处理并渲染 4000+ 行
+  - frontend `fetchBootstrap()` 保留了 `database: DatabasePayload` 类型依赖，因此分页字段需要同步进 schema/类型，避免类型合同断裂
+- Resolution:
+  - 直接按长期方案切换到服务端分页/服务端筛选，而不是继续堆叠本地分页或 `KeepAlive`
+  - 在后端维持单一查询事实源，在前端保留轻量 debounce 和分页组件，确保交互仍然简单可控
+- Verification:
+  - `cd /home/tbl/Project/data_collect/software && python3 -m compileall backend/app`
+  - `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml build backend frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up -d backend frontend`
+  - `docker exec robot-qc-backend python -c "from app.core.db import SessionLocal; from app.services.payloads import database_payload; db=SessionLocal(); p=database_payload(db, page=2, page_size=50, keyword='', batch_id='', qc_status='', qc_result=''); print(len(p['episodes']), p['page'], p['pageSize'], p['totalEpisodes']); db.close()"`
+  - `docker exec robot-qc-backend python -c "from app.core.db import SessionLocal; from app.services.payloads import database_payload; db=SessionLocal(); p=database_payload(db, page=1, page_size=100, keyword='episode', batch_id='', qc_status='', qc_result=''); print(sorted(p.keys())); print(p['page'], p['pageSize'], p['totalEpisodes'], len(p['episodes'])); db.close()"`
+  - `docker exec robot-qc-frontend sh -lc "grep -Rni 'el-pagination\|page_size\|qc_status\|batch_id' /usr/share/nginx/html/assets/database-view* 2>/dev/null || true"`
+- Unverified items:
+  - 还未做真实浏览器肉眼验收来确认切换到 `database` 页面时的体感卡顿是否已经明显下降
+  - 还未补第二层“短 TTL 页面缓存”，当前先完成了长期主方案中的服务端分页/筛选部分
+- Files changed:
+  - `software/backend/app/api/routes/qc.py`
+  - `software/backend/app/schemas/qc.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/frontend/src/api/client.ts`
+  - `software/frontend/src/pages/database-view.vue`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 让用户在真实浏览器里复验 `database` 页面切换体感、筛选、分页、进入 manual QC 等主流程
+  - 若切页体感仍有可感知迟滞，再补短时内存缓存作为二级体验增强，而不是替代分页事实源
+
 ## 2026-06-24 (Robot QC V1 manual QC synchronized player landing)
 
 - Type: implementation

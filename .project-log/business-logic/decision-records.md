@@ -30,7 +30,31 @@
 - Why superseded: 调研报告绝大部分已完成，当前项目重心已从"调研"转移到"MinIO 数据湖控制面设计 + 实施"。B3（数据策展框架）暂缓
 - Status: superseded（调研阶段决策已完成使命）
 
-### 2026-06-24 - 任务类型从“扫描器自动归类结果”调整为“人工维护主数据”
+### 2026-06-24 - 数据总库页面切换到服务端分页/筛选作为长期正式方案
+
+- Decision: `database` 页面不再把“全量 episodes 拉到前端后本地过滤 + 一次性渲染整表”作为长期正式模式，而是确定后续实现方向为“服务端分页 + 服务端筛选 + 前端短时缓存”。前端仍只消费后端 API，不直接保留全量 episode 作为页面事实源
+- Context: 真实生产数据已达到 4416 条 episode，页面每次切换进入 `database` 时都会出现明显卡顿。排查确认早期瓶颈包含 `/api/database` payload 过重与 batch 序列化放大，但在后端 payload 减重后，运行中 backend 容器内 `database_payload()` 已可在约 `0.116s` 内完成构造，仍存在的主要体感卡顿更符合前端一次性过滤并渲染 4000+ 行 Element Plus 表格的表现
+- Alternatives considered:
+  - 保持现状，只继续压缩 `/api/database` 后端 payload
+  - 只在前端做本地分页，但仍一次拉取全量 episodes
+  - 使用 `KeepAlive` 或纯页面缓存掩盖重复进入卡顿
+- Reason: 只做后端减重或前端本地分页，都无法从根本上解决“数据规模继续增长 + 多用户远程访问”下的网络、浏览器内存和大表渲染压力。服务端分页/筛选可以同时控制响应大小、数据库访问范围和前端渲染量，是唯一符合长期演进方向的正式方案；前端短时缓存只作为二级体验增强，而不是主优化手段
+- Evidence / Verification: 当前运行中的 backend 容器已验证 `database_payload()` 仅返回最近 20 条 `ingestJobs`，并在 `episodes=4416, batches=44, jobs=20` 条件下测得 payload 构造耗时约 `0.116s`，说明“切页仍卡数秒”不能再主要归因于后端接口本身
+- Impacted nodes: D, E
+- Status: active
+
+### 2026-06-24 - 数据总库服务端分页的业务边界与前端缓存语义收口
+
+- Decision: `database` 页面后续分页接口必须由后端同时承担三类职责：1）按 `page/page_size` 返回当前页 episode 列表；2）按 `keyword/batch_id/qc_status/qc_result` 执行服务端筛选；3）返回总数与分页元信息供前端渲染。前端可以保留很短 TTL 的页面缓存，但缓存的角色是“先显示最近一次结果并后台刷新”，而不是替代分页查询或长期持有全量 episodes
+- Context: 当前 `database-view.vue` 的筛选模型完全建立在 `episodes` 全量数组本地过滤上，这种交互模式在小数据下简单，但在远程多用户和持续增长的数据量下会让单次页面进入承担不必要的网络与渲染成本
+- Alternatives considered:
+  - 先只做 page/page_size，筛选仍在前端本地执行
+  - 让前端缓存整份全量 `DatabasePayload`，靠 TTL 避免频繁请求
+  - 拆成多个页面各自维护独立事实源，不再保留统一的 `database` 查询入口
+- Reason: 分页、筛选和总数统计必须属于同一后端查询语义，否则前端会出现“页码是服务端的、筛选是本地的、总数又不是同一套结果”的不一致体验。短时缓存可以改善切页体感，但不能改变事实源仍由后端分页查询决定这一原则
+- Evidence / Verification: 当前页面只需要表格当前页和筛选结果，不需要在浏览器中长期持有所有 episodes；同时现有业务已明确“前端继续只调后端 API，不直接承担数据湖式查询职责”，因此分页与筛选自然应收口在后端
+- Impacted nodes: D, E
+- Status: active
 
 - Decision: `task_types` 不再被定义为扫描器自动决定的正式业务分类，而是改为由 `admin` / `qc_manager` 人工维护的业务目录。扫描器的职责收窄为“同步 MinIO 数据到 PostgreSQL”，不再自动创建或自动决定正式任务类型；新批次和未确认批次统一归入 `待分类`
 - Context: 当前实现里 `task_type`、扫描归类规则、batch 外键和前端展示维度耦合过深，导致任务类型难以增删改，也不适合后续形成由质检主管主导的任务类型管理体系

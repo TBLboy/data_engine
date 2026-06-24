@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
 import { fetchDatabase, scanDatabase, type DatabasePayload } from '../api/client'
@@ -14,6 +14,9 @@ const keyword = ref('')
 const status = ref('')
 const result = ref('')
 const batch = ref('')
+const page = ref(1)
+const pageSize = ref(100)
+let keywordTimer: ReturnType<typeof setTimeout> | null = null
 
 const scanForm = reactive({
   bucket: 'yaocao',
@@ -36,12 +39,24 @@ const loadDatabase = async () => {
   loading.value = true
   error.value = ''
   try {
-    payload.value = await fetchDatabase()
+    payload.value = await fetchDatabase({
+      page: page.value,
+      pageSize: pageSize.value,
+      keyword: keyword.value.trim(),
+      batchId: batch.value,
+      qcStatus: status.value,
+      qcResult: result.value
+    })
   } catch (err) {
     error.value = formatError(err, '加载数据总库失败')
   } finally {
     loading.value = false
   }
+}
+
+const reloadFromFirstPage = async () => {
+  page.value = 1
+  await loadDatabase()
 }
 
 const submitScan = async () => {
@@ -62,19 +77,27 @@ const submitScan = async () => {
 
 onMounted(loadDatabase)
 
+watch([batch, status, result, pageSize], async () => {
+  await reloadFromFirstPage()
+})
+
+watch(page, async () => {
+  await loadDatabase()
+})
+
+watch(keyword, () => {
+  if (keywordTimer) clearTimeout(keywordTimer)
+  keywordTimer = setTimeout(() => {
+    void reloadFromFirstPage()
+  }, 250)
+})
+
 const episodes = computed(() => payload.value?.episodes ?? [])
 const batches = computed(() => payload.value?.batches ?? [])
 const taskTypes = computed(() => payload.value?.taskTypes ?? [])
 const reasonStats = computed(() => payload.value?.reasonStats ?? [])
 const ingestJobs = computed(() => payload.value?.ingestJobs ?? [])
-
-const filteredEpisodes = computed(() => episodes.value.filter((episode) => {
-  const textMatched = !keyword.value || `${episode.id}${episode.batchName}${episode.reasonCode}${episode.reviewer}`.toLowerCase().includes(keyword.value.toLowerCase())
-  const statusMatched = !status.value || episode.qcStatus === status.value
-  const resultMatched = !result.value || episode.qcResult === result.value
-  const batchMatched = !batch.value || episode.batchId === batch.value
-  return textMatched && statusMatched && resultMatched && batchMatched
-}))
+const totalEpisodes = computed(() => payload.value?.totalEpisodes ?? 0)
 
 const statusType = (statusValue: string) => {
   if (statusValue === 'done') return 'success'
@@ -108,7 +131,7 @@ const ingestStatusType = (statusValue: string) => {
       <el-alert v-if="error" type="error" :closable="false" :title="error" />
 
       <el-row :gutter="18" v-loading="loading">
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-blue"><span>已索引 Episodes</span><strong>{{ episodes.length }}</strong><small>MinIO episode 样本</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="stat-card accent-blue"><span>已索引 Episodes</span><strong>{{ totalEpisodes }}</strong><small>MinIO episode 样本</small></el-card></el-col>
         <el-col :span="6"><el-card shadow="never" class="stat-card accent-green"><span>任务类型</span><strong>{{ taskTypes.length }}</strong><small>支持动态扫描</small></el-card></el-col>
         <el-col :span="6"><el-card shadow="never" class="stat-card accent-orange"><span>失败原因种类</span><strong>{{ reasonStats.length }}</strong><small>L2/L3/L4/System</small></el-card></el-col>
         <el-col :span="6"><el-card shadow="never" class="stat-card accent-purple"><span>批次数量</span><strong>{{ batches.length }}</strong><small>一次扫描形成一个批次</small></el-card></el-col>
@@ -169,7 +192,7 @@ const ingestStatusType = (statusValue: string) => {
       </el-card>
 
       <el-card shadow="never" class="product-card episode-table-card" v-loading="loading">
-        <el-table :data="filteredEpisodes" stripe height="620" scrollbar-always-on>
+        <el-table :data="episodes" stripe height="620" scrollbar-always-on>
             <el-table-column prop="id" label="Episode" min-width="150" fixed />
             <el-table-column prop="taskName" label="任务类型" min-width="160" />
             <el-table-column prop="batchName" label="批次" min-width="180" />
@@ -193,12 +216,28 @@ const ingestStatusType = (statusValue: string) => {
               </template>
             </el-table-column>
           </el-table>
+          <div class="database-pagination-row">
+            <el-pagination
+              v-model:current-page="page"
+              v-model:page-size="pageSize"
+              background
+              layout="total, sizes, prev, pager, next"
+              :total="totalEpisodes"
+              :page-sizes="[50, 100, 200]"
+            />
+          </div>
       </el-card>
     </div>
   </AppLayout>
 </template>
 
 <style scoped>
+.database-pagination-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
 .episode-table-card :deep(.el-scrollbar__bar.is-vertical) {
   opacity: 1;
   right: 4px;

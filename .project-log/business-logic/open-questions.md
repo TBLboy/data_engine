@@ -59,6 +59,13 @@
 - Current status: Open
 - Answer: Pending。当前更倾向先做状态同步而非直接物理删除，即优先引入 inactive/missing/soft-delete 一类语义，再在后续明确何时允许彻底清理历史记录
 
+### Q-20260624-012（Resolved 2026-06-24）
+
+- Related node: D
+- Related edge: F->D
+- Question: `database` 页面在真实数据继续增长、并进入多用户远程使用后，长期正式方案应该优先做前端缓存、`KeepAlive`、前端本地分页，还是直接切换到服务端分页/筛选？
+- Resolution: 已确认长期正式方案应直接切换到“服务端分页 + 服务端筛选 + 前端短时缓存”。后端负责 `page/page_size/total` 与 `keyword/batch_id/qc_status/qc_result` 查询语义，前端只渲染当前页并可在短 TTL 内复用最近一次结果做秒开体验。`KeepAlive`、前端本地全量分页和只靠缓存掩盖卡顿都不作为长期主方案
+
 ## Resolved Questions
 
 ### Q-20260623-006（Resolved 2026-06-23）

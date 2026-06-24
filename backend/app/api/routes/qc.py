@@ -594,8 +594,25 @@ def dashboard(db: Session = Depends(get_db), current_user: User = Depends(get_cu
 
 
 @router.get('/database', response_model=DatabasePayloadSchema)
-def database(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
-    return database_payload(db)
+def database(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=200),
+    keyword: str = Query(''),
+    batch_id: str = Query(''),
+    qc_status: str = Query(''),
+    qc_result: str = Query(''),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    return database_payload(
+        db,
+        page=page,
+        page_size=page_size,
+        keyword=keyword,
+        batch_id=batch_id,
+        qc_status=qc_status,
+        qc_result=qc_result,
+    )
 
 
 def _expire_stale_scan_jobs(db: Session, *, bucket: str, stale_after: timedelta = timedelta(minutes=30)) -> None:

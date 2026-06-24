@@ -341,6 +341,9 @@ class DatabasePayloadSchema(BaseModel):
     taskTypes: list[TaskTypeSchema]
     reasonStats: list[ReasonStatSchema]
     ingestJobs: list[IngestJobSchema]
+    totalEpisodes: int
+    page: int
+    pageSize: int
 
 
 TaskTypeDetailPayloadSchema.model_rebuild()

@@ -44,6 +44,7 @@ A → B1 + B2 + B3 → C → F → D → E
 - `task_types` / `lists` / `qc_tasks` 三类实体区分，以及 bind / unbind / retire 语义
 - manual QC 的 MinIO 对象访问协议：媒体预览走短时 presigned URL，结构化对象与显式下载走后端受控接口
 - Node D manual QC API 合同：`qc-context` embedded `media[]`、按 `objectId` 定向 refresh、下载走独立 endpoint
+- `database` 页面长期性能方向已明确：不能继续依赖“全量 episodes 拉到前端后本地过滤”，后续正式方案应切换为“服务端分页 + 服务端筛选 + 前端短时缓存”
 
 仍保留但不阻塞实现的开放项：
 
@@ -55,6 +56,7 @@ A → B1 + B2 + B3 → C → F → D → E
 - MinIO 在 V1 中仅作为原始对象存储层，不承担业务查询职责
 - PostgreSQL 是唯一业务查询入口和系统事实源
 - 前端继续只调后端 API，不直接耦合 MinIO 路径
+- `database` 页面不能长期依赖全量 episodes 前端本地过滤；随着数据规模和多用户远程访问增长，正式形态应由后端负责分页、筛选与总数统计，前端只渲染当前页
 - `task_types` 是人工维护的业务目录，由 `admin/qc_manager` 管理；扫描器不再负责自动创建正式任务类型，未分类或新增批次统一进入 `待分类`
 - bucket 全量扫描采用全层级递归发现 + 结构特征识别 list
 - Episode 生命周期采用 ingestable / processable / qc_ready 三层模型
@@ -79,3 +81,4 @@ A → B1 + B2 + B3 → C → F → D → E
 - 当前已不再缺核心业务规则，剩余工作重心转向代码实现
 - 唯一仍打开的问题是全量 list census，它属于规模与验收覆盖问题，不改变既定控制面设计
 - 下一阶段产出应是 MinIO 控制面 migration、扫描器实现、manual QC MinIO 化改造
+- `database` 页面后续若进入大规模远程使用，性能优化优先级应遵循：先后端分页/筛选，再前端短时缓存；`KeepAlive` 或单纯前端全量分页都不能作为长期主方案

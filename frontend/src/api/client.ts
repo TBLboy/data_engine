@@ -105,6 +105,18 @@ export interface DatabasePayload {
   taskTypes: TaskType[]
   reasonStats: ReasonStat[]
   ingestJobs: IngestJob[]
+  totalEpisodes: number
+  page: number
+  pageSize: number
+}
+
+export interface DatabaseQuery {
+  page?: number
+  pageSize?: number
+  keyword?: string
+  batchId?: string
+  qcStatus?: string
+  qcResult?: string
 }
 
 export interface IngestScanRequest {
@@ -241,8 +253,16 @@ export async function fetchDashboard() {
   return request<DashboardPayload>('/dashboard')
 }
 
-export async function fetchDatabase() {
-  return request<DatabasePayload>('/database')
+export async function fetchDatabase(query: DatabaseQuery = {}) {
+  const params = new URLSearchParams()
+  if (query.page) params.set('page', String(query.page))
+  if (query.pageSize) params.set('page_size', String(query.pageSize))
+  if (query.keyword) params.set('keyword', query.keyword)
+  if (query.batchId) params.set('batch_id', query.batchId)
+  if (query.qcStatus) params.set('qc_status', query.qcStatus)
+  if (query.qcResult) params.set('qc_result', query.qcResult)
+  const suffix = params.size ? `?${params.toString()}` : ''
+  return request<DatabasePayload>(`/database${suffix}`)
 }
 
 export async function scanDatabase(payload: IngestScanRequest) {

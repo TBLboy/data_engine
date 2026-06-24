@@ -377,4 +377,8 @@ const detachBatch = async (batch: BatchSummary) => {
   color: #64748b;
   font-size: 12px;
 }
+
+:deep(.el-table-column--selection .el-checkbox__inner) {
+  border-color: #111827;
+}
 </style>
