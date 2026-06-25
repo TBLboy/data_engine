@@ -143,7 +143,7 @@ const ingestStatusType = (statusValue: string) => {
             <template #header>扫描 MinIO</template>
             <div class="filter-grid">
               <el-input v-model="scanForm.bucket" placeholder="输入 MinIO bucket 名称" clearable />
-              <el-select v-model="scanForm.scope" placeholder="扫描范围">
+              <el-select v-model="scanForm.scope" class="qc-select" placeholder="扫描范围">
                 <el-option label="全量扫描" value="full" />
               </el-select>
               <el-button type="primary" :loading="scanning" @click="submitScan">扫描入库</el-button>
@@ -160,7 +160,7 @@ const ingestStatusType = (statusValue: string) => {
         <el-col :span="canScanDatabase ? 15 : 24">
           <el-card shadow="never" class="qc-card" v-loading="loading">
             <template #header>最近扫描任务</template>
-            <el-table :data="ingestJobs" stripe height="240">
+            <el-table :data="ingestJobs" stripe class="qc-table" height="240">
               <el-table-column prop="bucket" label="Bucket" min-width="150" />
               <el-table-column prop="scope" label="范围" width="110" />
               <el-table-column label="状态" width="110">
@@ -179,20 +179,20 @@ const ingestStatusType = (statusValue: string) => {
       <el-card shadow="never" class="qc-card filter-card">
         <div class="filter-grid">
           <el-input v-model="keyword" placeholder="搜索 episode / batch / reason / reviewer" clearable />
-          <el-select v-model="batch" placeholder="批次" clearable filterable>
+          <el-select v-model="batch" placeholder="批次" class="qc-select" clearable filterable>
             <el-option v-for="item in batches" :key="item.id" :label="item.name" :value="item.id" />
           </el-select>
-          <el-select v-model="status" placeholder="QC 状态" clearable filterable>
+          <el-select v-model="status" placeholder="QC 状态" class="qc-select" clearable filterable>
             <el-option label="new" value="new" /><el-option label="assigned" value="assigned" /><el-option label="in_review" value="in_review" /><el-option label="done" value="done" />
           </el-select>
-          <el-select v-model="result" placeholder="QC 结果" clearable filterable>
+          <el-select v-model="result" placeholder="QC 结果" class="qc-select" clearable filterable>
             <el-option label="pass" value="pass" /><el-option label="fail" value="fail" /><el-option label="pending" value="pending" />
           </el-select>
         </div>
       </el-card>
 
       <el-card shadow="never" class="qc-card episode-table-card" v-loading="loading">
-        <el-table :data="episodes" stripe height="620" scrollbar-always-on>
+        <el-table :data="episodes" stripe height="620" class="qc-table" scrollbar-always-on>
             <el-table-column prop="id" label="Episode" min-width="150" fixed />
             <el-table-column prop="taskName" label="任务类型" min-width="160" />
             <el-table-column prop="batchName" label="批次" min-width="180" />

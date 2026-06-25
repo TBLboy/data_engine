@@ -191,7 +191,7 @@ const toggleAccount = async (account: Account) => {
             <template #header>
               <div class="card-header"><span>账号清单</span><el-tag type="success">创建 / 重置密码 / 启停</el-tag></div>
             </template>
-            <el-table :data="accounts" stripe height="520">
+            <el-table :data="accounts" stripe class="qc-table" height="520">
               <el-table-column prop="username" label="账号" min-width="140" />
               <el-table-column prop="name" label="姓名" width="120" />
               <el-table-column label="角色" width="120">
@@ -259,7 +259,7 @@ const toggleAccount = async (account: Account) => {
           <el-input v-model="createForm.password" type="password" show-password autocomplete="new-password" />
         </el-form-item>
         <el-form-item label="角色">
-          <el-select v-model="createForm.role" style="width: 100%">
+          <el-select v-model="createForm.role" class="qc-select" style="width: 100%">
             <el-option v-for="option in roleOptions" :key="option.value" :label="option.label" :value="option.value" />
           </el-select>
         </el-form-item>

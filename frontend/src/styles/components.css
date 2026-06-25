@@ -151,6 +151,14 @@
   background: #cbd5e1;
 }
 
+/* ---- Button 按钮 ---- */
+
+.qc-btn-plain .el-button.is-plain,
+.qc-btn-plain.el-button.is-plain {
+  --el-button-border-color: #2563eb;
+  --el-button-text-color: #2563eb;
+}
+
 /* ---- Tag inside highlighted row ---- */
 
 .qc-tag-flat {

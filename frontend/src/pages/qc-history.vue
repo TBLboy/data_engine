@@ -143,7 +143,7 @@ const reasonTagType = (category: string) => {
           <p>按批次汇总 QC 结果、失败原因、审核人表现与关键审计事件，满足复盘、导出和责任追踪。</p>
         </div>
         <div class="toolbar-actions">
-          <el-select v-model="selectedBatchId" style="width: 240px" @change="handleBatchChange">
+          <el-select v-model="selectedBatchId" style="width: 240px" class="qc-select" @change="handleBatchChange">
             <el-option v-for="item in batchOptions" :key="item.id" :label="item.name" :value="item.id" />
           </el-select>
           <el-input v-model="keyword" placeholder="搜索 operator / episode / action" style="width: 320px" />
@@ -195,7 +195,7 @@ const reasonTagType = (category: string) => {
         <el-col :span="24">
           <el-card shadow="never" class="qc-card" v-loading="reportLoading">
             <template #header>批次级汇总报表</template>
-            <el-table :data="batchReports" stripe height="320">
+            <el-table :data="batchReports" stripe class="qc-table" height="320">
               <el-table-column prop="batchName" label="批次" min-width="220" />
               <el-table-column prop="qcStatus" label="状态" width="110" />
               <el-table-column prop="dispatchMode" label="派发模式" width="110" />
@@ -216,7 +216,7 @@ const reasonTagType = (category: string) => {
         <el-col :span="10">
           <el-card shadow="never" class="qc-card" v-loading="reportLoading">
             <template #header>失败原因分布</template>
-            <el-table :data="topReasons" stripe height="300">
+            <el-table :data="topReasons" stripe class="qc-table" height="300">
               <el-table-column prop="reason" label="原因码" min-width="160" />
               <el-table-column label="层级" width="110">
                 <template #default="{ row }">
@@ -233,7 +233,7 @@ const reasonTagType = (category: string) => {
         <el-col :span="14">
           <el-card shadow="never" class="qc-card" v-loading="reportLoading">
             <template #header>审核人工作量与质量</template>
-            <el-table :data="reviewers" stripe height="300">
+            <el-table :data="reviewers" stripe class="qc-table" height="300">
               <el-table-column prop="name" label="审核人" min-width="140" />
               <el-table-column prop="assigned" label="待处理" width="100" />
               <el-table-column prop="done" label="已完成" width="100" />
@@ -263,7 +263,7 @@ const reasonTagType = (category: string) => {
         <el-col :span="14">
           <el-card shadow="never" class="qc-card" v-loading="loading">
             <template #header>系统审计事件</template>
-            <el-table :data="filteredAuditRecords" stripe height="480">
+            <el-table :data="filteredAuditRecords" stripe class="qc-table" height="480">
               <el-table-column prop="time" label="时间" width="170" />
               <el-table-column prop="operator" label="操作人" width="110" />
               <el-table-column prop="action" label="动作" width="140" />
@@ -278,7 +278,7 @@ const reasonTagType = (category: string) => {
         <el-col :span="24">
           <el-card shadow="never" class="qc-card" v-loading="loading || reportLoading">
             <template #header>最近 Episode 明细</template>
-            <el-table :data="recentEpisodes" stripe height="320">
+            <el-table :data="recentEpisodes" stripe class="qc-table" height="320">
               <el-table-column prop="batchName" label="批次" min-width="220" />
               <el-table-column prop="id" label="Episode" min-width="160" />
               <el-table-column prop="reviewer" label="审核人" width="120" />

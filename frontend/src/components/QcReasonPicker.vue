@@ -24,7 +24,7 @@ const reasonGroups = [
 
     <template v-if="result === 'fail'">
       <div class="field-label">主原因码（Fail 必填，只能一个）</div>
-      <el-select v-model="primaryReason" placeholder="选择主原因码" style="width: 100%">
+      <el-select v-model="primaryReason" class="qc-select" placeholder="选择主原因码" style="width: 100%">
         <el-option-group v-for="group in reasonGroups" :key="group.label" :label="group.label">
           <el-option v-for="item in group.options" :key="item" :label="item" :value="item" />
         </el-option-group>
@@ -32,7 +32,7 @@ const reasonGroups = [
     </template>
 
     <div class="field-label">次原因码（可选，最多 3 个）</div>
-    <el-select v-model="secondaryReasons" multiple :multiple-limit="3" placeholder="记录轻微问题或伴随问题" style="width: 100%">
+    <el-select v-model="secondaryReasons" class="qc-select" multiple :multiple-limit="3" placeholder="记录轻微问题或伴随问题" style="width: 100%">
       <el-option-group v-for="group in reasonGroups" :key="group.label" :label="group.label">
         <el-option v-for="item in group.options" :key="item" :label="item" :value="item" />
       </el-option-group>

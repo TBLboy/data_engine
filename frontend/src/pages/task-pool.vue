@@ -74,7 +74,7 @@ const lockLabel = (task: TaskPoolPayload['qcTasks'][number]) => {
           <el-select v-model="selectedBatchId" filterable class="qc-select batch-select" style="width: 220px" :loading="loading">
             <el-option v-for="b in batches" :key="b.id" :label="b.name" :value="b.id" />
           </el-select>
-          <router-link to="/dashboard"><el-button type="primary" plain>返回工作台派发</el-button></router-link>
+          <router-link to="/dashboard"><el-button type="primary" plain class="qc-btn-plain">返回工作台派发</el-button></router-link>
         </div>
       </section>
 

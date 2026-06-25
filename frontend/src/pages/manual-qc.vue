@@ -325,7 +325,7 @@ const submit = async () => {
 
         <el-alert v-if="error" type="error" :closable="false" :title="error" />
 
-        <el-card shadow="never" class="qc-stage-card">
+        <el-card shadow="never" class="qc-card qc-stage-card">
           <div class="qc-stage-header">
             <div class="stage-tabs">
               <span class="active">{{ selectedVariant === 'rgb' ? 'RGB 三相机' : 'Depth 辅助' }}</span>
@@ -366,7 +366,7 @@ const submit = async () => {
           </div>
         </el-card>
 
-        <el-card shadow="never" class="timeline-card premium-card">
+        <el-card shadow="never" class="qc-card timeline-card">
           <div class="timeline-header">
             <div>
               <strong>Frame {{ currentFrame }} / {{ totalFrames }}</strong>
@@ -419,7 +419,7 @@ const submit = async () => {
       </section>
 
       <aside class="manual-side sticky-side">
-        <el-card shadow="never" class="premium-card score-card">
+        <el-card shadow="never" class="qc-card score-card">
           <template #header>Episode 质量评分</template>
           <div class="score-ring"><strong>{{ metricCards[0]?.value || '--' }}</strong><span>{{ metricCards[0]?.label || 'Q_motion' }}</span></div>
           <div class="metric-list compact-list">

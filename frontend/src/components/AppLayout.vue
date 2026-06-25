@@ -20,7 +20,7 @@ const menuItems = [
   { path: '/dashboard', label: '工作台', icon: Monitor },
   { path: '/database', label: '数据总库', icon: Files },
   { path: '/task-types', label: '任务类型管理', icon: CollectionTag, roles: ['admin', 'qc_manager'] },
-  { path: '/task-pool', label: '任务明细中心', icon: VideoCamera },
+  { path: '/task-pool', label: '人工质检入口', icon: VideoCamera },
   { path: '/qc-history', label: '历史审计', icon: Finished },
   { path: '/accounts', label: '账号管理', icon: Setting, roles: ['admin', 'qc_manager'] }
 ]
@@ -76,7 +76,7 @@ const logout = async () => {
         </div>
         <div class="topbar-actions">
           <el-tag type="success" effect="light">LAN 内网访问</el-tag>
-          <el-button type="primary" plain @click="router.push('/dashboard')">任务派发</el-button>
+          <el-button type="primary" plain class="qc-btn-plain" @click="router.push('/dashboard')">任务派发</el-button>
           <el-button plain @click="logout">退出登录</el-button>
           <el-avatar>{{ session.user?.avatar ?? '?' }}</el-avatar>
           <div class="user-meta">

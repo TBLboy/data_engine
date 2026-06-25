@@ -187,9 +187,9 @@ const applyBatchAssignment = async () => {
           <div class="command-title">今日派发指挥板</div>
           <div class="command-number">{{ currentTodoCount }}</div>
           <div class="command-subtitle">当前任务类型下仍待处理任务</div>
-          <el-progress :percentage="totalSampled ? Math.round((totalCompleted / totalSampled) * 100) : 0" :stroke-width="12" />
+          <el-progress class="qc-progress" :percentage="totalSampled ? Math.round((totalCompleted / totalSampled) * 100) : 0" :stroke-width="12" />
           <div class="hero-actions command-actions">
-            <el-select v-model="selectedTaskType" filterable size="large" style="width: 260px" :loading="loading" @change="onTaskTypeChange">
+            <el-select v-model="selectedTaskType" filterable class="qc-select" size="large" style="width: 260px" :loading="loading" @change="onTaskTypeChange">
               <el-option v-for="item in taskTypes" :key="item.id" :label="item.name" :value="item.id" />
             </el-select>
             <router-link v-if="filteredQcTasks[0]" :to="`/manual-qc/${filteredQcTasks[0].episodeId}`"><el-button type="primary" size="large">进入 QC 工作台</el-button></router-link>
@@ -267,7 +267,7 @@ const applyBatchAssignment = async () => {
               <el-divider />
 
               <div class="field-label">批量派发</div>
-              <el-select v-model="selectedReviewerIds" multiple filterable placeholder="选择审核员" style="width: 100%;" @change="syncCustomAssignmentCounts">
+              <el-select v-model="selectedReviewerIds" multiple class="qc-select" filterable placeholder="选择审核员" style="width: 100%;" @change="syncCustomAssignmentCounts">
                 <el-option v-for="reviewer in reviewerAccounts" :key="reviewer.id" :label="reviewer.name" :value="reviewer.id" />
               </el-select>
 
@@ -297,7 +297,7 @@ const applyBatchAssignment = async () => {
             <template #header>审核员工作量</template>
             <div v-for="reviewer in reviewerWorkloads" :key="reviewer.name" class="reviewer-row">
               <div><strong>{{ reviewer.name }}</strong><span>平均 {{ reviewer.avgMinutes }} min / episode</span></div>
-              <el-progress :percentage="reviewer.assigned + reviewer.done ? Math.round((reviewer.done / (reviewer.assigned + reviewer.done)) * 100) : 0" />
+              <el-progress class="qc-progress" :percentage="reviewer.assigned + reviewer.done ? Math.round((reviewer.done / (reviewer.assigned + reviewer.done)) * 100) : 0" />
               <b>{{ reviewer.done }}/{{ reviewer.assigned + reviewer.done }}</b>
             </div>
           </el-card>

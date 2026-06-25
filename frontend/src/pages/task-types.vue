@@ -280,7 +280,7 @@ const detachBatch = async (batch: BatchSummary) => {
               <el-descriptions-item label="批次数">{{ selectedTaskType?.totalBatches ?? 0 }}</el-descriptions-item>
             </el-descriptions>
 
-            <el-table :data="selectedBatches" stripe height="500" style="margin-top: 18px;">
+            <el-table :data="selectedBatches" stripe class="qc-table" height="500" style="margin-top: 18px;">
               <el-table-column prop="name" label="批次" min-width="220" />
               <el-table-column prop="episodeCount" label="Episodes" width="90" />
               <el-table-column prop="sampledEpisodeCount" label="已抽样" width="90" />
@@ -333,7 +333,7 @@ const detachBatch = async (batch: BatchSummary) => {
     </el-dialog>
 
     <el-dialog v-model="attachDialogVisible" title="从待分类加入批次" width="720px" destroy-on-close>
-      <el-table :data="unclassifiedBatches" height="420" @selection-change="(rows: BatchSummary[]) => { selectedCandidateBatchIds = rows.map((row) => row.id) }">
+      <el-table :data="unclassifiedBatches" class="qc-table" height="420" @selection-change="(rows: BatchSummary[]) => { selectedCandidateBatchIds = rows.map((row) => row.id) }">
         <el-table-column type="selection" width="48" />
         <el-table-column prop="name" label="批次" min-width="260" />
         <el-table-column prop="episodeCount" label="Episodes" width="90" />
