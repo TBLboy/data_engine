@@ -761,6 +761,65 @@ def manual_qc_context(episode_id: str, db: Session = Depends(get_db), current_us
     return manual_qc_context_payload(db, episode_id, current_user)
 
 
+@router.get('/episodes/{episode_id}/telemetry-curve')
+def telemetry_curve(episode_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """返回 qpos/actions 时序数据用于前端遥操作曲线图."""
+    from app.services.payloads import _lookup_inventory_for_episode, _read_minio_npz, _read_minio_json
+    import numpy as np
+
+    inventory_row = _lookup_inventory_for_episode(db, episode_id)
+    if not inventory_row:
+        raise HTTPException(status_code=404, detail='Episode not found')
+    inventory, bucket = inventory_row
+
+    object_rows = db.query(EpisodeObject).filter(
+        EpisodeObject.episode_inventory_id == inventory.id,
+        EpisodeObject.object_scope == 'processed',
+        EpisodeObject.object_role.in_(['telemetry_npz', 'metadata']),
+    ).all()
+    obj_map = {item.object_role: item.object_key for item in object_rows}
+    telemetry_key = obj_map.get('telemetry_npz')
+    if not telemetry_key:
+        raise HTTPException(status_code=404, detail='Telemetry data not available')
+
+    with _read_minio_npz(bucket, telemetry_key) as telemetry:
+        ts = telemetry['timestamps'].astype(np.float64)
+        t_rel = (ts - ts[0]).tolist()
+        qpos = telemetry['qpos'].astype(np.float64)
+        actions = telemetry['actions'].astype(np.float64)
+
+        # Auto-detect arm/hand dims
+        qpos_range = np.max(qpos, axis=0) - np.min(qpos, axis=0)
+        active = qpos_range > 1e-8
+        qpos_active = np.max(np.abs(qpos[:, active]), axis=0)
+        arm_mask = qpos_active <= 3.5
+        hand_mask = ~arm_mask
+        active_idx = np.where(active)[0]
+        arm_dims = active_idx[arm_mask].tolist()
+        hand_dims = active_idx[hand_mask].tolist()
+
+        # Downsample if > 500 frames
+        n = len(t_rel)
+        stride = max(1, n // 500)
+        idx = list(range(0, n, stride))
+        t_sampled = [t_rel[i] for i in idx]
+
+        qpos_arm = qpos[:, arm_dims][idx, :].tolist() if arm_dims else []
+        qpos_hand = qpos[:, hand_dims][idx, :].tolist() if hand_dims else []
+        actions_arm = actions[:, arm_dims][idx, :].tolist() if arm_dims else []
+        actions_hand = actions[:, hand_dims][idx, :].tolist() if hand_dims else []
+
+    return {
+        'timestamps': t_sampled,
+        'armDims': len(arm_dims),
+        'handDims': len(hand_dims),
+        'qposArm': qpos_arm,
+        'qposHand': qpos_hand,
+        'actionsArm': actions_arm,
+        'actionsHand': actions_hand,
+    }
+
+
 def _get_episode_inventory_object_or_404(db: Session, episode_id: str, object_id: str) -> tuple[EpisodeObject, EpisodeInventory]:
     episode_object = db.query(EpisodeObject).filter(EpisodeObject.id == int(object_id)).first()
     if not episode_object:

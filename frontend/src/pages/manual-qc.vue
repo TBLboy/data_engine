@@ -5,9 +5,12 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
 import QcReasonPicker from '../components/QcReasonPicker.vue'
-import { claimManualQc, fetchManualQcContext, refreshManualQcMedia, releaseManualQc, submitManualQc, type ManualQcContext } from '../api/client'
+import { claimManualQc, fetchManualQcContext, fetchTelemetryCurve, refreshManualQcMedia, releaseManualQc, submitManualQc, type ManualQcContext, type TelemetryCurve } from '../api/client'
 import { useSessionStore } from '../stores/session'
 import { triggerCelebration } from '../composables/useCelebration'
+import { Chart, registerables } from 'chart.js'
+
+Chart.register(...registerables)
 
 const route = useRoute()
 const router = useRouter()
@@ -31,6 +34,10 @@ const celebrationDone = ref(false)
 const videoRefs = ref<Record<string, HTMLVideoElement | null>>({})
 const isReviewer = computed(() => session.user?.role === 'reviewer')
 const isManager = computed(() => session.user?.role === 'admin' || session.user?.role === 'qc_manager')
+const curveData = ref<TelemetryCurve | null>(null)
+const curveMode = ref<'arm' | 'hand'>('arm')
+const chartCanvas = ref<HTMLCanvasElement | null>(null)
+let chartInstance: Chart | null = null
 let playbackLoopId: number | null = null
 
 const episodeId = computed(() => String(route.params.id))
@@ -149,11 +156,84 @@ const loadContext = async () => {
     stopPlaybackLoop()
     await nextTick()
     await syncVideosToFrame()
+    loadCurveData()
   } catch (err) {
     error.value = formatError(err, '加载人工质检上下文失败')
   } finally {
     loading.value = false
   }
+}
+
+const destroyChart = () => {
+  if (chartInstance) {
+    chartInstance.destroy()
+    chartInstance = null
+  }
+}
+
+const loadCurveData = async () => {
+  destroyChart()
+  try {
+    curveData.value = await fetchTelemetryCurve(episodeId.value)
+    await nextTick()
+    renderChart()
+  } catch (_) {
+    curveData.value = null
+  }
+}
+
+const renderChart = () => {
+  if (!chartCanvas.value || !curveData.value) return
+  const cd = curveData.value
+  const isArm = curveMode.value === 'arm'
+  const qpos = isArm ? cd.qposArm : cd.qposHand
+  const actions = isArm ? cd.actionsArm : cd.actionsHand
+  const dimCount = isArm ? cd.armDims : cd.handDims
+  if (!dimCount || !qpos.length) return
+
+  const colors = ['#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#909399', '#00D4AA', '#B37FEB', '#FF85C0', '#7EC8E3', '#FFD700', '#CD5C5C', '#8FBC8F']
+  const datasets: any[] = []
+  for (let d = 0; d < dimCount; d++) {
+    const c = colors[d % colors.length]
+    datasets.push({
+      label: `J${d + 1} 实际`,
+      data: qpos.map((row, i) => ({ x: cd.timestamps[i], y: row[d] })),
+      borderColor: c,
+      backgroundColor: 'transparent',
+      borderWidth: 1.5,
+      pointRadius: 0,
+      tension: 0.1,
+    })
+    datasets.push({
+      label: `J${d + 1} 目标`,
+      data: actions.map((row, i) => ({ x: cd.timestamps[i], y: row[d] })),
+      borderColor: c,
+      backgroundColor: 'transparent',
+      borderWidth: 1,
+      borderDash: [4, 3],
+      pointRadius: 0,
+      tension: 0.1,
+    })
+  }
+
+  chartInstance = new Chart(chartCanvas.value, {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      scales: {
+        x: { type: 'linear', title: { display: true, text: '时间 (s)' } },
+        y: { title: { display: true, text: isArm ? '位置 (rad)' : '位置 (0-255)' } }
+      },
+      plugins: {
+        legend: { display: dimCount <= 6, position: 'bottom', labels: { boxWidth: 12, padding: 4, font: { size: 10 } } },
+        tooltip: { mode: 'index', intersect: false },
+      },
+      interaction: { mode: 'nearest', axis: 'x', intersect: false },
+    }
+  })
 }
 
 const refreshMedia = async () => {
@@ -267,8 +347,13 @@ watch(selectedVariant, async () => {
   await syncVideosToFrame()
 })
 
+watch(curveMode, () => {
+  renderChart()
+})
+
 onBeforeUnmount(() => {
   pauseAll()
+  destroyChart()
 })
 
 const submit = async () => {
@@ -413,6 +498,27 @@ const submit = async () => {
             <div v-for="segment in timelineSegments" :key="segment.label" class="segment-chip" :class="segment.level">
               {{ segment.start }}-{{ segment.end }}s · {{ segment.label }}
             </div>
+          </div>
+        </el-card>
+
+        <el-card shadow="never" class="qc-card" style="margin-top: 18px">
+          <template #header>
+            <div style="display:flex; justify-content:space-between; align-items:center">
+              <span>遥操作曲线联动视图</span>
+              <el-radio-group v-model="curveMode" size="small" :disabled="!curveData">
+                <el-radio-button label="arm" :disabled="!curveData?.armDims">机械臂 ({{ curveData?.armDims || 0 }} 维)</el-radio-button>
+                <el-radio-button label="hand" :disabled="!curveData?.handDims">灵巧手 ({{ curveData?.handDims || 0 }} 维)</el-radio-button>
+              </el-radio-group>
+            </div>
+          </template>
+          <div v-if="!curveData" style="height: 200px; display:flex; align-items:center; justify-content:center; color: #909399; font-size: 13px">
+            加载关节位置数据中...
+          </div>
+          <div v-else style="height: 320px; position: relative">
+            <canvas ref="chartCanvas"></canvas>
+          </div>
+          <div style="font-size: 11px; color: #909399; margin-top: 6px">
+            实线 = 实际关节位置 (qpos)；虚线 = 目标关节位置 (actions)。不同颜色代表不同关节维度。
           </div>
         </el-card>
 

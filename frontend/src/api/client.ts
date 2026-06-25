@@ -451,3 +451,15 @@ export async function updateL3Params(params: Partial<L3Params>) {
     body: JSON.stringify(params)
   })
 }
+
+// Telemetry curve data
+export interface TelemetryCurve {
+  timestamps: number[]
+  armDims: number; handDims: number
+  qposArm: number[][]; qposHand: number[][]
+  actionsArm: number[][]; actionsHand: number[][]
+}
+
+export async function fetchTelemetryCurve(episodeId: string) {
+  return request<TelemetryCurve>(`/episodes/${episodeId}/telemetry-curve`)
+}
