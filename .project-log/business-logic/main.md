@@ -80,6 +80,14 @@ A → B1 + B2 + B3 → C → F → D → E
 - **D: ready（可按现有业务规则开始实现）**
 - E: 待 D 完成后整合交付
 
+## L3 V1 Execution Snapshot
+
+- L3 的 V1 自动指标现已细化到实现级：P0 必做 6 项（LDLJ、Dead Actions、Action Saturation、Static Detection、Timestamp Regularity、Qpos-Action Tracking Error）+ P1 增强 2 项（Per-finger Gripper Chatter、Joint Effort）
+- 统一输入源：仅 `processed/telemetry.npz`
+- 统一子系统约束：arm_dims（弧度）与 hand_dims（0~255）分开计算；手部先归一化到 `[0,1]`
+- Timeline 只由可定位的异常产出：`同步异常`、`跟踪误差`、`停滞`、`动作饱和`、`手指颤振`
+- manual QC 自动指标区只承载 L3；L2/L4 继续人工审核
+
 ## Notes
 
 - 当前已不再缺核心业务规则，剩余工作重心转向代码实现
@@ -88,3 +96,4 @@ A → B1 + B2 + B3 → C → F → D → E
 - `database` 页面后续若进入大规模远程使用，性能优化优先级应遵循：先后端分页/筛选，再前端短时缓存；`KeepAlive` 或单纯前端全量分页都不能作为长期主方案
 - 任务派发后续正式形态应采用”批次级生成待派发任务池 + reviewer 批量分配”模式，而不是逐条 `episode` 手工指定审核员；若重新生成派发任务，系统必须切换到新的活跃派发版本并退役旧版本未开始任务，避免旧 full 任务继续污染当前 sampled 视图
 - 角色视图分离后的页面路由规则：登录后 `reviewer` → `/reviewer`（个人看板）、`admin/qc_manager` → `/dashboard`（派发工作台）；`manual-qc` 是共用页面，但 reviewer 在流水线模式下提交后自动跳转下一条，admin 模式下不自动跳转
+- L3 方案已正式收口到 V1 可执行级：L1 继续由 TeleDex 平台负责；L2（视觉质量）与 L4（任务完成度）保持人工审核；L3（遥操作轨迹质量）采用 Forge 主方案 + TeleDex/灵巧手专项自定义指标。V1 首版自动指标分档为 P0 必做 6 项（LDLJ、Dead Actions、Action Saturation、Static Detection、Timestamp Regularity、Qpos-Action Tracking Error）+ P1 增强 2 项（Per-finger Gripper Chatter、Joint Effort）；P2 的 SPARC / Action Entropy / State-Conditioned Variance / 跨-episode consistency 指标暂缓。manual QC 的自动指标区只承载 L3，不承担 L2/L4 自动判定

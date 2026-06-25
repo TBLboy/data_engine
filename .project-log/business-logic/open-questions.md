@@ -82,6 +82,21 @@
 
 ## Resolved Questions
 
+
+### Q-20260625-015（Resolved 2026-06-25）
+
+- Related node: D
+- Related edge: B->D
+- Question: 四层 QC 体系在 V1 中到底如何做人机分工？尤其是 L2 / L3 / L4 哪些由人审，哪些由程序算？
+- Resolution: 已确定 V1 分工：L1 硬性门控由上游 TeleDex 平台负责；L2 视觉质量（模糊/过曝/遮挡/抖动/深度异常/动作流程完整性）由质检员人工判断；L3 遥操作轨迹质量由程序自动计算；L4 任务完成度由质检员人工判断。manual QC 页面中的自动指标区只呈现 L3，不自动判定 L2/L4
+
+### Q-20260625-016（Resolved 2026-06-25）
+
+- Related node: D
+- Related edge: B->D
+- Question: L3 遥操作轨迹质量在 V1 中最终采用哪套方案和哪些指标？
+- Resolution: 已确定采用 Forge 作为主方案，并补少量 TeleDex/灵巧手专项自定义指标。V1 分档为 P0 必做 6 项（LDLJ、Dead Actions、Action Saturation、Static Detection、Timestamp Regularity、Qpos-Action Tracking Error）+ P1 增强 2 项（Per-finger Gripper Chatter、Joint Effort）；P2 的 SPARC / Action Entropy / 跨 episode consistency 等指标暂缓。输入统一来自 `processed/telemetry.npz`，hand_dims 先归一化到 [0,1] 后再参与手部相关指标计算
+
 ### Q-20260623-006（Resolved 2026-06-23）
 
 - Related node: F

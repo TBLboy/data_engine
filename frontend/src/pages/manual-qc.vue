@@ -417,16 +417,7 @@ const submit = async () => {
         </el-card>
 
         <el-row :gutter="18">
-          <el-col :span="14">
-            <el-card shadow="never" class="qc-card">
-              <template #header>遥测曲线联动视图</template>
-              <div class="telemetry-chart advanced">
-                <div v-for="i in 42" :key="i" class="bar" :class="{ alert: i > 24 && i < 30 }" :style="{ height: `${30 + ((i * 17) % 90)}px` }" />
-              </div>
-              <div class="chart-legend"><span>qpos/actions tracking error</span><span>红色段：tracking_error 超阈值</span></div>
-            </el-card>
-          </el-col>
-          <el-col :span="10">
+          <el-col :span="24">
             <el-card shadow="never" class="qc-card">
               <template #header>异常段核查清单</template>
               <el-check-tag v-for="segment in timelineSegments" :key="segment.label" :checked="segment.level === 'warn'" :type="segment.level === 'bad' ? 'danger' : 'warning'">
