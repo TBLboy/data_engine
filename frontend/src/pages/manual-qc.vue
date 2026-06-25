@@ -35,6 +35,7 @@ const videoRefs = ref<Record<string, HTMLVideoElement | null>>({})
 const isReviewer = computed(() => session.user?.role === 'reviewer')
 const isManager = computed(() => session.user?.role === 'admin' || session.user?.role === 'qc_manager')
 const curveData = ref<TelemetryCurve | null>(null)
+const curveError = ref('')
 const curveMode = ref<'arm' | 'hand'>('arm')
 const chartCanvas = ref<HTMLCanvasElement | null>(null)
 let chartInstance: Chart | null = null
@@ -173,12 +174,14 @@ const destroyChart = () => {
 
 const loadCurveData = async () => {
   destroyChart()
+  curveError.value = ''
   try {
     curveData.value = await fetchTelemetryCurve(episodeId.value)
     await nextTick()
     renderChart()
-  } catch (_) {
+  } catch (err) {
     curveData.value = null
+    curveError.value = '遥操作曲线数据暂时不可用'
   }
 }
 
@@ -511,7 +514,10 @@ const submit = async () => {
               </el-radio-group>
             </div>
           </template>
-          <div v-if="!curveData" style="height: 200px; display:flex; align-items:center; justify-content:center; color: #909399; font-size: 13px">
+          <div v-if="curveError" style="height: 200px; display:flex; align-items:center; justify-content:center; color: #909399; font-size: 13px">
+            {{ curveError }}
+          </div>
+          <div v-else-if="!curveData" style="height: 200px; display:flex; align-items:center; justify-content:center; color: #909399; font-size: 13px">
             加载关节位置数据中...
           </div>
           <div v-else style="height: 320px; position: relative">
@@ -661,5 +667,10 @@ const submit = async () => {
   margin-top: 8px;
   color: #94a3b8;
   font-size: 18px;
+}
+
+.lock-panel {
+  position: relative;
+  z-index: 2;
 }
 </style>
