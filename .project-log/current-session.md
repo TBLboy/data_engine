@@ -116,6 +116,8 @@
   - [HIGH] PermissionError 返回 HTTP 500→修复为 403（新增全局 exception handler）
   - [LOW] 清理 payloads.py 中已废弃的 `_metric_level`/`_window_to_segment`/`_merge_segments`（~70行）
   - API 级验证：reviewer 越权返回 403、admin 全端点 200、L3 params 31 键完整、Q_motion weights 和=1.00、telemetry curve 数据结构正确
+  - [MEDIUM] telemetry curve 加错误状态（替代永久 loading）、lock panel 加 z-index 防侧边栏遮挡
+  - Reviewer 浏览器审计 8 项发现已处理；Admin 浏览器审计 10 项发现中 settings 页面已验证可用、账号创建标签已确认存在
 
 ## Current Risks
 
