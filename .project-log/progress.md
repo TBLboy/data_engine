@@ -1,3 +1,23 @@
+## 2026-06-25 (Manual QC metric panel: scrollable + severity-sorted, task-type search)
+
+- Type: implementation
+- Status: validated by frontend build, production compose redeploy, and browser verification
+- Importance: medium
+- Reusable: yes
+- Objective: 优化人工质检评分面板的子评分展示和任务类型管理页的列表浏览体验
+- Work completed:
+  - manual QC 评分区域新增 `sortedMetricCards` computed，按严重程度排序（bad 红色 → warn 黄色 → good 绿色），让质检员优先看到问题指标
+  - 子评分列表外包 `metric-scroll` 容器，`max-height: 420px`，超出自动滚动，后期扩展条目不受高度限制
+  - 任务类型管理页列表新增搜索框（按名称/描述过滤）和滚动容器（`max-height: 480px`），支持大批量任务类型高效定位
+- Files changed:
+  - `frontend/src/pages/manual-qc.vue`
+  - `frontend/src/pages/task-types.vue`
+  - `backend/app/services/payloads.py` (temporary test metrics, reverted)
+- Verification:
+  - 生产容器 backend + frontend 重建部署后，进入 manual QC 确认滚动条和排序生效
+- Next steps:
+  - 后续如需扩展子评分条目，直接在 backend `_metric_cards_from_manifest` 中添加即可，前端自动排序+滚动
+
 ## 2026-06-25 (UI component abstraction: unified appearance system)
 
 - Type: refactoring
