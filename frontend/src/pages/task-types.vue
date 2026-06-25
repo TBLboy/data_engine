@@ -161,8 +161,8 @@ const confirmDeleteTaskType = async () => {
   if (!selectedTaskType.value || !canEditSelected.value) return
   try {
     await ElMessageBox.confirm(
-      `删除后，该任务类型下的 ${selectedBatchCount.value} 个批次会自动回到“待分类”，是否继续？`,
-      '删除任务类型',
+      `停用后，该任务类型下的 ${selectedBatchCount.value} 个批次会自动回到“待分类”，是否继续？`,
+      '停用任务类型',
       { type: 'warning' }
     )
   } catch {
@@ -172,11 +172,11 @@ const confirmDeleteTaskType = async () => {
   saving.value = true
   try {
     await deleteTaskType(selectedTaskType.value.id)
-    ElMessage.success('任务类型已删除，关联批次已回到待分类')
+    ElMessage.success('任务类型已停用，关联批次已回到待分类')
     selectedTaskTypeId.value = 'task_type:unclassified'
     await Promise.all([loadTaskTypes(), loadSelectedDetail(), loadUnclassifiedPool()])
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : '删除任务类型失败')
+    ElMessage.error(err instanceof Error ? err.message : '停用任务类型失败')
   } finally {
     saving.value = false
   }
@@ -236,7 +236,7 @@ const detachBatch = async (batch: BatchSummary) => {
         <div class="toolbar-actions">
           <el-button type="primary" @click="openCreateDialog">新建任务类型</el-button>
           <el-button :disabled="!canEditSelected" @click="openEditDialog">编辑</el-button>
-          <el-button :disabled="!canEditSelected" @click="confirmDeleteTaskType">删除</el-button>
+          <el-button :disabled="!canEditSelected" @click="confirmDeleteTaskType">停用</el-button>
         </div>
       </section>
 

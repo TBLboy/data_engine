@@ -4,7 +4,7 @@ import { useSessionStore } from '../stores/session'
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/', redirect: '/' },
+    { path: '/', redirect: '/login' },
     { path: '/login', name: 'login', component: () => import('../pages/login.vue'), meta: { public: true } },
     { path: '/dashboard', name: 'dashboard', component: () => import('../pages/dashboard.vue'), meta: { roles: ['admin', 'qc_manager', 'viewer'] } },
     { path: '/reviewer', name: 'reviewer', component: () => import('../pages/reviewer-dashboard.vue'), meta: { roles: ['reviewer'] } },
@@ -45,10 +45,6 @@ router.beforeEach(async (to) => {
 
   const allowedRoles = Array.isArray(to.meta.roles) ? to.meta.roles : []
   if (allowedRoles.length && !allowedRoles.includes(session.user?.role ?? 'viewer')) {
-    return defaultRoute(session.user?.role ?? 'viewer')
-  }
-
-  if (to.path === '/') {
     return defaultRoute(session.user?.role ?? 'viewer')
   }
 

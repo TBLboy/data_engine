@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
 import { assignBatchTasks, fetchDashboard, submitDispatchPlan, type DashboardPayload } from '../api/client'
 import type { BatchDispatchAssignRequest, DispatchMode } from '../types/qc'
@@ -30,7 +30,8 @@ const loadDashboard = async () => {
     const data = await fetchDashboard()
     payload.value = data
     if (!selectedTaskType.value && data.taskTypes.length) {
-      selectedTaskType.value = data.taskTypes[0].id
+      const withWork = data.taskTypes.find((item) => (item.totalBatches ?? 0) > 0)
+      selectedTaskType.value = (withWork ?? data.taskTypes[0]).id
     }
     if (!selectedBatchId.value && data.batches.length) {
       selectedBatchId.value = data.batches[0].id
@@ -114,6 +115,18 @@ const statusType = (status: string) => {
 
 const applyDispatchPlan = async () => {
   if (!selectedBatch.value) return
+  const modeLabel = dispatchForm.dispatchMode === 'full'
+    ? '全量派发（整批）'
+    : `按 ${dispatchForm.samplingRatio}% 抽检`
+  try {
+    await ElMessageBox.confirm(
+      `将对批次「${selectedBatch.value.name}」${modeLabel}生成待派发任务，确认继续？`,
+      '确认生成派发',
+      { confirmButtonText: '确认生成', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    return
+  }
   savingDispatchPlan.value = true
   try {
     await submitDispatchPlan(selectedBatch.value.id, {
@@ -250,7 +263,8 @@ const applyBatchAssignment = async () => {
             <div class="dispatch-panel" v-if="selectedBatch && selectedDispatchPreview">
               <div class="rule-item"><strong>当前批次</strong><span>{{ selectedBatch.name }}</span></div>
               <div class="rule-item"><strong>活跃派发版本</strong><span>#{{ selectedDispatchPreview.activeDispatchGeneration }}</span></div>
-              <div class="rule-item"><strong>待派发</strong><span>{{ selectedDispatchPreview.pendingAssignCount }} 条</span></div>
+              <div class="rule-item"><strong>待派发</strong><span :style="selectedDispatchPreview.pendingAssignCount ? 'color:#e6a23c;font-weight:700' : ''">{{ selectedDispatchPreview.pendingAssignCount }} 条</span></div>
+              <div class="rule-item" v-if="selectedDispatchPreview.unsampledEpisodeCount > 0"><strong>未纳入派发</strong><span style="color:#e6a23c;font-weight:700">{{ selectedDispatchPreview.unsampledEpisodeCount }} 集</span></div>
               <div class="rule-item"><strong>已退役旧任务</strong><span>{{ selectedDispatchPreview.supersededTaskCount }} 条</span></div>
 
               <el-divider />
@@ -260,7 +274,7 @@ const applyBatchAssignment = async () => {
                 <el-radio value="sampled">百分比抽检</el-radio>
                 <el-radio value="full">全量派发</el-radio>
               </el-radio-group>
-              <el-input-number v-if="dispatchForm.dispatchMode === 'sampled'" v-model="dispatchForm.samplingRatio" :min="5" :max="100" :step="5" size="small" style="width: 140px; margin-top: 12px;" />
+              <el-input-number v-show="dispatchForm.dispatchMode === 'sampled'" v-model="dispatchForm.samplingRatio" :min="5" :max="100" :step="5" size="small" style="width: 140px; margin-top: 12px;" />
               <el-input v-model="dispatchForm.note" placeholder="生成备注（可选）" size="small" style="margin-top: 12px;" />
               <el-button type="primary" :loading="savingDispatchPlan" style="margin-top: 12px;" @click="applyDispatchPlan">生成待派发任务</el-button>
 

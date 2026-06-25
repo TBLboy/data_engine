@@ -136,6 +136,14 @@ def _task_type_batch_query(db: Session, task_type_id: str):
     return _batch_query(db).filter(Batch.task_type_id == task_type_id)
 
 
+def task_type_active_counts(db: Session, task_type_id: str) -> tuple[int, int]:
+    """业务口径的任务类型批次/集数：仅统计在 lists 控制面有 active 记录的批次，
+    与 database/总库列表一致，排除无 ListRecord 的历史残留批次（如 raw_data）。"""
+    batch_count = _task_type_batch_query(db, task_type_id).count()
+    episode_count = _active_episode_query(db).filter(Batch.task_type_id == task_type_id).count()
+    return batch_count, episode_count
+
+
 def serialize_batch(db: Session, batch: Batch, storage_locations: dict[str, tuple[str, str]] | None = None) -> dict:
     coverage = round((batch.sampled_episode_count / batch.episode_count) * 100) if batch.episode_count else 0
     completion = round((batch.completed_sample_count / batch.sampled_episode_count) * 100) if batch.sampled_episode_count else 0
@@ -707,7 +715,7 @@ def reason_stats_payload_from_db(db: Session) -> list[dict]:
 def history_payload(db: Session) -> dict:
     revisions = db.query(QcReviewRevision).join(Episode, QcReviewRevision.episode_id == Episode.id).join(Batch, Episode.batch_id == Batch.id).filter(Batch.is_active == True).order_by(QcReviewRevision.time.desc(), QcReviewRevision.revision_no.desc()).all()
     audits = db.query(AuditEvent).order_by(AuditEvent.time.desc()).all()
-    episodes = db.query(Episode).join(Batch, Episode.batch_id == Batch.id).filter(Batch.is_active == True).order_by(Episode.updated_at.desc()).all()
+    episodes = _active_episode_query(db).order_by(Episode.updated_at.desc()).all()
     batches = _batch_query(db).options(joinedload(Batch.episodes)).order_by(Batch.imported_at.desc()).all()
     return {
         'auditRecords': [serialize_audit(item) for item in audits],
@@ -725,10 +733,10 @@ def _latest_activity_time(batch: Batch) -> datetime | None:
 
 
 def build_history_report_payload(db: Session, selected_batch_id: str = 'all') -> dict:
-    batches = db.query(Batch).order_by(Batch.imported_at.desc()).all()
+    batches = _batch_query(db).order_by(Batch.imported_at.desc()).all()
     revisions = db.query(QcReviewRevision).order_by(QcReviewRevision.time.desc(), QcReviewRevision.revision_no.desc()).all()
     audits = db.query(AuditEvent).order_by(AuditEvent.time.desc()).all()
-    episodes = db.query(Episode).order_by(Episode.updated_at.desc()).all()
+    episodes = _active_episode_query(db).order_by(Episode.updated_at.desc()).all()
 
     scoped_batches = batches if selected_batch_id == 'all' else [item for item in batches if item.id == selected_batch_id]
     scoped_batch_ids = {item.id for item in scoped_batches}
@@ -950,15 +958,31 @@ def dispatch_preview_payload(batch: Batch, counts: dict[str, int] | None = None,
 
 
 def task_pool_payload(db: Session, current_user: User | None = None) -> dict:
-    batches = db.query(Batch).order_by(Batch.imported_at.desc()).all()
+    is_reviewer = bool(current_user and current_user.role == 'reviewer')
+
+    tasks_query = _active_qc_task_query(db)
+    if is_reviewer:
+        tasks_query = tasks_query.filter(QcTask.assignee == current_user.name)
+    tasks = tasks_query.order_by(QcTask.created_at.desc()).all()
+
+    if is_reviewer:
+        own_batch_ids = {task.batch_id for task in tasks if task.batch_id}
+        batches = (
+            db.query(Batch).filter(Batch.id.in_(own_batch_ids)).order_by(Batch.imported_at.desc()).all()
+            if own_batch_ids else []
+        )
+    else:
+        batches = db.query(Batch).order_by(Batch.imported_at.desc()).all()
+
     counts_by_batch = _task_counts_by_batch(db, [item.id for item in batches])
     superseded_by_batch = _superseded_task_counts_by_batch(db, [item.id for item in batches])
     return {
         'batches': _serialize_batches(db, batches),
         'dispatchPreviews': [dispatch_preview_payload(item, counts_by_batch.get(item.id), superseded_by_batch.get(item.id, 0)) for item in batches],
-        'qcTasks': [serialize_task(item, current_user) for item in _active_qc_task_query(db).order_by(QcTask.created_at.desc()).all()],
-        'reviewerWorkloads': reviewer_workload_payload(db),
-        'reviewerAccounts': reviewer_account_payload(db),
+        'qcTasks': [serialize_task(item, current_user) for item in tasks],
+        # reviewer 不应看到他人工作量与账号目录（派发素材，仅管理员可见）
+        'reviewerWorkloads': [] if is_reviewer else reviewer_workload_payload(db),
+        'reviewerAccounts': [] if is_reviewer else reviewer_account_payload(db),
     }
 
 

@@ -2,6 +2,7 @@
 
 ## Last Updated
 
+- 2026-06-25 (双视角深度体验审计 + 10 项正确性修复 + 7 项体验优化，整体复检通过)
 - 2026-06-25 (QcTask updated_at, pipeline auto-advance fix, reviewer dashboard bugfix)
 
 ## Current Objective
@@ -82,6 +83,19 @@
 - 已完成真实浏览器媒体验收：Playwright 直接打开生产态 manual QC 页面，观察到 `videos=3`、`refreshVisible=true`、`downloadButtons=3`，说明真实视频元素已经在浏览器侧渲染成功
 - 生产 HTTP 扫描入口已进一步稳定：最新 job `queued_1782241730_user_admin` 已在生产环境从 `scanning -> classifying -> done` 完整走完，最终结果为 `confirmed_lists=42`、`total_episodes=4097`、`new_episodes=69`，说明公网/内网入口 + 后台 worker + PostgreSQL/MinIO 联动链已能在真实环境闭环完成
 - 生产扫描过程的可观测性已补齐：`scan_jobs.error_detail` 现在会在 running/classifying 阶段暴露 `prefixes=...` / `lists=... episodes=... new=...` 进度信息，前端 `ingestJobs` 也能看到非 0 进度，避免“后台在跑但前台永远 0/0/0”
+- 已完成管理员/质检员双视角真实浏览器（chromium）深度体验审计，产出调研报告 `audit-report-draft.md`，按正确性（坏了吗）+ 可用性（反人类吗）两个维度记录发现；并把方法论沉淀为可复用 skill `~/.claude/skills/multi-role-ux-audit`
+- 已修复派发抽检% 静默重置（HIGH）：dashboard 派发工作区百分比输入框由 `v-if` 改 `v-show` 保住值，生成前加二次确认显式展示模式/比例，杜绝 `full→sampled` 切换后静默按 100% 过量派发整批
+- 已修复任务状态机 `assigned+fail` 黑洞（HIGH）：`apply_dispatch_plan` 重派发时跳过已 `done` 的 episode（不再拉回 new/assigned 却残留旧 `qc_result`）；migration `20260625_0007` 订正存量矛盾态，生产库矛盾态已归零，`episode_000020` 由 `assigned+fail` 订正为 `assigned+pending`
+- 已修复根路径 `/` 白屏崩溃（HIGH）：router 根路由由自我重定向 `redirect:'/'` 改为 `redirect:'/login'`，消除无限重定向栈溢出；chromium 实测 `/`→`/login` 无 pageerror、`#app` 正常渲染
+- 已修复 `/api/task-pool` 对 reviewer 越权（MEDIUM）：`task_pool_payload` 按角色裁剪，reviewer 仅返回自己的任务/批次、`reviewerAccounts/Workloads` 清空；admin 仍全量；API 实测 reviewer 拿 3 批次/41 任务、accounts/workloads=0
+- 已修复任务类型“删除”文案撒谎（MEDIUM）：保持软停用语义（保护审计/历史引用），前后端文案统一为“停用”
+- 已修复跨页计数不一致 / 幻影批次（MEDIUM）：统一以“有 active ListRecord 的批次”为唯一业务口径，`_refresh_task_type_stats`/`history_payload`/`build_history_report_payload` 全部对齐（新增 `task_type_active_counts`）；migration `20260625_0008` 重算存量计数，待分类由 5/304 订正为 4/303（与 database 总库一致，排除 `raw_data` 残留批次）
+- 已修复审核锁未释放（MEDIUM）：manual-qc 改用 `onBeforeRouteLeave` 可靠释放自己的锁；后端 `release_manual_qc` 允许 `admin/qc_manager` 强制释放他人锁，前端补“强制释放”入口
+- 已补派发可发现性（MEDIUM）：派发工作区醒目显示“待派发”与“未纳入派发 N 集”，避免任务停留 new 导致 reviewer 无活可干
+- 已修复质量评分环（MEDIUM）：固定展示综合 `Q_motion`，不再随严重度排序变化
+- 已加任务类型名输入校验（MEDIUM）：非空 + ≤50 字符 + 禁尖括号，覆盖创建/重命名
+- 已完成体验优化一组（LOW）：登录错误只渲染 `detail` + 空值客户端校验、工作台默认选“有批次”的任务类型、manual-qc 返回按钮按角色对齐标签与去向、对象下载按 `mimeType` 给扩展名、无媒体（0 帧）集禁用播放控件、全局中文 Element Plus locale（确认框 OK/Cancel 等中文化）
+- 已完成整体复检：重建 backend/frontend 镜像、`alembic upgrade head`（0007/0008）、生产栈重启 Healthy；db/API 实测矛盾态=0、待分类 4/303、reviewer 越权已堵、admin 全量对照正常；chromium 实测根路径不白屏、admin dashboard 派发工作区正常渲染
 
 ## Current Risks
 

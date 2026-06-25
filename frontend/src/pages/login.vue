@@ -11,7 +11,21 @@ const username = ref('')
 const password = ref('')
 const loading = ref(false)
 
+const extractDetail = (err: unknown, fallback: string) => {
+  if (!(err instanceof Error)) return fallback
+  try {
+    const parsed = JSON.parse(err.message) as { detail?: string }
+    return parsed.detail || err.message || fallback
+  } catch {
+    return err.message || fallback
+  }
+}
+
 const login = async () => {
+  if (!username.value.trim() || !password.value) {
+    ElMessage.warning('请输入账号和密码')
+    return
+  }
   loading.value = true
   try {
     await session.signIn(username.value.trim(), password.value)
@@ -19,7 +33,7 @@ const login = async () => {
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/dashboard'
     router.push(redirect)
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '登录失败')
+    ElMessage.error(extractDetail(error, '登录失败'))
   } finally {
     loading.value = false
   }

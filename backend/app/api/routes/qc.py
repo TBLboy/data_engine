@@ -70,6 +70,7 @@ from app.services.payloads import (
     serialize_user,
     sync_batch_metrics,
     task_pool_payload,
+    task_type_active_counts,
     task_type_detail_payload,
     unclassified_batch_payload,
 )
@@ -194,6 +195,10 @@ def _normalize_task_type_name(name: str) -> str:
     normalized = name.strip()
     if not normalized:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='任务类型名称不能为空')
+    if len(normalized) > 50:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='任务类型名称不能超过 50 个字符')
+    if any(char in normalized for char in '<>'):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='任务类型名称不能包含尖括号等特殊字符')
     return normalized
 
 
@@ -233,8 +238,7 @@ def _refresh_task_type_stats(db: Session, *task_type_ids: str) -> None:
         task_type = db.query(TaskType).filter(TaskType.id == task_type_id).first()
         if not task_type:
             continue
-        task_type.total_batches = db.query(Batch).filter(Batch.task_type_id == task_type.id, Batch.is_active == True).count()
-        task_type.total_episodes = db.query(Episode).join(Batch, Episode.batch_id == Batch.id).filter(Batch.task_type_id == task_type.id, Batch.is_active == True).count()
+        task_type.total_batches, task_type.total_episodes = task_type_active_counts(db, task_type.id)
 
 
 @router.get('/task-types', response_model=list[TaskTypeSchema])
@@ -336,7 +340,7 @@ def delete_task_type(
     db.add(AuditEvent(
         id=_audit_event_id('task_type_delete', task_type.id),
         operator=current_user.name,
-        action='删除任务类型',
+        action='停用任务类型',
         target=task_type.id,
         detail=f'batch_ids={"|".join(batch.id for batch in affected_batches)} -> {UNCLASSIFIED_TASK_TYPE_ID}',
         time=now,
@@ -866,11 +870,14 @@ def apply_dispatch_plan(
 
     for episode in episodes:
         episode.sampled_for_qc = 1 if episode.id in target_episode_ids else 0
+        # 已质检完成的 episode 不重新派发：保留 done 状态与 qc_result，
+        # 避免被拉回 new/assigned 却残留旧 qc_result，形成 (assigned+fail) 矛盾态黑洞
+        if episode.qc_status == 'done':
+            continue
         if episode.id not in target_episode_ids:
-            if episode.qc_status != 'done':
-                episode.qc_status = 'new'
-                episode.reviewer = '-'
-                episode.updated_at = datetime.utcnow()
+            episode.qc_status = 'new'
+            episode.reviewer = '-'
+            episode.updated_at = datetime.utcnow()
             continue
         task_id = f'task_{batch_id[-6:]}_{next_generation:03d}_{episode.id[-6:]}'
         existing_task = db.query(QcTask).filter(QcTask.id == task_id).first()
@@ -1066,7 +1073,8 @@ def release_manual_qc(
         raise HTTPException(status_code=404, detail='Qc task not found')
 
     active_owner = _active_lock_owner(task)
-    if active_owner and active_owner != current_user.id:
+    is_manager = current_user.role in ('admin', 'qc_manager')
+    if active_owner and active_owner != current_user.id and not is_manager:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='当前锁属于其他审核员')
     if not active_owner and current_user.role == 'reviewer' and task.assignee not in ('未派发', current_user.name):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='该任务未派发给当前审核员')

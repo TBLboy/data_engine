@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { QuestionFilled } from '@element-plus/icons-vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
 import QcReasonPicker from '../components/QcReasonPicker.vue'
@@ -31,6 +31,7 @@ const celebrating = ref(false)
 const celebrationDone = ref(false)
 const videoRefs = ref<Record<string, HTMLVideoElement | null>>({})
 const isReviewer = computed(() => session.user?.role === 'reviewer')
+const isManager = computed(() => session.user?.role === 'admin' || session.user?.role === 'qc_manager')
 let playbackLoopId: number | null = null
 
 const episodeId = computed(() => String(route.params.id))
@@ -45,6 +46,8 @@ const sortedMetricCards = computed(() => {
   const order: Record<string, number> = { bad: 0, warn: 1, good: 2 }
   return [...metricCards.value].sort((a, b) => (order[a.level] ?? 3) - (order[b.level] ?? 3))
 })
+// 评分环固定展示综合质量分 Q_motion，而非随严重度排序变化的首个指标
+const scoreMetric = computed(() => metricCards.value.find((metric) => metric.key === 'q_motion') ?? sortedMetricCards.value[0] ?? null)
 const timelineSegments = computed(() => payload.value?.timelineSegments ?? [])
 const qcRevisions = computed(() => payload.value?.revisions ?? [])
 const episode = computed(() => payload.value?.episode)
@@ -183,7 +186,9 @@ const downloadMedia = async (objectId: string) => {
     const link = document.createElement('a')
     const url = URL.createObjectURL(blob)
     link.href = url
-    link.download = `${episodeId.value}-${objectId}.bin`
+    const mime = media.value.find((item) => item.objectId === objectId)?.mimeType ?? ''
+    const ext = mime.includes('mp4') ? 'mp4' : (mime.split('/')[1] || 'bin')
+    link.download = `${episodeId.value}-${objectId}.${ext}`
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -282,10 +287,18 @@ watch(selectedVariant, async () => {
 
 onBeforeUnmount(() => {
   pauseAll()
-  if (!reviewLock.value?.isMine || submitting.value || releasing.value) {
-    return
+})
+
+onBeforeRouteLeave(async () => {
+  // 离开质检工作台时可靠释放自己的审核锁，避免弃审任务被锁死到 20 分钟过期。
+  // 同路由 :id 变化（流水线自动跳转）不会触发本守卫，且提交时后端已释放锁。
+  if (reviewLock.value?.isMine && !submitting.value && !releasing.value) {
+    try {
+      await releaseManualQc(episodeId.value)
+    } catch {
+      // best-effort：释放失败不阻塞导航，后端锁过期兜底
+    }
   }
-  void releaseManualQc(episodeId.value)
 })
 
 const submit = async () => {
@@ -354,7 +367,7 @@ const submit = async () => {
               <el-button type="primary" :loading="claiming" :disabled="Boolean(reviewLock?.isLocked && !reviewLock?.isMine)" @click="claim">
                 {{ reviewLock?.isMine ? '重新认领' : '认领任务' }}
               </el-button>
-              <el-button :loading="releasing" :disabled="!reviewLock?.isMine" @click="release">释放锁</el-button>
+              <el-button :loading="releasing" :disabled="!reviewLock?.isMine && !(isManager && reviewLock?.isLocked)" @click="release">{{ reviewLock?.isMine ? '释放锁' : '强制释放' }}</el-button>
             </div>
           </div>
         </div>
@@ -409,11 +422,11 @@ const submit = async () => {
               <span>{{ progress }}% · 当前时间 {{ currentTimeSec.toFixed(2) }}s / {{ durationSec.toFixed(2) }}s · {{ fps.toFixed(2) }} fps</span>
             </div>
             <div class="player-actions">
-              <el-button @click="stepSeconds(-1)">-1s</el-button>
-              <el-button @click="stepFrame(-1)">上一帧</el-button>
-              <el-button type="primary" @click="togglePlayback">{{ playing ? '暂停' : '播放' }}</el-button>
-              <el-button @click="stepFrame(1)">下一帧</el-button>
-              <el-button @click="stepSeconds(1)">+1s</el-button>
+              <el-button :disabled="!totalFrames" @click="stepSeconds(-1)">-1s</el-button>
+              <el-button :disabled="!totalFrames" @click="stepFrame(-1)">上一帧</el-button>
+              <el-button type="primary" :disabled="!totalFrames" @click="togglePlayback">{{ playing ? '暂停' : '播放' }}</el-button>
+              <el-button :disabled="!totalFrames" @click="stepFrame(1)">下一帧</el-button>
+              <el-button :disabled="!totalFrames" @click="stepSeconds(1)">+1s</el-button>
             </div>
           </div>
           <el-slider
@@ -457,7 +470,7 @@ const submit = async () => {
       <aside class="manual-side sticky-side">
         <el-card shadow="never" class="qc-card score-card">
           <template #header>Episode 质量评分</template>
-          <div class="score-ring"><strong>{{ sortedMetricCards[0]?.value || '--' }}</strong><span>{{ sortedMetricCards[0]?.label || 'Q_motion' }}</span></div>
+          <div class="score-ring"><strong>{{ scoreMetric?.value || '--' }}</strong><span>{{ scoreMetric?.label || 'Q_motion' }}</span></div>
           <div class="metric-scroll">
             <div class="metric-list compact-list">
               <div v-for="metric in sortedMetricCards" :key="metric.key" class="metric-item" :class="metric.level">
@@ -489,7 +502,7 @@ const submit = async () => {
           <el-input v-model="note" type="textarea" :rows="4" placeholder="填写遮挡、动作异常、任务失败等人工判断依据" />
           <div class="submit-row split">
             <el-button @click="note = ''">清空备注</el-button>
-            <el-button @click="router.push('/database')">返回总库</el-button>
+            <el-button @click="router.push(isReviewer ? '/reviewer' : '/database')">{{ isReviewer ? '返回看板' : '返回总库' }}</el-button>
             <el-button type="primary" :disabled="!canSubmit" :loading="submitting" @click="submit">提交结果</el-button>
           </div>
         </el-card>
