@@ -179,15 +179,15 @@ const toggleAccount = async (account: Account) => {
       <el-alert v-if="error" type="error" :closable="false" :title="error" />
 
       <el-row :gutter="18" v-loading="loading">
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-blue"><span>账号总数</span><strong>{{ accounts.length }}</strong><small>平台可见账号</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-green"><span>启用中</span><strong>{{ activeCount }}</strong><small>允许登录与执行业务</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-orange"><span>已停用</span><strong>{{ inactiveCount }}</strong><small>禁止登录</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-purple"><span>主管账号</span><strong>{{ managerCount }}</strong><small>reviewer {{ reviewerCount }} 人</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-blue"><span>账号总数</span><strong>{{ accounts.length }}</strong><small>平台可见账号</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-green"><span>启用中</span><strong>{{ activeCount }}</strong><small>允许登录与执行业务</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-orange"><span>已停用</span><strong>{{ inactiveCount }}</strong><small>禁止登录</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-purple"><span>主管账号</span><strong>{{ managerCount }}</strong><small>reviewer {{ reviewerCount }} 人</small></el-card></el-col>
       </el-row>
 
       <el-row :gutter="18">
         <el-col :span="17">
-          <el-card shadow="never" class="product-card" v-loading="loading">
+          <el-card shadow="never" class="qc-card" v-loading="loading">
             <template #header>
               <div class="card-header"><span>账号清单</span><el-tag type="success">创建 / 重置密码 / 启停</el-tag></div>
             </template>
@@ -236,7 +236,7 @@ const toggleAccount = async (account: Account) => {
         </el-col>
 
         <el-col :span="7">
-          <el-card shadow="never" class="product-card assign-rules-card">
+          <el-card shadow="never" class="qc-card assign-rules-card">
             <template #header>管理规则</template>
             <div class="rule-item"><strong>账号创建</strong><span>仅管理员可创建账号，并在创建时指定角色。</span></div>
             <div class="rule-item"><strong>停用保护</strong><span>当前登录账号不可自行停用，避免把自己锁出系统。</span></div>

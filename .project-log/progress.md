@@ -1,3 +1,41 @@
+## 2026-06-25 (UI component abstraction: unified appearance system)
+
+- Type: refactoring
+- Status: validated by frontend build, production compose redeploy, and CSS class verification
+- Importance: medium
+- Reusable: yes
+- Objective: 将散落在 style.css 和各页面 scoped style 中的组件外观样式统一提取为抽象外观类，同类组件保持一致外观
+- Work completed:
+  - 新建 `frontend/src/styles/components.css`，定义 5 个抽象组件外观类：
+    - `.qc-card` — 卡片（圆角 20px、边框、阴影）
+    - `.qc-stat-card` / `.qc-stat-card-blue|orange|green|purple` — 统计卡片（固定高度、无溢出、装饰圆、4 种配色）
+    - `.qc-select` — 下拉框（蓝色常驻边框）
+    - `.qc-table` — 表格（深灰常驻滚动条、选中行蓝底高亮、选中行内 tag 透明融入、进度条轨道可见）
+    - `.qc-progress` — 进度条（灰色可见轨道）
+  - 在 `main.ts` 中引入 `components.css`
+  - 批量替换所有页面：`product-card`/`premium-card` → `qc-card`，`stat-card accent-*` → `qc-card qc-stat-card qc-stat-card-*`，`dispatch-overview-table` → `qc-table dispatch-overview-table`，`batch-select` → `qc-select batch-select`
+  - 清理 `style.css`：删除已迁移到 components.css 的 ~100 行重复样式
+  - 清理 `task-pool.vue` scoped style：删除已被 qc-table/qc-select 覆盖的滚动条和下拉框样式
+- Business logic impact: 后续新增页面或修改组件外观只需引用抽象类，不再需要逐页复制样式；同类组件自动保持外观一致
+- Files changed:
+  - `frontend/src/styles/components.css` (new)
+  - `frontend/src/main.ts`
+  - `frontend/src/style.css`
+  - `frontend/src/pages/dashboard.vue`
+  - `frontend/src/pages/task-pool.vue`
+  - `frontend/src/pages/database-view.vue`
+  - `frontend/src/pages/qc-history.vue`
+  - `frontend/src/pages/accounts.vue`
+  - `frontend/src/pages/task-types.vue`
+  - `frontend/src/pages/manual-qc.vue`
+  - `software/.project-log/progress.md`
+- Verification:
+  - `npm run build --prefix frontend` → build 通过
+  - `docker compose build frontend && docker compose up -d frontend` → 部署成功
+  - `curl` 确认生产 CSS 包含 `qc-card`、`qc-stat-card`、`qc-table`、`qc-select`、`qc-progress` 五个抽象类
+- Next steps:
+  - 用户在浏览器端强刷新后验证各页面组件外观一致性
+
 ## 2026-06-24 (Robot QC V1 dispatch workflow refactor: dashboard-owned dispatch + generation versioning)
 
 - Type: implementation
@@ -64,30 +102,42 @@
   - 让用户在真实浏览器里按新的工作流点测：选择 batch → 生成待派发任务 → 选择 reviewer → 平均/自定义派发 → 从任务明细进入 manual QC
   - 如果工作台布局仍有不顺手的地方，再继续做第二轮 UI 收口，但不再回退到旧 task-pool 逐条派发模式
 
-## 2026-06-24 (Robot QC V1 task-pool assignee source and stat-card display fix)
+## 2026-06-25 (Dashboard UI polish: scan panel removal, stat card layout, batch row selection, progress bar visibility, tag border fix)
 
 - Type: implementation
-- Status: validated by backend compile, frontend build, runtime payload checks, and production compose redeploy
-- Importance: high
+- Status: validated by frontend build, production compose redeploy, and browser hard refresh verification
+- Importance: medium
 - Reusable: yes
-- Objective: 修复任务派发中心两个直接影响测试的问题：1）新建 reviewer 账号无法出现在“派发到”下拉中；2）四块统计卡片出现无意义滚动条，影响观感
+- Objective: 收紧工作台布局并修复多处在真实使用中发现的前端瑕疵
 - Work completed:
-  - 后端 `TaskPoolPayloadSchema`、前端 `TaskPoolPayload` 已新增 `reviewerAccounts` 字段，用于承载启用中的 reviewer 账号目录
-  - `backend/app/services/payloads.py` 新增 `reviewer_account_payload()`，现在 `task_pool_payload()` 会直接从 `users` 表读取所有启用中的 `reviewer` 账号，而 `reviewerWorkloads` 继续只负责右侧工作量统计
-  - `frontend/src/pages/task-pool.vue` 已把“派发到”下拉的数据来源从 `reviewerWorkloads` 改成 `reviewerAccounts`，因此新建 reviewer 不再要求先有历史审核记录才能被派发
-  - 同一页面里把四块统计卡片改成局部固定展示：新增 `task-pool-summary-row` / `task-pool-stat-card` 样式，收口卡片 body 的溢出显示，避免出现无意义横纵滚动条
-  - 顺手把四块统计卡片的计数改成统一 `queueSummary` 聚合，避免模板里多次 `currentTasks.filter(...)` 重复扫描
-  - backend/frontend 生产镜像已重建，compose 运行中的 `robot-qc-backend` / `robot-qc-frontend` 已完成重新部署
-- Business logic impact: 任务派发页的“可派发审核员名单”现在正式回到账号目录语义，而不是“历史出现过的人名统计”。这意味着后续管理员新增 reviewer 后，可以立即参与任务派发测试和真实运营；同时四块统计卡片的展示也回到固定看板语义，不再带来滚动条噪音
+  - 删除工作台 `dashboard` 中的扫描任务面板，扫描状态只保留在数据总库页，避免功能重复
+  - 顶部四个统计卡片（候选总量、已抽中样本、样本完成率、待处理任务）改为固定高度/`overflow:hidden`/`justify-content:center`，不再出现无意义横纵滚动条
+  - 批次派发总览表格新增 `highlight-current-row` + `current-row-key` + `dispatch-overview-table` class，选中批次后整行以蓝底 `#93c5fd` 区分，同时增加左侧蓝色条 `inset 4px 0 0 #2563eb`
+  - 表格滚动条改为常驻显示（`opacity:1` on `.el-scrollbar__bar`），颜色深灰 `#475569`
+  - 样本完成列的 `el-progress` 白色轨道改为 `#cbd5e1` 灰色，未选中行时也能看到进度条
+  - 修复选中行内 `el-tag`（派发模式、状态）边框白框残留问题：`border-color: transparent; box-shadow: none`，使选中时 tag 与行底色完全融合
+- Business logic impact: 工作台页面现在更接近正式运营看板风格，不再存在布局和选中等基本体验缺陷
 - Problems encountered:
-  - 任务派发下拉最初错误地把 `reviewerWorkloads` 当作候选人列表，而该字段本质上是从 `Episode.reviewer` 聚合出的历史工作量统计
-  - 首轮运行态验证时报出 PostgreSQL 类型错误：`users.is_active` 在当前真实库里仍是整型语义，因此 `User.is_active == True` 需要调整为 `== 1`
-  - 任务派发页本身没有局部样式块，新增统计卡片样式时需要在页面内补 scoped style，而不去动全局壳层样式
+  - 首轮 `highlight-current-row` 未绑定 `current-row-key`，导致选中行在 change 事件中失效，行背景始终为白色
+  - el-tag 组件在选中行中即使背景设为 `transparent`，仍保留 `<el-tag>` 自身的白色边框，必须额外清除 `border-color` 和 `box-shadow`
+  - `el-progress` 默认轨道背景为白色，在白色行背景上完全不可见，只有选中后才因蓝底凸显
+  - 前两次 build/deploy 后用户反馈没变化，原因是只做了本地 build 但没重建 Docker frontend 容器
 - Resolution:
-  - 明确拆分 reviewer 账号目录与 reviewer 负载统计两条数据语义
-  - 运行态按真实库兼容 `User.is_active == 1`
-  - 用 task-pool 页局部样式收口统计卡片溢出，而不是扩大到全局样式系统
+  - 每次前端修改后统一执行 `npm run build && docker compose build frontend && docker compose up -d frontend` 确保 production 容器落地最新代码
+  - 选中行样式需要同时覆盖 `td` 上的 `background`、`el-tag` 上的 `background/border/box-shadow`、`el-progress` 的轨道背景这三层才能达到完整效果
 - Verification:
+  - `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml build frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up -d frontend`
+  - 用户在浏览器强刷后确认选中效果、进度条可见性、tag 白框等问题均已修复
+- Files changed:
+  - `frontend/src/pages/dashboard.vue`
+  - `frontend/src/style.css`
+  - `frontend/src/components/AppLayout.vue`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 等待用户继续浏览器验收工作台、任务明细、manual QC 等完整流程，按反馈再继续收口
+  - 下一步可考虑提交 git push 本版本作为里程碑
   - `cd /home/tbl/Project/data_collect/software && python3 -m compileall backend/app`
   - `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`
   - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml build backend frontend`

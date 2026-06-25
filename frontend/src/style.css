@@ -174,14 +174,6 @@ a {
   gap: 18px;
 }
 
-.product-card,
-.premium-card,
-.el-card {
-  border: 1px solid rgba(226, 232, 240, 0.9) !important;
-  border-radius: 20px !important;
-  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.045) !important;
-}
-
 .page-title-row {
   display: flex;
   align-items: center;
@@ -291,103 +283,6 @@ p {
   justify-content: space-between;
   font-weight: 800;
 }
-
-.dispatch-overview-table .el-scrollbar__bar {
-  opacity: 1 !important;
-}
-
-.dispatch-overview-table .el-scrollbar__bar.is-horizontal > div,
-.dispatch-overview-table .el-scrollbar__bar.is-vertical > div {
-  background: #475569;
-}
-
-.dispatch-overview-table .el-scrollbar__thumb {
-  background: #475569;
-  opacity: 1;
-}
-
-.dispatch-overview-table .el-scrollbar__thumb:hover {
-  background: #334155;
-}
-
-.dispatch-overview-table .el-table__body tr.current-row > td.el-table__cell,
-.dispatch-overview-table .el-table__body tr.current-row > td.el-table__cell.el-table-fixed-column--left,
-.dispatch-overview-table .el-table__body tr.current-row > td.el-table__cell.el-table-fixed-column--right {
-  background: #93c5fd !important;
-}
-
-.dispatch-overview-table .el-table__body tr.current-row > td.el-table__cell .cell {
-  background: transparent;
-}
-
-.dispatch-overview-table .el-table__body tr.current-row .el-tag {
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
-}
-
-.dispatch-overview-table .el-progress-bar__outer {
-  background: #cbd5e1;
-}
-
-.dispatch-overview-table .el-table__body tr.current-row > td.el-table__cell:first-child {
-  box-shadow: inset 4px 0 0 #2563eb;
-}
-
-.dispatch-overview-table .el-table__body tr.current-row:hover > td.el-table__cell,
-.dispatch-overview-table .el-table__body tr.current-row.hover-row > td.el-table__cell,
-.dispatch-overview-table .el-table__body tr.current-row:hover > td.el-table__cell.el-table-fixed-column--left,
-.dispatch-overview-table .el-table__body tr.current-row:hover > td.el-table__cell.el-table-fixed-column--right,
-.dispatch-overview-table .el-table__body tr.current-row.hover-row > td.el-table__cell.el-table-fixed-column--left,
-.dispatch-overview-table .el-table__body tr.current-row.hover-row > td.el-table__cell.el-table-fixed-column--right {
-  background: #93c5fd !important;
-}
-
-.stat-card {
-  min-height: 132px;
-  overflow: hidden;
-}
-
-.stat-card .el-card__body {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  min-height: 132px;
-  gap: 8px;
-  overflow: hidden;
-}
-
-.stat-card .el-card__body::after {
-  position: absolute;
-  right: -22px;
-  bottom: -34px;
-  width: 110px;
-  height: 110px;
-  border-radius: 50%;
-  content: '';
-  opacity: 0.14;
-  pointer-events: none;
-}
-
-.stat-card span {
-  color: #64748b;
-  font-size: 14px;
-}
-
-.stat-card strong {
-  color: #0f172a;
-  font-size: 34px;
-}
-
-.stat-card small {
-  color: #94a3b8;
-}
-
-.accent-blue .el-card__body::after { background: #2563eb; }
-.accent-orange .el-card__body::after { background: #f59e0b; }
-.accent-green .el-card__body::after { background: #16a34a; }
-.accent-purple .el-card__body::after { background: #7c3aed; }
 
 .reason-card .el-card__body,
 .todo-card .el-card__body {

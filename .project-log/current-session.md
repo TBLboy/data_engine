@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-- 2026-06-24 (task type management landing and verification)
+- 2026-06-25 (component abstraction system landed)
 
 ## Current Objective
 
@@ -67,6 +67,11 @@
 - 已完成 `database` 页面长期性能方案首版落地：`/api/database` 现已支持 `page/page_size/keyword/batch_id/qc_status/qc_result` 服务端分页与服务端筛选，前端 `database-view.vue` 改为按页请求并接入 `el-pagination`，不再在浏览器内对全量 4000+ episode 做本地过滤与整表渲染
 - 已修复 `task-pool` 派发名单来源错误：任务派发页面现改为读取启用中的 reviewer 账号目录，而不再错误复用 `reviewerWorkloads` 历史统计；新建的 `审核员01/02/03` 已在运行中 backend 的 `task_pool_payload()` 中确认出现在 `reviewerAccounts`
 - 已收口 `task-pool` 四块统计卡片显示方式：待派发 / 已派发 / 审核锁激活 / 已完成 现在使用局部固定展示样式，不再在卡片体内出现无意义滚动条；相关 frontend/backend 镜像均已重建并在 production compose 中重新启动
+- 已完成 UI 组件外观系统抽象：新建 `frontend/src/styles/components.css`，定义 `qc-card`、`qc-stat-card`、`qc-select`、`qc-table`、`qc-progress` 五个抽象外观类，将散落在 style.css 和各页面 scoped style 中的重复组件样式统一提取；所有页面已完成批量替换，style.css 清理 ~100 行冗余；后续同类组件自动保持外观一致
+- 已将"任务明细中心"菜单和页面标题更名为"人工质检入口"
+- 已修复人工质检入口批次下拉框边框不可见问题（白框在白底上消失），通过全局 `--el-input-border-color` 设为 `#c0c4cc` + 对该下拉框显式加蓝色边框
+- 已删除工作台 `dashboard` 中重复的扫描任务面板，四个统计卡片改为固定高度无溢出
+- 已给工作台批次派发总览表格补上选中行高亮（蓝底 + 左侧蓝色强调条）、滚动条常驻深灰色、进度条轨道灰色化、选中行内 tag 白框修复
 
 - 已明确 manual QC 的 MinIO 对象访问协议：预览/播放类 MP4 采用后端签发的短时 presigned URL，`manifest.json`/`metadata.json`/`telemetry.npz` 等结构化对象继续由后端读取解析，显式下载/导出保持后端受控接口
 - 已落地 manual QC 同步播放器首版：底部 frame 控制栏成为唯一播放控制权，三路视频去掉独立 controls，统一按共享 `currentFrame/currentTimeSec/playing` 同步播放、暂停、逐帧和拖动 seek，并开始使用后端返回的真实 `fps/durationSec/frameCount` 驱动时间轴显示

@@ -234,15 +234,15 @@ const detachBatch = async (batch: BatchSummary) => {
       <el-alert v-if="error" type="error" :closable="false" :title="error" />
 
       <el-row :gutter="18" v-loading="loading">
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-blue"><span>任务类型数</span><strong>{{ taskTypes.length }}</strong><small>含系统保底待分类</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-green"><span>启用中</span><strong>{{ activeTaskTypeCount }}</strong><small>可继续承接批次</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-orange"><span>待分类批次</span><strong>{{ unclassifiedBatches.length }}</strong><small>等待人工归类</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-purple"><span>当前任务批次</span><strong>{{ selectedBatchCount }}</strong><small>{{ selectedTaskType?.name ?? '未选择' }}</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-blue"><span>任务类型数</span><strong>{{ taskTypes.length }}</strong><small>含系统保底待分类</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-green"><span>启用中</span><strong>{{ activeTaskTypeCount }}</strong><small>可继续承接批次</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-orange"><span>待分类批次</span><strong>{{ unclassifiedBatches.length }}</strong><small>等待人工归类</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-purple"><span>当前任务批次</span><strong>{{ selectedBatchCount }}</strong><small>{{ selectedTaskType?.name ?? '未选择' }}</small></el-card></el-col>
       </el-row>
 
       <el-row :gutter="18">
         <el-col :span="7">
-          <el-card shadow="never" class="product-card" v-loading="loading">
+          <el-card shadow="never" class="qc-card" v-loading="loading">
             <template #header>
               <div class="card-header"><span>任务类型列表</span><el-tag type="info">左选右管</el-tag></div>
             </template>
@@ -263,7 +263,7 @@ const detachBatch = async (batch: BatchSummary) => {
         </el-col>
 
         <el-col :span="17">
-          <el-card shadow="never" class="product-card" v-loading="detailLoading">
+          <el-card shadow="never" class="qc-card" v-loading="detailLoading">
             <template #header>
               <div class="card-header">
                 <span>{{ selectedTaskType?.name ?? '任务类型详情' }}</span>

@@ -200,19 +200,19 @@ const applyBatchAssignment = async () => {
       <el-alert v-if="error" type="error" :closable="false" :title="error" />
 
       <el-row :gutter="18" v-loading="loading">
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-blue"><span>候选总量</span><strong>{{ totalEpisodes }}</strong><small>待抽检 / 已入库</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-orange"><span>已抽中样本</span><strong>{{ totalSampled }}</strong><small>抽检覆盖率 {{ avgCoverage }}%</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-green"><span>样本完成率</span><strong>{{ avgPassRate }}%</strong><small>基于已完成样本 pass rate</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-purple"><span>待处理任务</span><strong>{{ currentTodoCount }}</strong><small>高优先级 {{ highPriorityCount }} 条</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-blue"><span>候选总量</span><strong>{{ totalEpisodes }}</strong><small>待抽检 / 已入库</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-orange"><span>已抽中样本</span><strong>{{ totalSampled }}</strong><small>抽检覆盖率 {{ avgCoverage }}%</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-green"><span>样本完成率</span><strong>{{ avgPassRate }}%</strong><small>基于已完成样本 pass rate</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-purple"><span>待处理任务</span><strong>{{ currentTodoCount }}</strong><small>高优先级 {{ highPriorityCount }} 条</small></el-card></el-col>
       </el-row>
 
       <el-row :gutter="18">
         <el-col :span="16">
-          <el-card shadow="never" class="product-card" v-loading="loading">
+          <el-card shadow="never" class="qc-card" v-loading="loading">
             <template #header>
               <div class="card-header"><span>批次派发总览</span><router-link to="/database"><el-button plain>查看数据总库</el-button></router-link></div>
             </template>
-            <el-table class="dispatch-overview-table" :data="currentBatches" stripe row-key="id" highlight-current-row :current-row-key="selectedBatchId" @row-click="(row: { id: string }) => { selectedBatchId = row.id; onBatchChange() }">
+            <el-table class="qc-table dispatch-overview-table" :data="currentBatches" stripe row-key="id" highlight-current-row :current-row-key="selectedBatchId" @row-click="(row: { id: string }) => { selectedBatchId = row.id; onBatchChange() }">
               <el-table-column prop="name" label="批次" min-width="190" />
               <el-table-column prop="episodeCount" label="总量" width="70" />
               <el-table-column label="派发模式" width="110">
@@ -245,7 +245,7 @@ const applyBatchAssignment = async () => {
         </el-col>
 
         <el-col :span="8">
-          <el-card shadow="never" class="product-card dispatch-card" v-loading="loading">
+          <el-card shadow="never" class="qc-card dispatch-card" v-loading="loading">
             <template #header>派发工作区</template>
             <div class="dispatch-panel" v-if="selectedBatch && selectedDispatchPreview">
               <div class="rule-item"><strong>当前批次</strong><span>{{ selectedBatch.name }}</span></div>
@@ -293,7 +293,7 @@ const applyBatchAssignment = async () => {
 
       <el-row :gutter="18">
         <el-col :span="8">
-          <el-card shadow="never" class="product-card" v-loading="loading">
+          <el-card shadow="never" class="qc-card" v-loading="loading">
             <template #header>审核员工作量</template>
             <div v-for="reviewer in reviewerWorkloads" :key="reviewer.name" class="reviewer-row">
               <div><strong>{{ reviewer.name }}</strong><span>平均 {{ reviewer.avgMinutes }} min / episode</span></div>
@@ -304,7 +304,7 @@ const applyBatchAssignment = async () => {
         </el-col>
 
         <el-col :span="8">
-          <el-card shadow="never" class="product-card reason-card" v-loading="loading">
+          <el-card shadow="never" class="qc-card reason-card" v-loading="loading">
             <template #header>失败原因 Top 统计</template>
             <div v-for="item in reasonStats" :key="item.reason" class="reason-row">
               <div class="reason-info"><strong>{{ item.reason }}</strong><span>{{ item.category }} · {{ item.count }} 条</span></div>

@@ -71,7 +71,7 @@ const lockLabel = (task: TaskPoolPayload['qcTasks'][number]) => {
           <p>这里仅保留当前批次任务明细、锁状态和进入人工质检入口。任务生成与批量派发已迁移到工作台。</p>
         </div>
         <div class="toolbar-actions">
-          <el-select v-model="selectedBatchId" filterable class="batch-select" style="width: 220px" :loading="loading">
+          <el-select v-model="selectedBatchId" filterable class="qc-select batch-select" style="width: 220px" :loading="loading">
             <el-option v-for="b in batches" :key="b.id" :label="b.name" :value="b.id" />
           </el-select>
           <router-link to="/dashboard"><el-button type="primary" plain>返回工作台派发</el-button></router-link>
@@ -81,17 +81,17 @@ const lockLabel = (task: TaskPoolPayload['qcTasks'][number]) => {
       <el-alert v-if="error" type="error" :closable="false" :title="error" />
 
       <el-row :gutter="18" v-loading="loading" class="task-pool-summary-row">
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-blue task-pool-stat-card"><span>当前活跃任务</span><strong>{{ activeTaskCount }}</strong><small>当前派发版本</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-orange task-pool-stat-card"><span>待派发</span><strong>{{ dispatchPreview?.pendingAssignCount ?? 0 }}</strong><small>pending_assign</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-purple task-pool-stat-card"><span>进行中</span><strong>{{ dispatchPreview?.inReviewTaskCount ?? 0 }}</strong><small>active review lock</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-green task-pool-stat-card"><span>已退役旧任务</span><strong>{{ supersededTaskCount }}</strong><small>superseded</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-blue task-pool-stat-card"><span>当前活跃任务</span><strong>{{ activeTaskCount }}</strong><small>当前派发版本</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-orange task-pool-stat-card"><span>待派发</span><strong>{{ dispatchPreview?.pendingAssignCount ?? 0 }}</strong><small>pending_assign</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-purple task-pool-stat-card"><span>进行中</span><strong>{{ dispatchPreview?.inReviewTaskCount ?? 0 }}</strong><small>active review lock</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-green task-pool-stat-card"><span>已退役旧任务</span><strong>{{ supersededTaskCount }}</strong><small>superseded</small></el-card></el-col>
       </el-row>
 
-      <el-card shadow="never" class="product-card task-pool-table-card" v-loading="loading">
+      <el-card shadow="never" class="qc-card task-pool-table-card" v-loading="loading">
         <template #header>
           <div class="card-header"><span>QC 任务明细</span><el-tag type="success">只读排障与进入质检</el-tag></div>
         </template>
-        <el-table :data="currentTasks" stripe height="520" scrollbar-always-on>
+        <el-table :data="currentTasks" stripe height="520" class="qc-table" scrollbar-always-on>
           <el-table-column prop="id" label="任务ID" width="150" />
           <el-table-column prop="episodeId" label="Episode" min-width="150" />
           <el-table-column prop="taskName" label="任务类型" min-width="150" />
@@ -141,26 +141,5 @@ const lockLabel = (task: TaskPoolPayload['qcTasks'][number]) => {
 
 .task-pool-stat-card :deep(.el-card__body) {
   overflow: hidden;
-}
-
-.task-pool-table-card :deep(.el-scrollbar__bar.is-vertical),
-.task-pool-table-card :deep(.el-scrollbar__bar.is-horizontal) {
-  opacity: 1;
-}
-
-.task-pool-table-card :deep(.el-scrollbar__thumb) {
-  background-color: #4b5563;
-}
-
-.task-pool-table-card :deep(.el-scrollbar__thumb:hover) {
-  background-color: #374151;
-}
-
-.batch-select :deep(.el-select__wrapper) {
-  box-shadow: 0 0 0 1px #2563eb inset;
-}
-
-.batch-select :deep(.el-select__wrapper:hover) {
-  box-shadow: 0 0 0 1px #3b82f6 inset;
 }
 </style>

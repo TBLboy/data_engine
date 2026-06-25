@@ -161,15 +161,15 @@ const reasonTagType = (category: string) => {
       />
 
       <el-row :gutter="18" v-loading="loading || reportLoading">
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-blue"><span>审计事件</span><strong>{{ summary?.auditEventCount ?? auditRecords.length }}</strong><small>{{ selectedBatchLabel }}</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-green"><span>历史 Revision</span><strong>{{ summary?.revisionCount ?? qcRevisions.length }}</strong><small>支持按批次筛选</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-orange"><span>Fail 记录</span><strong>{{ summary?.failEpisodeCount ?? episodes.filter((item) => item.qcResult === 'fail').length }}</strong><small>可追溯主原因码</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-purple"><span>通过率</span><strong>{{ passRateText }}</strong><small>{{ summary?.completedSampleCount ?? episodes.filter((item) => item.qcStatus === 'done').length }} 条已完成抽检</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-blue"><span>审计事件</span><strong>{{ summary?.auditEventCount ?? auditRecords.length }}</strong><small>{{ selectedBatchLabel }}</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-green"><span>历史 Revision</span><strong>{{ summary?.revisionCount ?? qcRevisions.length }}</strong><small>支持按批次筛选</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-orange"><span>Fail 记录</span><strong>{{ summary?.failEpisodeCount ?? episodes.filter((item) => item.qcResult === 'fail').length }}</strong><small>可追溯主原因码</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-purple"><span>通过率</span><strong>{{ passRateText }}</strong><small>{{ summary?.completedSampleCount ?? episodes.filter((item) => item.qcStatus === 'done').length }} 条已完成抽检</small></el-card></el-col>
       </el-row>
 
       <el-row v-if="canManageReports" :gutter="18">
         <el-col :span="24">
-          <el-card shadow="never" class="product-card" v-loading="reportLoading">
+          <el-card shadow="never" class="qc-card" v-loading="reportLoading">
             <template #header>
               <div class="card-header">
                 <span>批次报告总览</span>
@@ -193,7 +193,7 @@ const reasonTagType = (category: string) => {
 
       <el-row v-if="canManageReports" :gutter="18">
         <el-col :span="24">
-          <el-card shadow="never" class="product-card" v-loading="reportLoading">
+          <el-card shadow="never" class="qc-card" v-loading="reportLoading">
             <template #header>批次级汇总报表</template>
             <el-table :data="batchReports" stripe height="320">
               <el-table-column prop="batchName" label="批次" min-width="220" />
@@ -214,7 +214,7 @@ const reasonTagType = (category: string) => {
 
       <el-row v-if="canManageReports" :gutter="18">
         <el-col :span="10">
-          <el-card shadow="never" class="product-card" v-loading="reportLoading">
+          <el-card shadow="never" class="qc-card" v-loading="reportLoading">
             <template #header>失败原因分布</template>
             <el-table :data="topReasons" stripe height="300">
               <el-table-column prop="reason" label="原因码" min-width="160" />
@@ -231,7 +231,7 @@ const reasonTagType = (category: string) => {
           </el-card>
         </el-col>
         <el-col :span="14">
-          <el-card shadow="never" class="product-card" v-loading="reportLoading">
+          <el-card shadow="never" class="qc-card" v-loading="reportLoading">
             <template #header>审核人工作量与质量</template>
             <el-table :data="reviewers" stripe height="300">
               <el-table-column prop="name" label="审核人" min-width="140" />
@@ -247,7 +247,7 @@ const reasonTagType = (category: string) => {
 
       <el-row :gutter="18">
         <el-col :span="10">
-          <el-card shadow="never" class="product-card" v-loading="loading">
+          <el-card shadow="never" class="qc-card" v-loading="loading">
             <template #header>Revision 时间线</template>
             <el-timeline>
               <el-timeline-item v-for="revision in filteredRevisions" :key="`${revision.episodeId}-${revision.revisionNo}-${revision.time}`" :timestamp="revision.time" placement="top">
@@ -261,7 +261,7 @@ const reasonTagType = (category: string) => {
           </el-card>
         </el-col>
         <el-col :span="14">
-          <el-card shadow="never" class="product-card" v-loading="loading">
+          <el-card shadow="never" class="qc-card" v-loading="loading">
             <template #header>系统审计事件</template>
             <el-table :data="filteredAuditRecords" stripe height="480">
               <el-table-column prop="time" label="时间" width="170" />
@@ -276,7 +276,7 @@ const reasonTagType = (category: string) => {
 
       <el-row :gutter="18">
         <el-col :span="24">
-          <el-card shadow="never" class="product-card" v-loading="loading || reportLoading">
+          <el-card shadow="never" class="qc-card" v-loading="loading || reportLoading">
             <template #header>最近 Episode 明细</template>
             <el-table :data="recentEpisodes" stripe height="320">
               <el-table-column prop="batchName" label="批次" min-width="220" />

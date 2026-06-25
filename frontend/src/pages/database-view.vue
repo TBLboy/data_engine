@@ -131,15 +131,15 @@ const ingestStatusType = (statusValue: string) => {
       <el-alert v-if="error" type="error" :closable="false" :title="error" />
 
       <el-row :gutter="18" v-loading="loading">
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-blue"><span>已索引 Episodes</span><strong>{{ totalEpisodes }}</strong><small>MinIO episode 样本</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-green"><span>任务类型</span><strong>{{ taskTypes.length }}</strong><small>支持动态扫描</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-orange"><span>失败原因种类</span><strong>{{ reasonStats.length }}</strong><small>L2/L3/L4/System</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="stat-card accent-purple"><span>批次数量</span><strong>{{ batches.length }}</strong><small>一次扫描形成一个批次</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-blue"><span>已索引 Episodes</span><strong>{{ totalEpisodes }}</strong><small>MinIO episode 样本</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-green"><span>任务类型</span><strong>{{ taskTypes.length }}</strong><small>支持动态扫描</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-orange"><span>失败原因种类</span><strong>{{ reasonStats.length }}</strong><small>L2/L3/L4/System</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-purple"><span>批次数量</span><strong>{{ batches.length }}</strong><small>一次扫描形成一个批次</small></el-card></el-col>
       </el-row>
 
       <el-row :gutter="18">
         <el-col v-if="canScanDatabase" :span="9">
-          <el-card shadow="never" class="product-card filter-card">
+          <el-card shadow="never" class="qc-card filter-card">
             <template #header>扫描 MinIO</template>
             <div class="filter-grid">
               <el-input v-model="scanForm.bucket" placeholder="输入 MinIO bucket 名称" clearable />
@@ -158,7 +158,7 @@ const ingestStatusType = (statusValue: string) => {
           </el-card>
         </el-col>
         <el-col :span="canScanDatabase ? 15 : 24">
-          <el-card shadow="never" class="product-card" v-loading="loading">
+          <el-card shadow="never" class="qc-card" v-loading="loading">
             <template #header>最近扫描任务</template>
             <el-table :data="ingestJobs" stripe height="240">
               <el-table-column prop="bucket" label="Bucket" min-width="150" />
@@ -176,7 +176,7 @@ const ingestStatusType = (statusValue: string) => {
         </el-col>
       </el-row>
 
-      <el-card shadow="never" class="product-card filter-card">
+      <el-card shadow="never" class="qc-card filter-card">
         <div class="filter-grid">
           <el-input v-model="keyword" placeholder="搜索 episode / batch / reason / reviewer" clearable />
           <el-select v-model="batch" placeholder="批次" clearable filterable>
@@ -191,7 +191,7 @@ const ingestStatusType = (statusValue: string) => {
         </div>
       </el-card>
 
-      <el-card shadow="never" class="product-card episode-table-card" v-loading="loading">
+      <el-card shadow="never" class="qc-card episode-table-card" v-loading="loading">
         <el-table :data="episodes" stripe height="620" scrollbar-always-on>
             <el-table-column prop="id" label="Episode" min-width="150" fixed />
             <el-table-column prop="taskName" label="任务类型" min-width="160" />

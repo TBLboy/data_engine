@@ -399,7 +399,7 @@ const submit = async () => {
 
         <el-row :gutter="18">
           <el-col :span="14">
-            <el-card shadow="never" class="premium-card">
+            <el-card shadow="never" class="qc-card">
               <template #header>遥测曲线联动视图</template>
               <div class="telemetry-chart advanced">
                 <div v-for="i in 42" :key="i" class="bar" :class="{ alert: i > 24 && i < 30 }" :style="{ height: `${30 + ((i * 17) % 90)}px` }" />
@@ -408,7 +408,7 @@ const submit = async () => {
             </el-card>
           </el-col>
           <el-col :span="10">
-            <el-card shadow="never" class="premium-card">
+            <el-card shadow="never" class="qc-card">
               <template #header>异常段核查清单</template>
               <el-check-tag v-for="segment in timelineSegments" :key="segment.label" :checked="segment.level === 'warn'" :type="segment.level === 'bad' ? 'danger' : 'warning'">
                 {{ segment.start }}-{{ segment.end }}s {{ segment.label }}
@@ -437,7 +437,7 @@ const submit = async () => {
           </div>
         </el-card>
 
-        <el-card shadow="never" class="premium-card">
+        <el-card shadow="never" class="qc-card">
           <template #header>质检结论提交</template>
           <el-alert
             v-if="!reviewLock?.isMine"
@@ -456,7 +456,7 @@ const submit = async () => {
           </div>
         </el-card>
 
-        <el-card shadow="never" class="premium-card">
+        <el-card shadow="never" class="qc-card">
           <template #header>Revision 历史</template>
           <div v-for="revision in qcRevisions" :key="revision.revisionNo" class="revision-item">
             <strong>#{{ revision.revisionNo }} · {{ revision.result }}</strong>
