@@ -1,5 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api import router
 from app.core.config import DEFAULT_SECRET_KEY, get_settings
@@ -20,3 +21,8 @@ app.add_middleware(
     allow_headers=['*'],
 )
 app.include_router(router)
+
+
+@app.exception_handler(PermissionError)
+async def permission_error_handler(_request: Request, exc: PermissionError):
+    return JSONResponse(status_code=403, content={'detail': str(exc)})
