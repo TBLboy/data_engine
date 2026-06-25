@@ -260,6 +260,15 @@ const togglePlayback = async () => {
 
 onMounted(loadContext)
 
+watch(episodeId, () => {
+  stopPlaybackLoop()
+  currentFrame.value = 0
+  result.value = 'pass'
+  primaryReason.value = ''
+  note.value = ''
+  loadContext()
+})
+
 watch(currentFrame, async () => {
   if (syncingSlider.value) return
   await syncVideosToFrame()
