@@ -421,3 +421,33 @@ export async function releaseManualQc(episodeId: string) {
     method: 'POST'
   })
 }
+
+// L3 hyperparameter config
+export interface L3Params {
+  arm_joint_count: number
+  eps_arm: number; eps_hand: number
+  dead_good: number; dead_warn: number
+  sat_margin: number; sat_hand_low: number; sat_hand_high: number
+  sat_good: number; sat_warn: number
+  static_window_s: number; static_arm_vel: number; static_arm_act: number; static_hand_act: number
+  static_good: number; static_warn: number
+  jitter_good: number; jitter_warn: number
+  tracking_arm_weight: number; tracking_hand_weight: number
+  tracking_good: number; tracking_warn: number
+  ldlj_good: number; ldlj_warn: number
+  chatter_threshold: number; chatter_good: number; chatter_warn: number
+  effort_good: number; effort_warn: number
+  timeline_min_dur: number; timeline_gap_merge: number
+  sync_bad_threshold_ms: number
+}
+
+export async function fetchL3Params() {
+  return request<L3Params>('/admin/l3-params')
+}
+
+export async function updateL3Params(params: Partial<L3Params>) {
+  return request<{ success: boolean; message: string }>('/admin/l3-params', {
+    method: 'PUT',
+    body: JSON.stringify(params)
+  })
+}

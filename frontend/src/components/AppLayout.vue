@@ -4,6 +4,7 @@ import {
   Finished,
   Monitor,
   Setting,
+  Tools,
   VideoCamera,
   CollectionTag
 } from '@element-plus/icons-vue'
@@ -23,7 +24,8 @@ const menuItems = [
   { path: '/task-types', label: '任务类型管理', icon: CollectionTag, roles: ['admin', 'qc_manager'] },
   { path: '/task-pool', label: '人工质检入口', icon: VideoCamera },
   { path: '/qc-history', label: '历史审计', icon: Finished, roles: ['admin', 'qc_manager'] },
-  { path: '/accounts', label: '账号管理', icon: Setting, roles: ['admin', 'qc_manager'] }
+  { path: '/accounts', label: '账号管理', icon: Setting, roles: ['admin', 'qc_manager'] },
+  { path: '/settings', label: 'L3 参数配置', icon: Tools, roles: ['admin'] }
 ]
 
 const visibleMenuItems = computed(() => menuItems.filter((item) => !item.roles || item.roles.includes(session.user?.role ?? 'viewer')))

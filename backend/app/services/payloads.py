@@ -487,8 +487,11 @@ def _build_real_manual_qc_context(db: Session, episode_id: str) -> dict | None:
     metadata = _read_minio_json(bucket, metadata_key)
 
     with _read_minio_npz(bucket, telemetry_key) as telemetry:
-        from app.services.l3_metrics import L3MetricsEngine
-        engine = L3MetricsEngine(telemetry)
+        from app.services.l3_metrics import L3MetricsEngine, L3HyperParams
+        from app.models.l3_config import L3Config
+        db_params = L3Config.get_params(db)
+        params = L3HyperParams(**{k: v for k, v in db_params.items() if k in L3HyperParams.__dataclass_fields__}) if db_params else None
+        engine = L3MetricsEngine(telemetry, params)
         result = engine.compute_all()
         metrics = result['metrics']
         timeline_segments = result['timelineSegments']

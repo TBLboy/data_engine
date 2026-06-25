@@ -1181,3 +1181,64 @@ def submit_manual_qc(
         'remainingCount': remaining_count,
         'nextEpisodeId': next_episode_id,
     }
+
+
+# ---------------------------------------------------------------------------
+# Admin: L3 超参数配置
+# ---------------------------------------------------------------------------
+
+from app.models.l3_config import L3Config
+from app.services.l3_metrics import L3HyperParams
+
+
+def _l3_params_schema(params: dict) -> dict:
+    defaults = {k: v for k, v in L3HyperParams().__dict__.items() if not k.startswith('_')}
+    merged = {**defaults, **params}
+    return {
+        'arm_joint_count': merged.get('arm_joint_count', 7),
+        'eps_arm': merged.get('eps_arm', 0.01),
+        'eps_hand': merged.get('eps_hand', 0.02),
+        'dead_good': merged.get('dead_good', 0.10),
+        'dead_warn': merged.get('dead_warn', 0.25),
+        'sat_margin': merged.get('sat_margin', 0.05),
+        'sat_hand_low': merged.get('sat_hand_low', 10.0),
+        'sat_hand_high': merged.get('sat_hand_high', 245.0),
+        'sat_good': merged.get('sat_good', 0.03),
+        'sat_warn': merged.get('sat_warn', 0.08),
+        'static_window_s': merged.get('static_window_s', 0.5),
+        'static_arm_vel': merged.get('static_arm_vel', 0.01),
+        'static_arm_act': merged.get('static_arm_act', 0.01),
+        'static_hand_act': merged.get('static_hand_act', 0.02),
+        'static_good': merged.get('static_good', 0.08),
+        'static_warn': merged.get('static_warn', 0.20),
+        'jitter_good': merged.get('jitter_good', 0.02),
+        'jitter_warn': merged.get('jitter_warn', 0.05),
+        'tracking_arm_weight': merged.get('tracking_arm_weight', 0.7),
+        'tracking_hand_weight': merged.get('tracking_hand_weight', 0.3),
+        'tracking_good': merged.get('tracking_good', 0.12),
+        'tracking_warn': merged.get('tracking_warn', 0.20),
+        'ldlj_good': merged.get('ldlj_good', 7.0),
+        'ldlj_warn': merged.get('ldlj_warn', 5.0),
+        'chatter_threshold': merged.get('chatter_threshold', 2.0),
+        'chatter_good': merged.get('chatter_good', 1.0),
+        'chatter_warn': merged.get('chatter_warn', 2.0),
+        'effort_good': merged.get('effort_good', 0.9),
+        'effort_warn': merged.get('effort_warn', 1.5),
+        'timeline_min_dur': merged.get('timeline_min_dur', 0.5),
+        'timeline_gap_merge': merged.get('timeline_gap_merge', 0.3),
+        'sync_bad_threshold_ms': merged.get('sync_bad_threshold_ms', 700.0),
+    }
+
+
+@router.get('/admin/l3-params')
+def get_l3_params(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    require_roles(current_user, 'admin')
+    params = L3Config.get_params(db)
+    return _l3_params_schema(params)
+
+
+@router.put('/admin/l3-params')
+def update_l3_params(body: dict = Body(...), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    require_roles(current_user, 'admin')
+    L3Config.save_params(db, body, updated_by=current_user.name)
+    return {'success': True, 'message': 'L3 超参数已更新'}
