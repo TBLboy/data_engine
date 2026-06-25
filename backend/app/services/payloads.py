@@ -487,85 +487,11 @@ def _build_real_manual_qc_context(db: Session, episode_id: str) -> dict | None:
     metadata = _read_minio_json(bucket, metadata_key)
 
     with _read_minio_npz(bucket, telemetry_key) as telemetry:
-        timestamps = telemetry['timestamps'].astype(np.float64)
-        relative_seconds = timestamps - timestamps[0]
-        tracking_error = np.abs(telemetry['actions'] - telemetry['qpos']).mean(axis=1)
-        sync_diff_ms = telemetry['sync_validation_max_diff'].astype(np.float64)
-        sync_valid_ratio = float(np.mean(telemetry['sync_validation_is_valid']))
-        mean_speed = np.abs(telemetry['qvel']).mean(axis=1)
-        mean_effort = np.abs(telemetry['effort']).mean(axis=1)
-        jerk = np.abs(np.diff(telemetry['qvel'], axis=0)).mean(axis=1) if len(telemetry['qvel']) > 1 else np.array([0.0])
-
-    tracking_p95 = float(np.percentile(tracking_error, 95))
-    sync_p95 = float(np.percentile(sync_diff_ms, 95))
-    sync_max = float(np.max(sync_diff_ms))
-    speed_p95 = float(np.percentile(mean_speed, 95))
-    effort_p95 = float(np.percentile(mean_effort, 95))
-    jerk_p95 = float(np.percentile(jerk, 95))
-
-    motion_score = max(0.0, min(10.0, 10.0 - tracking_p95 / 6.0 - sync_p95 / 220.0))
-    smoothness_score = max(0.0, min(10.0, 10.0 - jerk_p95 / 0.01))
-    sync_bad_rate = float(np.mean(sync_diff_ms > 700.0) * 100)
-    tracking_warn_rate = float(np.mean(tracking_error > 30.0) * 100)
-
-    metrics = [
-        {
-            'key': 'q_motion',
-            'label': 'Q_motion',
-            'value': f'{motion_score:.1f}',
-            'level': _metric_level(motion_score, 6.5, 4.5, reverse=True),
-            'description': '综合看这条轨迹整体质量。分数越高越好，越低说明这条数据更可能存在明显异常，应该重点复核。',
-        },
-        {
-            'key': 'smoothness',
-            'label': '平滑度 LDLJ*',
-            'value': f'{smoothness_score:.1f}',
-            'level': _metric_level(smoothness_score, 7.0, 5.0, reverse=True),
-            'description': '看动作是否顺滑自然。分数越低越可能存在卡顿、抖动或突然跳变。',
-        },
-        {
-            'key': 'sync',
-            'label': '同步异常率',
-            'value': f'{sync_bad_rate:.1f}%',
-            'level': _metric_level(sync_bad_rate, 3.0, 8.0),
-            'description': '看不同传感器和画面之间是否对得齐。比例越高，说明这条数据越可能有时间不同步的问题。',
-        },
-        {
-            'key': 'tracking',
-            'label': '跟踪误差',
-            'value': f'{tracking_p95:.1f}',
-            'level': _metric_level(tracking_p95, 20.0, 30.0),
-            'description': '看机器人实际动作和目标动作差得大不大。数值越大，说明执行偏差越明显。',
-        },
-        {
-            'key': 'velocity',
-            'label': '动作速度 p95',
-            'value': f'{speed_p95:.3f}',
-            'level': _metric_level(speed_p95, 0.12, 0.18),
-            'description': '看这条轨迹里动作最快的那部分是否异常激烈。数值偏高时，建议重点检查对应时间段。',
-        },
-        {
-            'key': 'effort',
-            'label': '执行力度 p95',
-            'value': f'{effort_p95:.3f}',
-            'level': _metric_level(effort_p95, 0.9, 1.5),
-            'description': '看控制输出是否过大或接近饱和。数值过高时，可能说明执行过程比较吃力或不稳定。',
-        },
-    ]
-
-    timeline_segments = []
-    timeline_segments.extend(_window_to_segment(sync_diff_ms > 700.0, relative_seconds, '同步异常', 'bad'))
-    timeline_segments.extend(_window_to_segment(tracking_error > 30.0, relative_seconds, '跟踪误差', 'warn'))
-    timeline_segments.extend(_window_to_segment(mean_speed > speed_p95, relative_seconds, '高速运动', 'warn'))
-    timeline_segments = _merge_segments(timeline_segments)
-
-    if not timeline_segments:
-        timeline_segments.append({
-            'start': 0,
-            'end': int(round(float(relative_seconds[-1]))) if len(relative_seconds) else 0,
-            'level': 'good',
-            'label': 'stable_segment',
-        })
+        from app.services.l3_metrics import L3MetricsEngine
+        engine = L3MetricsEngine(telemetry)
+        result = engine.compute_all()
+        metrics = result['metrics']
+        timeline_segments = result['timelineSegments']
 
     return {
         'durationSec': float(manifest.get('duration', 0.0)),

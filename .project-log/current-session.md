@@ -3,6 +3,7 @@
 ## Last Updated
 
 - 2026-06-25 (L2 质检指南 + 原因码汉化 + 视频安全加固，准备进入 L3)
+- 2026-06-25 (L3 指标计算引擎落地：新建 l3_metrics.py 含 8 项 P0+P1 指标、arm/hand 自动检测、timeline 段生成，替换 payloads.py 手写 6 项指标为 L3MetricsEngine 统一入口)
 - 2026-06-25 (L2/L3 质检指标补全启动：L2 视觉指南 + L3 指标计算重构)
 - 2026-06-25 (锁机制重构与任务池标签动态扫描)
 - 2026-06-25 (双视角深度体验审计 + 10 项正确性修复 + 7 项体验优化，整体复检通过)
@@ -106,6 +107,8 @@
 - 已完成原因码汉化：QcReasonPicker 的 20 个中英文原因码映射（L2 视觉类 6 项 / L3 轨迹类 6 项 / L4 任务类 4 项 / 系统类 4 项），后端存储不变，纯前端显示层
 - 已完成异常段标签汉化：timeline 的 sync_bad→同步异常、tracking_error→跟踪误差、high_velocity→高速运动
 - 已完成视频安全加固：移除所有视频面板的"下载对象"按钮（downloadMedia 函数 + downloadingObjectId + downloadManualQcObject import 全部清除），video 元素加 `disablePictureInPicture` 禁用浏览器小窗播放
+- 已完成 L3 指标计算引擎落地：新建 `backend/app/services/l3_metrics.py` 独立模块，含 8 项 P0+P1 指标（平滑度/无效动作/动作饱和/停滞/时间戳抖动/跟踪误差/手指颤振/执行力度）及 Q_motion 加权合成，支持 arm/hand 维度自动检测（基于 qpos 值域判断 rad vs 0-255），timeline 段逐帧生成+merged；`payloads.py` 中 `_build_real_manual_qc_context` 已切换为 L3MetricsEngine 统一入口，旧手写 6 项指标逻辑已移除
+- 已验证真实 MinIO telemetry 数据的 arm/hand 维度结构：单臂 7+6 或双臂 14+12，含零值维度过滤；L3 指标在 batch_3585f01e8960f236_episode_000026 上产出 9 条指标卡片 + 7 个 timeline 段
 
 ## Current Risks
 
