@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-- 2026-06-25 (role-based view separation landed: reviewer dashboard + pipeline mode)
+- 2026-06-25 (QcTask updated_at, pipeline auto-advance fix, reviewer dashboard bugfix)
 
 ## Current Objective
 

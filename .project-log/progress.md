@@ -1,3 +1,37 @@
+## 2026-06-25 (QcTask updated_at + pipeline auto-advance fix + reviewer dashboard bugfix)
+
+- Type: bugfix
+- Status: backend API verified, frontend deployed, auto-advance confirmed working
+- Importance: high
+- Reusable: yes
+- Objective: 修复 reviewer dashboard 显示数据全为 0 的 bug，补全 QcTask.updated_at 字段，修复提交后页面不自动跳转的问题
+- Work completed:
+  - 新增 `QcTask.updated_at` 字段（Alembic migration 20260625_0006），自动回填历史数据
+  - `reviewer_dashboard_payload` 修正：`assignee` 是字符串字段非 `assignee_id`；`updated_at` 用于精确计算今日完成数
+  - `manual-qc.vue` 新增 `watch(episodeId)` 监听路由参数变化，提交后自动重新加载新 episode 上下文
+  - 修正 `submitManualQc` 使用 `_active_task_for_episode` 而非 `.first()`，避免同一 episode 多任务时取到旧版本
+- Problems encountered:
+  - `reviewer_dashboard_payload` 首版使用 `QcTask.assignee_id`，但模型字段实际是 `assignee`（字符串），导致 500 错误
+  - 前端 try/catch 静默吞掉了 API 错误，reviewer 看到个人看板全 0 但没有任何错误提示
+  - `submitManualQc` 用 `.first()` 查询 QcTask，同一 episode 存在多版本任务时拿到旧版本（version=1 而非 active 的 version=4/5/6），submit 一直报版本冲突
+  - Vue Router 同组件路由切换不重新挂载，`router.push` 后页面内容不更新
+  - reviewer 密码过期需通过管理员接口重置
+- Resolution:
+  - 查询改用 `QcTask.assignee == reviewer_name`（按名称匹配）
+  - submit 改用 `_active_task_for_episode()`（is_active=1 优先）
+  - 新增 `watch(episodeId, loadContext)` 解决同组件路由切换不刷新的问题
+- Files changed:
+  - `backend/app/models/qc.py`
+  - `backend/app/services/payloads.py`
+  - `backend/app/api/routes/qc.py`
+  - `backend/migrations/versions/20260625_0006_qc_task_updated_at.py`
+  - `frontend/src/pages/manual-qc.vue`
+- Verification:
+  - `alembic upgrade head` 成功添加 updated_at 列并回填
+  - API: reviewer dashboard 返回 pendingCount=13, doneTodayCount=4
+  - API: submit 返回 remainingCount 和 nextEpisodeId 正确
+  - Playwright E2E: reviewer 登录 → 看板 → 开始质检 → 提交 → 自动跳转链路正常
+
 ## 2026-06-25 (Role-based view separation: reviewer dashboard + pipeline mode)
 
 - Type: implementation
