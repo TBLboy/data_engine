@@ -27,7 +27,7 @@ const nextTask = computed(() => payload.value?.nextTask)
 
 const startQc = () => {
   if (nextTask.value) {
-    router.push(`/manual-qc/${nextTask.value.episodeId}`)
+    router.push(`/manual-qc/${nextTask.value.episodeId}?pipeline=1`)
   }
 }
 </script>

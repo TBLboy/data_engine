@@ -31,6 +31,7 @@ const celebrating = ref(false)
 const celebrationDone = ref(false)
 const videoRefs = ref<Record<string, HTMLVideoElement | null>>({})
 const isReviewer = computed(() => session.user?.role === 'reviewer')
+const isPipeline = computed(() => isReviewer.value && route.query.pipeline === '1')
 let playbackLoopId: number | null = null
 
 const episodeId = computed(() => String(route.params.id))
@@ -297,7 +298,7 @@ const submit = async () => {
       version: reviewLock.value.version
     })
 
-    if (isReviewer.value && resp.remainingCount === 0) {
+    if (isPipeline.value && resp.remainingCount === 0) {
       celebrating.value = true
       triggerCelebration(() => {
         celebrating.value = false
@@ -306,7 +307,7 @@ const submit = async () => {
       return
     }
 
-    if (isReviewer.value && resp.nextEpisodeId) {
+    if (isPipeline.value && resp.nextEpisodeId) {
       ElMessage.success(`已提交，正在加载下一条...（剩余 ${resp.remainingCount} 条）`)
       setTimeout(() => {
         router.push(`/manual-qc/${resp.nextEpisodeId}`)
