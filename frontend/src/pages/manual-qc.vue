@@ -35,6 +35,10 @@ const maxFrame = computed(() => Math.max(totalFrames.value - 1, 0))
 const progress = computed(() => (maxFrame.value ? Math.round((currentFrame.value / maxFrame.value) * 100) : 0))
 const currentTimeSec = computed(() => currentFrame.value / fps.value)
 const metricCards = computed(() => payload.value?.metrics ?? [])
+const sortedMetricCards = computed(() => {
+  const order: Record<string, number> = { bad: 0, warn: 1, good: 2 }
+  return [...metricCards.value].sort((a, b) => (order[a.level] ?? 3) - (order[b.level] ?? 3))
+})
 const timelineSegments = computed(() => payload.value?.timelineSegments ?? [])
 const qcRevisions = computed(() => payload.value?.revisions ?? [])
 const episode = computed(() => payload.value?.episode)
@@ -421,9 +425,10 @@ const submit = async () => {
       <aside class="manual-side sticky-side">
         <el-card shadow="never" class="qc-card score-card">
           <template #header>Episode 质量评分</template>
-          <div class="score-ring"><strong>{{ metricCards[0]?.value || '--' }}</strong><span>{{ metricCards[0]?.label || 'Q_motion' }}</span></div>
-          <div class="metric-list compact-list">
-            <div v-for="metric in metricCards" :key="metric.key" class="metric-item" :class="metric.level">
+          <div class="score-ring"><strong>{{ sortedMetricCards[0]?.value || '--' }}</strong><span>{{ sortedMetricCards[0]?.label || 'Q_motion' }}</span></div>
+          <div class="metric-scroll">
+            <div class="metric-list compact-list">
+              <div v-for="metric in sortedMetricCards" :key="metric.key" class="metric-item" :class="metric.level">
               <div class="metric-copy">
                 <div class="metric-label-row">
                   <strong>{{ metric.label }}</strong>
@@ -434,6 +439,7 @@ const submit = async () => {
               </div>
               <b>{{ metric.value }}</b>
             </div>
+          </div>
           </div>
         </el-card>
 
@@ -490,5 +496,24 @@ const submit = async () => {
   color: #94a3b8;
   cursor: help;
   font-size: 13px;
+}
+
+.metric-scroll {
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.metric-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+
+.metric-scroll::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+.metric-scroll::-webkit-scrollbar-track {
+  background: transparent;
 }
 </style>

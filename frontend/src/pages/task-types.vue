@@ -33,6 +33,7 @@ const attachDialogVisible = ref(false)
 
 const selectedCandidateBatchIds = ref<string[]>([])
 const detachingBatchId = ref('')
+const keyword = ref('')
 
 const createForm = reactive<TaskTypeCreateRequest>({
   name: '',
@@ -49,6 +50,14 @@ const canEditSelected = computed(() => selectedTaskType.value?.id !== 'task_type
 const selectedBatches = computed(() => detail.value?.batches ?? [])
 const selectedBatchCount = computed(() => selectedBatches.value.length)
 const activeTaskTypeCount = computed(() => taskTypes.value.filter((item) => item.isActive).length)
+
+const filteredTaskTypes = computed(() => {
+  if (!keyword.value.trim()) return taskTypes.value
+  const k = keyword.value.trim().toLowerCase()
+  return taskTypes.value.filter((item) =>
+    item.name.toLowerCase().includes(k) || item.description.toLowerCase().includes(k)
+  )
+})
 
 const loadTaskTypes = async () => {
   taskTypes.value = await fetchTaskTypes()
@@ -246,8 +255,10 @@ const detachBatch = async (batch: BatchSummary) => {
             <template #header>
               <div class="card-header"><span>任务类型列表</span><el-tag type="info">左选右管</el-tag></div>
             </template>
-            <el-radio-group v-model="selectedTaskTypeId" class="task-type-list">
-              <div v-for="item in taskTypes" :key="item.id" class="task-type-item">
+            <el-input v-model="keyword" placeholder="搜索任务类型名称或描述" clearable size="small" class="qc-input" style="margin-bottom: 12px;" />
+            <div class="task-type-scroll">
+              <el-radio-group v-model="selectedTaskTypeId" class="task-type-list">
+                <div v-for="item in filteredTaskTypes" :key="item.id" class="task-type-item">
                 <el-radio :value="item.id">
                   <div class="task-type-copy">
                     <strong>{{ item.name }}</strong>
@@ -259,6 +270,7 @@ const detachBatch = async (batch: BatchSummary) => {
                 </el-tag>
               </div>
             </el-radio-group>
+            </div>
           </el-card>
         </el-col>
 
@@ -355,6 +367,25 @@ const detachBatch = async (batch: BatchSummary) => {
   flex-direction: column;
   gap: 12px;
   width: 100%;
+}
+
+.task-type-scroll {
+  max-height: 480px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.task-type-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.task-type-scroll::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 3px;
+}
+
+.task-type-scroll::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .task-type-item {
