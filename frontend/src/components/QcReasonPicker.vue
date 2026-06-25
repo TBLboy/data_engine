@@ -6,10 +6,34 @@ const primaryReason = defineModel<string>('primaryReason', { default: '' })
 const secondaryReasons = ref<string[]>([])
 
 const reasonGroups = [
-  { label: 'L2 视觉类', options: ['blur', 'exposure_over', 'occlusion_hand', 'occlusion_object', 'object_not_visible', 'depth_invalid'] },
-  { label: 'L3 轨迹类', options: ['motion_abnormal', 'chatter', 'stall', 'tracking_error', 'joint_limit_risk', 'sync_bad'] },
-  { label: 'L4 任务类', options: ['task_incomplete', 'wrong_final_state', 'grasp_failed', 'placement_failed'] },
-  { label: '系统类', options: ['conversion_issue', 'metadata_missing', 'modality_missing', 'file_corrupted'] }
+  { label: 'L2 视觉类', options: [
+    { value: 'blur', label: '图像模糊' },
+    { value: 'exposure_over', label: '过度曝光' },
+    { value: 'occlusion_hand', label: '手部遮挡' },
+    { value: 'occlusion_object', label: '目标遮挡' },
+    { value: 'object_not_visible', label: '目标不可见' },
+    { value: 'depth_invalid', label: '深度图异常' },
+  ]},
+  { label: 'L3 轨迹类', options: [
+    { value: 'motion_abnormal', label: '运动异常' },
+    { value: 'chatter', label: '手指颤振' },
+    { value: 'stall', label: '运动停滞' },
+    { value: 'tracking_error', label: '跟踪误差大' },
+    { value: 'joint_limit_risk', label: '关节限位风险' },
+    { value: 'sync_bad', label: '同步异常' },
+  ]},
+  { label: 'L4 任务类', options: [
+    { value: 'task_incomplete', label: '动作流程不完整' },
+    { value: 'wrong_final_state', label: '终止状态错误' },
+    { value: 'grasp_failed', label: '抓取失败' },
+    { value: 'placement_failed', label: '放置失败' },
+  ]},
+  { label: '系统类', options: [
+    { value: 'conversion_issue', label: '数据转换问题' },
+    { value: 'metadata_missing', label: '元数据缺失' },
+    { value: 'modality_missing', label: '模态缺失' },
+    { value: 'file_corrupted', label: '文件损坏' },
+  ]}
 ]
 </script>
 
@@ -26,7 +50,7 @@ const reasonGroups = [
       <div class="field-label">主原因码（Fail 必填，只能一个）</div>
       <el-select v-model="primaryReason" class="qc-select" placeholder="选择主原因码" style="width: 100%">
         <el-option-group v-for="group in reasonGroups" :key="group.label" :label="group.label">
-          <el-option v-for="item in group.options" :key="item" :label="item" :value="item" />
+          <el-option v-for="item in group.options" :key="item.value" :label="item.label" :value="item.value" />
         </el-option-group>
       </el-select>
     </template>
@@ -34,7 +58,7 @@ const reasonGroups = [
     <div class="field-label">次原因码（可选，最多 3 个）</div>
     <el-select v-model="secondaryReasons" class="qc-select" multiple :multiple-limit="3" placeholder="记录轻微问题或伴随问题" style="width: 100%">
       <el-option-group v-for="group in reasonGroups" :key="group.label" :label="group.label">
-        <el-option v-for="item in group.options" :key="item" :label="item" :value="item" />
+        <el-option v-for="item in group.options" :key="item.value" :label="item.label" :value="item.value" />
       </el-option-group>
     </el-select>
   </div>

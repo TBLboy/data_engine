@@ -2,6 +2,8 @@
 
 ## Last Updated
 
+- 2026-06-25 (L2 质检指南 + 原因码汉化 + 视频安全加固，准备进入 L3)
+- 2026-06-25 (L2/L3 质检指标补全启动：L2 视觉指南 + L3 指标计算重构)
 - 2026-06-25 (锁机制重构与任务池标签动态扫描)
 - 2026-06-25 (双视角深度体验审计 + 10 项正确性修复 + 7 项体验优化，整体复检通过)
 - 2026-06-25 (QcTask updated_at, pipeline auto-advance fix, reviewer dashboard bugfix)
@@ -97,6 +99,13 @@
 - 已加任务类型名输入校验（MEDIUM）：非空 + ≤50 字符 + 禁尖括号，覆盖创建/重命名
 - 已完成体验优化一组（LOW）：登录错误只渲染 `detail` + 空值客户端校验、工作台默认选“有批次”的任务类型、manual-qc 返回按钮按角色对齐标签与去向、对象下载按 `mimeType` 给扩展名、无媒体（0 帧）集禁用播放控件、全局中文 Element Plus locale（确认框 OK/Cancel 等中文化）
 - 已完成整体复检：重建 backend/frontend 镜像、`alembic upgrade head`（0007/0008）、生产栈重启 Healthy；db/API 实测矛盾态=0、待分类 4/303、reviewer 越权已堵、admin 全量对照正常；chromium 实测根路径不白屏、admin dashboard 派发工作区正常渲染
+- 已明确 L2/L3/L4 四层质检体系的人机分工：L1 硬性门控 = 上游 TeleDex 平台负责；L2 视觉质量（模糊/过曝/遮挡/抖动）与 L4 任务完成度 = 质检员人工判断；L3 遥操作轨迹质量 = 程序自动计算（当前仅手写 6 个 numpy 指标，业务文档调研了 Forge 8+3 指标体系但未落定选型与阈值）
+- 已规划 L2/L3 补全工作：任务 1 = 编写质检员视觉检查指南文档（L2 指标人工判读清单）；任务 2 = L3 指标计算方案从概念级扩充到可执行级（技术选型 Forge、细颗粒度业务逻辑含公式+阈值+灵巧手适配、代码落地替代手写 numpy、独立指标说明文档供审查）
+- 已确认当前 manual QC 指标计算的 raw/processed 数据依赖关系：取 processed 前缀下的 telemetry.npz（474-489 行），无 processed 时 fallback 已从 demo 假数据改为空数组（诚实返回无指标）
+- 已完成 L2 视觉质检指南（任务 1）：编写《数采人员操作规范.md》，含数采人员 3 条采集规范 + 质检员 6 项 L2 视觉检查项（模糊/过曝/遮挡/抖动/深度图异常/动作流程完整性），每项有判定标准（正常/警告/不合格）和重点关注说明
+- 已完成原因码汉化：QcReasonPicker 的 20 个中英文原因码映射（L2 视觉类 6 项 / L3 轨迹类 6 项 / L4 任务类 4 项 / 系统类 4 项），后端存储不变，纯前端显示层
+- 已完成异常段标签汉化：timeline 的 sync_bad→同步异常、tracking_error→跟踪误差、high_velocity→高速运动
+- 已完成视频安全加固：移除所有视频面板的"下载对象"按钮（downloadMedia 函数 + downloadingObjectId + downloadManualQcObject import 全部清除），video 元素加 `disablePictureInPicture` 禁用浏览器小窗播放
 
 ## Current Risks
 

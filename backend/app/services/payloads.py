@@ -554,9 +554,9 @@ def _build_real_manual_qc_context(db: Session, episode_id: str) -> dict | None:
     ]
 
     timeline_segments = []
-    timeline_segments.extend(_window_to_segment(sync_diff_ms > 700.0, relative_seconds, 'sync_bad', 'bad'))
-    timeline_segments.extend(_window_to_segment(tracking_error > 30.0, relative_seconds, 'tracking_error', 'warn'))
-    timeline_segments.extend(_window_to_segment(mean_speed > speed_p95, relative_seconds, 'high_velocity', 'warn'))
+    timeline_segments.extend(_window_to_segment(sync_diff_ms > 700.0, relative_seconds, '同步异常', 'bad'))
+    timeline_segments.extend(_window_to_segment(tracking_error > 30.0, relative_seconds, '跟踪误差', 'warn'))
+    timeline_segments.extend(_window_to_segment(mean_speed > speed_p95, relative_seconds, '高速运动', 'warn'))
     timeline_segments = _merge_segments(timeline_segments)
 
     if not timeline_segments:
@@ -1023,19 +1023,8 @@ def manual_qc_context_payload(db: Session, episode_id: str, current_user: User |
             **serialize_episode(episode),
             'fps': 30.0,
         },
-        'metrics': [
-            {'key': 'q_motion', 'label': 'Q_motion', 'value': '8.6', 'level': 'good', 'description': '轨迹质量综合分'},
-            {'key': 'smoothness', 'label': '平滑度 LDLJ', 'value': '7.9', 'level': 'good', 'description': '动作连续性良好'},
-            {'key': 'sync', 'label': '同步异常率', 'value': '1.8%', 'level': 'good', 'description': '低于 5% 阈值'},
-            {'key': 'tracking', 'label': '跟踪误差', 'value': '0.21', 'level': 'warn', 'description': '右手末段略高'},
-            {'key': 'chatter', 'label': '手指颤振', 'value': '0.08', 'level': 'good', 'description': '未发现明显抖动'},
-            {'key': 'saturation', 'label': '动作饱和率', 'value': '3.2%', 'level': 'good', 'description': '遥操指令正常'},
-        ],
-        'timelineSegments': [
-            {'start': 18, 'end': 26, 'level': 'warn', 'label': 'tracking_error'},
-            {'start': 63, 'end': 71, 'level': 'bad', 'label': 'occlusion_object'},
-            {'start': 82, 'end': 88, 'level': 'warn', 'label': 'sync_bad'},
-        ],
+        'metrics': [],
+        'timelineSegments': [],
         'revisions': [serialize_revision(item) for item in revisions],
         'reviewLock': review_lock,
         'media': _manual_qc_media(db, episode_id, current_user),

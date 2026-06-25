@@ -5,7 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
 import QcReasonPicker from '../components/QcReasonPicker.vue'
-import { claimManualQc, downloadManualQcObject, fetchManualQcContext, refreshManualQcMedia, releaseManualQc, submitManualQc, type ManualQcContext } from '../api/client'
+import { claimManualQc, fetchManualQcContext, refreshManualQcMedia, releaseManualQc, submitManualQc, type ManualQcContext } from '../api/client'
 import { useSessionStore } from '../stores/session'
 import { triggerCelebration } from '../composables/useCelebration'
 
@@ -22,7 +22,6 @@ const submitting = ref(false)
 const claiming = ref(false)
 const releasing = ref(false)
 const refreshingMedia = ref(false)
-const downloadingObjectId = ref('')
 const error = ref('')
 const payload = ref<ManualQcContext | null>(null)
 const selectedVariant = ref<'rgb' | 'depth_colormap'>('rgb')
@@ -51,6 +50,10 @@ const scoreMetric = computed(() => metricCards.value.find((metric) => metric.key
 const timelineSegments = computed(() => payload.value?.timelineSegments ?? [])
 const qcRevisions = computed(() => payload.value?.revisions ?? [])
 const episode = computed(() => payload.value?.episode)
+const episodeNumber = computed(() => {
+  const parts = episode.value?.id?.split('_episode_')
+  return parts?.[1] ? `episode_${parts[1]}` : ''
+})
 const reviewLock = computed(() => payload.value?.reviewLock)
 const media = computed(() => payload.value?.media ?? [])
 const mediaByVariant = computed(() => media.value.filter((item) => item.variant === selectedVariant.value))
@@ -179,27 +182,6 @@ const refreshMedia = async () => {
   }
 }
 
-const downloadMedia = async (objectId: string) => {
-  downloadingObjectId.value = objectId
-  try {
-    const blob = await downloadManualQcObject(episodeId.value, objectId)
-    const link = document.createElement('a')
-    const url = URL.createObjectURL(blob)
-    link.href = url
-    const mime = media.value.find((item) => item.objectId === objectId)?.mimeType ?? ''
-    const ext = mime.includes('mp4') ? 'mp4' : (mime.split('/')[1] || 'bin')
-    link.download = `${episodeId.value}-${objectId}.${ext}`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(url)
-    ElMessage.success('对象下载已开始')
-  } catch (err) {
-    ElMessage.error(formatError(err, '对象下载失败'))
-  } finally {
-    downloadingObjectId.value = ''
-  }
-}
 
 const claim = async () => {
   claiming.value = true
@@ -343,7 +325,7 @@ const submit = async () => {
             <div>
               <el-tag type="warning" effect="dark">{{ episode?.qcStatus?.toUpperCase() || 'IN REVIEW' }}</el-tag>
             <h1>人工质检工作台</h1>
-            <p>{{ episode?.id }} · {{ episode?.taskName }} · {{ episode?.batchId }} · MinIO indexed</p>
+            <p>{{ episode?.batchName }} · {{ episode?.taskName }} · {{ episodeNumber }}</p>
           </div>
           <div class="lock-panel">
             <span>审核锁状态</span>
@@ -392,11 +374,11 @@ const submit = async () => {
                 playsinline
                 preload="metadata"
                 muted
+                disablePictureInPicture
                 @click.prevent
               />
               <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:8px; font-size:12px; color:#909399;">
                 <span>{{ item.slot }} · expires {{ item.previewExpiresAt || '--' }}</span>
-                <el-button link type="primary" :loading="downloadingObjectId === item.objectId" @click="downloadMedia(item.objectId)">下载对象</el-button>
               </div>
             </div>
             <el-empty v-if="!mediaByVariant.length" description="当前无可播放媒体" />
