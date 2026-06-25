@@ -196,41 +196,263 @@
 
 ### 2026-06-25 - 系统采用角色视图分离，reviewer 与 admin/qc_manager 看到不同界面
 
-- Decision: 登录后的界面和功能集合按角色角色分流。`admin` / `qc_manager` 保留当前的完整运营视图（派发工作台、数据总库、任务类型管理、账号管理等）。`reviewer` 登陆后只开放三个页面：个人任务看板（`reviewer-dashboard`）、我的待质检任务列表（`task-pool` reviewer 版）、人工质检界面（`manual-qc` 流水线模式）。`viewer` 只读访问工作台概览。
-- Context: 当前系统所有页面都以 admin 视角为中心设计，但实际使用者是质检员。质检员的工作模式是流水线式的：看自己有多少任务 → 进入质检 → 提交 → 自动跳到下一条。他们不需要看到批次管理、派发逻辑、任务类型管理、账号管理等运营功能。
-- Alternatives considered:
-  - 保持所有角色共用相同页面，靠前端 `v-if` 隐藏部分区块
-  - 只做菜单过滤，不改变每个页面内部的内容逻辑
-  - 让 reviewer 也使用当前的 dashboard，只是去掉派发控件
-- Reason: reviewer 的工作目标明确（快速高效的流水线质检），信息需求也与 admin 完全不同（"我有哪些任务" vs "这个 batch 的派发进度如何"）。如果只是用 `v-if` 隐藏控件，reviewer 仍然会被满屏的派发控件、批次统计、审核员工作量等无关信息干扰。独立页面可以做到信息密度和操作路径都针对角色优化。
-- Evidence / Verification: 当前 dashboard 完全围绕批次派发运营设计，task-pool 按 batch 展示所有任务，都没有"以 reviewer 为中心"的视图
-- Impacted nodes: D, E
-- Status: active
+- Decision: 登录后的界面和功能集合按角色分流。
+- Implementation detail:
+
+  **路由配置（`router/index.ts`）：**
+  ```
+  /login          → 所有角色可访问（未登录）
+  /dashboard      → admin / qc_manager / viewer（派发工作台）
+  /reviewer       → reviewer 专属（个人任务看板）
+  /task-pool      → 共用路由，通过 session.user.role 决定渲染内容
+  /manual-qc/:id  → 共用路由
+  /database       → admin / qc_manager 可见，reviewer 重定向到 /reviewer
+  /task-types     → admin / qc_manager 可见，reviewer 重定向到 /reviewer
+  /qc-history     → admin / qc_manager 可见，reviewer 重定向到 /reviewer
+  /accounts       → admin / qc_manager 可见，reviewer 重定向到 /reviewer
+  ```
+
+  **路由守卫逻辑（`router.beforeEach`）：**
+  ```
+  1. 目标路由是否需要登录？→ 否 → 放行
+  2. 已登录？→ 否 → 重定向 /login
+  3. 目标路由 meta.roles 是否包含 session.user.role？→ 否 → 重定向：
+     - reviewer → /reviewer
+     - viewer → /dashboard
+     - admin/qc_manager → /dashboard
+  4. 访问 / 根路径时按角色重定向：
+     - reviewer → /reviewer
+     - 其他 → /dashboard
+  ```
+
+  **菜单可见性（`AppLayout.vue`）：**
+  ```
+  menuItems 按 roles 字段过滤：
+  - /dashboard      → 所有角色可见
+  - /database       → ['admin', 'qc_manager']
+  - /task-types     → ['admin', 'qc_manager']
+  - /task-pool      → 所有角色可见（但内部渲染根据 role 分支）
+  - /qc-history     → ['admin', 'qc_manager']
+  - /accounts       → ['admin', 'qc_manager']
+  - /reviewer       → ['reviewer']（仅 reviewer 登录后菜单中出现）
+  ```
+  reviewer 的菜单栏只显示：`个人看板` + `人工质检入口` 两项
+
+  **session store 约束：**
+  - `session.user.role` 在登录时由 `/auth/session` 返回并持久化到 Pinia store
+  - 页面内部通过 `const isReviewer = computed(() => session.user?.role === 'reviewer')` 判断渲染分支
+  - `/task-pool` 页面内部：`isReviewer ? reviewerTaskPoolPayload() : adminTaskPoolPayload()`
+  - `/manual-qc/:id` 页面内部：`isReviewer` 决定是否启用流水线自动跳转
 
 ### 2026-06-25 - reviewer 采用流水线式质检模式，提交后自动跳转下一条
 
-- Decision: reviewer 在 `manual-qc` 页面提交质检结果后，系统自动加载该 reviewer 的下一条待质检任务，无需手动返回列表再选择。只有当 reviewer 所有待处理任务全部完成时，触发全屏彩带礼花庆祝动画后引导返回个人看板。如果 reviewer 从 task-pool 进入一条已完成任务进行重新质检，则提交后不自动跳转。
-- Context: 质检员的工作目标是尽快完成分配给自己的所有任务。每次提交后手动返回列表 → 翻页 → 找到下一条 → 点击进入，这种操作链在流水线模式下每轮浪费 3-5 次点击。自动跳转可以显著提高日质检吞吐量。
-- Alternatives considered:
-  - 提交后停留在当前页面，显示"提交成功"提示，由用户自行决定下一步
-  - 提交后弹出"下一条"按钮，但不自动跳转
-  - 在页面内做一个"上一页/下一页"翻页控件
-- Reason: 流水线模式的核心就是减少决策点。提交就意味着"这条我审完了"，此时最自然的下一步就是继续审下一条。只有在任务全部完成时才需要停下来给出反馈。自动跳转比翻页控件更适合"一次一条"的质检节奏。
-- Evidence / Verification: 当前 manual-qc 提交后只显示 success message 并停留在原地，reviewer 需要手动回到 task-pool 选下一条
-- Impacted nodes: D, E
-- Status: active
+### 2026-06-25 - reviewer 的个人任务看板（reviewer-dashboard 页面）
+
+- Decision: 创建独立页面 `/reviewer`，作为 reviewer 登录后的默认首页和个人任务操作中心。
+- Implementation detail:
+
+  **后端 API：`GET /api/reviewer/dashboard`**
+  - 请求：session cookie，无额外参数
+  - 返回 ReviewerDashboardPayload：
+    - stats.pendingCount: new + assigned 状态任务数
+    - stats.inReviewCount: 当前被该 reviewer 锁定的 in_review 任务数
+    - stats.doneTodayCount: 今日完成的 done 任务数
+    - stats.totalAssignedCount: 总计分配给该 reviewer 的活跃任务数
+    - batchGroups[]: 按 batch_id 分组，关联 Batch.name，每组包含 pendingCount / doneCount / totalCount
+    - nextTask: 最早一条待处理任务（taskId + episodeId + batchName），无任务时为 null
+  - 后端查询逻辑（payloads.py 新增 reviewer_dashboard_payload 函数）：
+    1. reviewer_id = current_user().id
+    2. 查 QcTask WHERE assignee_id = reviewer_id AND is_active = 1
+    3. 按 status 分组计数得到 stats 四个指标
+    4. 按 batch_id 分组并 JOIN Batch.name 得到 batchGroups
+    5. 取 status IN ('new', 'assigned') ORDER BY created_at ASC LIMIT 1 得到 nextTask
+  - API 路由注册：`router.get('/reviewer/dashboard', response_model=ReviewerDashboardPayload)`
+
+  **前端页面 reviewer-dashboard.vue：**
+  - 顶部：page-title-row 欢迎栏，显示"你好，{reviewer.name}，今日已完成 X 条任务"
+  - 四张统计卡片（qc-stat-card）：
+    - 待质检（accent-blue）: stats.pendingCount
+    - 进行中（accent-orange）: stats.inReviewCount
+    - 今日完成（accent-green）: stats.doneTodayCount
+    - 总计分配（accent-purple）: stats.totalAssignedCount
+  - 一键开始质检按钮：
+    - el-button type="primary" size="large"
+    - 点击跳转 router.push('/manual-qc/' + nextTask.episodeId)
+    - 若 nextTask == null 则 disabled，文字变为"暂无待质检任务"
+  - 按批次分组列表：
+    - 使用 el-table 展示 batchGroups
+    - 列：批次名称、待质检数、已完成数、进度条
+    - 点击某一行展开该 batch 下的任务简要列表
+  - 底部快捷操作：链接到 /task-pool 查看完整任务列表
+
+  **task-pool reviewer 版差异：**
+  - 去掉批次选择下拉框，去掉"返回工作台派发"按钮
+  - 页面标题改为"我的质检任务"
+  - API 调用改为 GET /api/reviewer/tasks?status=all|pending|in_review|done
+  - 返回当前 reviewer 被分配的所有活跃任务，支持按状态筛选
+  - 每条任务保留"进入质检"按钮（带 mode=recheck query）
+  - 管理员版 task-pool 保持不变
+
+  **约束 conditions：**
+  - reviewer 不能通过 URL 直接访问 /dashboard、/database、/task-types、/qc-history、/accounts
+  - admin/qc_manager 不能访问 /reviewer
+  - /task-pool 和 /manual-qc/:id 是共用路由，内部按 role 分支渲染
+
+
+- Decision: reviewer 在 `manual-qc` 页面提交质检结果后，系统自动加载该 reviewer 的下一条待质检任务。只有当 reviewer 所有待处理任务全部完成时，触发庆祝动画后引导返回个人看板。从 task-pool 进入已完成任务进行重新质检时，提交后不自动跳转。
+- Implementation detail:
+
+  **区分"流水线模式"和"重审模式"的机制：**
+  - `manual-qc.vue` 的 `onMounted` 中通过 `route.query.mode` 判断：
+    - 无 query 或 `mode=pipeline` → 流水线模式（从 reviewer-dashboard "开始质检" 进入）
+    - `mode=recheck` → 重审模式（从 task-pool 点击已完成任务进入）
+  - reviewer-dashboard 的"开始质检"按钮：`router.push({ path: '/manual-qc/' + nextTask.episodeId })`（不带 mode query，默认流水线）
+  - task-pool 的"进入质检"按钮：`router.push({ path: '/manual-qc/' + row.episodeId, query: { mode: 'recheck' } })`
+
+  **提交后自动跳转逻辑（`submit()` 函数末尾）：**
+  ```
+  1. submitManualQc() 返回 { success: true, remainingCount: N }
+     - remainingCount: 该 reviewer 剩余待处理任务数（后端在提交完成后实时查询）
+  2. if (mode === 'recheck'):
+       ElMessage.success('重新质检已提交')
+       return  // 不跳转，留在当前页
+  3. if (remainingCount === 0):
+       // 全部完成 → 触发庆祝
+       triggerCelebration()
+       return
+  4. // 还有剩余任务 → 自动跳转下一条
+     ElMessage.success(`已提交，正在加载下一条...（剩余 ${remainingCount} 条）`)
+     setTimeout(() => {
+       router.push({ path: '/manual-qc/' + response.nextEpisodeId })
+     }, 800)
+  ```
+
+  **后端 submitManualQc 返回结构调整：**
+  ```python
+  # qc.py submit 路由返回值新增字段：
+  {
+    "success": True,
+    "message": "QC 结果已提交",
+    "remainingCount": 3,     # 新增：该 reviewer 剩余 new+assigned 状态的活跃任务数
+    "nextEpisodeId": "episode_xxx"  # 新增：下一条待处理任务的 episode_id，若无则为 null
+  }
+  ```
+
+  **后端查询 remainingCount 和 nextEpisodeId 的 SQL 逻辑：**
+  ```python
+  # 在 submit 完成后，查询当前 reviewer 状态：
+  reviewer_id = current_user().id
+  pending_tasks = db.query(QcTask).filter(
+      QcTask.assignee_id == reviewer_id,
+      QcTask.is_active == 1,
+      QcTask.status.in_(['new', 'assigned']),
+      QcTask.id != submitted_task.id  # 排除刚提交的这条
+  ).order_by(QcTask.created_at.asc()).all()
+  remainingCount = len(pending_tasks)
+  nextEpisodeId = pending_tasks[0].episode_id if pending_tasks else None
+  ```
+
+  **manual QC 顶部流水线状态栏（仅 reviewer + 流水线模式显示）：**
+  ```
+  页面顶部 hero 区域增加一行：
+  "当前批次：double_linkerhand_task_...  |  第 3 条 / 共 12 条待质检"
+  数据来源：manual-qc payload 中新增字段 currentIndex / totalPending
+  ```
+  - `currentIndex`：当前 episode 在该 reviewer 待处理任务列表中的序号（按 created_at ASC）
+  - `totalPending`：该 reviewer 待处理任务总数
+  - 这两个字段在 `manual_qc_context()` 中计算，不需要额外 API 调用
 
 ### 2026-06-25 - reviewer 完成全部任务后触发庆祝动画，作为正向激励
 
-- Decision: reviewer 在流水线模式下提交最后一条待质检任务后，前端触发全屏彩带/礼花粒子动画（使用 `canvas-confetti` 库）并配合 Web Audio API 合成短促上升提示音。动画持续约 3 秒，结束后显示完成提示和返回个人看板按钮。这不是装饰性功能，而是产品级的多巴胺正向激励设计。
-- Context: 质检工作本身是高重复性劳动，质检员在完成一轮工作任务后没有任何正向反馈，容易产生疲劳感。产品级别的庆祝动画可以给予即时满足感，降低工作枯燥感。
-- Alternatives considered:
-  - 只显示文字提示"全部完成"
-  - 使用静态 emoji 或简单 CSS 动画
-  - 不做任何庆祝效果
-- Reason: 用户明确要求产品级别的礼花彩条效果，不是 emoji 或简单动画。`canvas-confetti` 是成熟的开源方案（GitHub 10k+ stars），支持粒子物理、自定义颜色、多 burst 发射，适合生产环境使用。搭配 Web Audio API 合成音效可以零外部依赖完成完整的多感官激励。
-- Evidence / Verification: `canvas-confetti` 已在 npm 可用，Web Audio API 在所有现代浏览器中原生支持
-- Impacted nodes: D
+- Decision: reviewer 在流水线模式下提交最后一条待质检任务后，前端触发全屏彩带/礼花粒子动画 + 提示音效。
+- Implementation detail:
+
+  **依赖安装：**
+  ```
+  npm install canvas-confetti
+  npm install -D @types/canvas-confetti
+  ```
+
+  **触发条件（在 manual-qc.vue 的 submit() 中）：**
+  ```
+  if (mode !== 'recheck' && remainingCount === 0) {
+    triggerCelebration()  // 见下方函数
+    return  // 不执行自动跳转逻辑
+  }
+  ```
+
+  **庆祝函数实现（新增 `composables/useCelebration.ts`）：**
+  ```
+  import confetti from 'canvas-confetti'
+
+  export function triggerCelebration() {
+    // 音效：Web Audio API 合成上升三音
+    const ctx = new AudioContext()
+    const notes = [523.25, 659.25, 783.99]  // C5, E5, G5
+    notes.forEach((freq, i) => {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = 'sine'
+      osc.frequency.value = freq
+      gain.gain.setValueAtTime(0, ctx.currentTime + i * 0.15)
+      gain.gain.linearRampToValueAtTime(0.3, ctx.currentTime + i * 0.15 + 0.05)
+      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + i * 0.15 + 0.4)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start(ctx.currentTime + i * 0.15)
+      osc.stop(ctx.currentTime + i * 0.15 + 0.4)
+    })
+
+    // 礼花：三次 burst
+    const duration = 3000
+    const end = Date.now() + duration
+    const colors = ['#2563eb', '#f59e0b', '#16a34a', '#7c3aed', '#ef4444']
+
+    function frame() {
+      confetti({
+        particleCount: 3,
+        angle: 60,
+        spread: 55,
+        origin: { x: 0, y: 0.6 },
+        colors,
+      })
+      confetti({
+        particleCount: 3,
+        angle: 120,
+        spread: 55,
+        origin: { x: 1, y: 0.6 },
+        colors,
+      })
+      if (Date.now() < end) requestAnimationFrame(frame)
+    }
+    frame()
+
+    // 1.5s 后再加一次大 burst
+    setTimeout(() => {
+      confetti({
+        particleCount: 150,
+        spread: 100,
+        origin: { x: 0.5, y: 0.4 },
+        colors,
+      })
+    }, 1500)
+  }
+  ```
+
+  **庆祝后的 UI 状态（manual-qc.vue 内）：**
+  - 动画播放期间（3秒），禁用提交按钮和所有交互
+  - 动画结束后，显示全屏覆盖层：
+    ```
+    "🎉 你已完成今日全部质检任务！"
+    [返回个人看板]
+    ```
+  - 点击"返回个人看板" → `router.push('/reviewer')`
+
+  **manual-qc.vue 新增响应式状态：**
+  ```
+  const celebrating = ref(false)       // 动画播放中
+  const celebrationDone = ref(false)   // 动画结束，显示完成覆盖层
+  ```
 - Status: active
 
 - Decision: `classification_rules` 的 V1 种子采用三层策略：高置信单义 token 可 authoritative 自动定类；复合或歧义 token 只写 `candidate_task_type`；无命中列表进入 unclassified 队列。匹配按 `priority DESC`、`pattern` 长度 DESC、`basename` 优先、再按规则 id 稳定决胜；人工设置的 `final_task_type_id` 在后续 rescan 中不得被自动覆盖

@@ -143,27 +143,35 @@ notes:
 ```yaml
 id: D
 name: 基于 MinIO 数据湖架构的 QC 方案落地
-status: ready（可从 Node F 接棒）
+status: active（进行中）
 state:
   - QC 指标体系已建立（27项，L1-L4）
   - manual QC 页面已接入真实 telemetry 指标
   - review lock/并发保护已实现
   - manual QC 媒体访问协议已确定：媒体预览走短时 presigned URL，结构化对象/下载走后端受控接口
-  - 下一步需将现有本地文件系统 manual QC 改造成 MinIO 对象映射 + media descriptor 模式
+  - 任务派发主流程已重构：工作台 dashboard 承接 batch 级生成与批量派发，task-pool 降级为明细中心
+  - 派发版本语义已落地：active_dispatch_generation + is_active + supersede 旧任务
+  - 统计卡片、滚动条、下拉框边框、进度条轨道等组件外观已统一抽象到 components.css
+  - 子评分指标已支持按严重程度排序（红→黄→绿）并带滚动容器
+  - 任务类型管理页已支持搜索过滤与滚动浏览
+  - 当前正在实施：角色视图分离 + reviewer 流水线质检模式 + 完成庆祝动画
 inputs:
   - QC 指标体系（Node B 产出）
   - MinIO 控制面方案（Node F 产出）
-  - 现有 manual QC 代码
+  - 现有 manual QC / dashboard / task-pool 代码
 outputs:
-  - MinIO 兼容的 QC pipeline（待实现）
-  - Object 访问协议集成（待实现）
-  - `ManualQcContext` 媒体描述字段扩展（待实现）
+  - reviewer 个人任务看板（新页面 `/reviewer`）← 待实现
+  - task-pool reviewer 版（同路由按角色分支渲染）← 待实现
+  - manual QC 流水线模式（提交后自动跳转下一条）← 待实现
+  - 完成庆祝动画（canvas-confetti + Web Audio API）← 待实现
+  - 角色路由守卫与菜单过滤 ← 待实现
 data_format:
   - 文档（Markdown）
   - 代码（Python/Vue）
 notes:
   - D 节点将基于 Node F 的控制面设计来改造现有 QC 流程
   - 当前 manual QC 依赖本地文件系统，需迁移到 MinIO
+  - 角色视图分离是 D 节点的前端体验子任务，不改变后端 QC 数据模型
 ```
 
 ## Node E: 完整项目交付
