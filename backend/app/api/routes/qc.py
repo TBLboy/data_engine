@@ -1106,7 +1106,7 @@ def submit_manual_qc(
     if not episode:
         raise HTTPException(status_code=404, detail='Episode not found')
 
-    task = db.query(QcTask).filter(QcTask.episode_id == episode_id).first()
+    task = _active_task_for_episode(db, episode_id) or db.query(QcTask).filter(QcTask.episode_id == episode_id).first()
     if task:
         if payload.version != task.version:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='任务版本已变更，请刷新后重试')
