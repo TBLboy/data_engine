@@ -36,8 +36,10 @@ from app.schemas.qc import (
     ManualQcMediaRefreshRequestSchema,
     ManualQcMediaRefreshResponseSchema,
     ManualQcSubmitRequest,
+    ManualQcSubmitResponseSchema,
     QcTaskSchema,
     ResetPasswordRequest,
+    ReviewerDashboardPayloadSchema,
     SessionPayloadSchema,
     TaskPoolPayloadSchema,
     TaskTypeCreateRequest,
@@ -60,6 +62,7 @@ from app.services.payloads import (
     home_payload,
     manual_qc_context_payload,
     review_lock_payload,
+    reviewer_dashboard_payload,
     serialize_account,
     serialize_ingest_job,
     serialize_task,
@@ -617,6 +620,13 @@ def dashboard(db: Session = Depends(get_db), current_user: User = Depends(get_cu
     return dashboard_payload(db, current_user)
 
 
+@router.get('/reviewer/dashboard', response_model=ReviewerDashboardPayloadSchema)
+def reviewer_dashboard(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if current_user.role != 'reviewer':
+        raise HTTPException(status_code=403, detail='仅审核员可访问')
+    return reviewer_dashboard_payload(db, current_user.id)
+
+
 @router.get('/database', response_model=DatabasePayloadSchema)
 def database(
     page: int = Query(1, ge=1),
@@ -1139,4 +1149,23 @@ def submit_manual_qc(
         time=now,
     ))
     db.commit()
-    return {'status': 'ok'}
+
+    # pipeline: remaining tasks for this reviewer
+    remaining_count = 0
+    next_episode_id = None
+    if current_user.role == 'reviewer' and task:
+        pending_tasks = db.query(QcTask).filter(
+            QcTask.assignee == current_user.name,
+            QcTask.is_active == 1,
+            QcTask.status.in_(['new', 'assigned']),
+        ).order_by(QcTask.created_at.asc()).all()
+        remaining_count = len(pending_tasks)
+        if pending_tasks:
+            next_episode_id = pending_tasks[0].episode_id
+
+    return {
+        'success': True,
+        'message': 'QC 结果已提交',
+        'remainingCount': remaining_count,
+        'nextEpisodeId': next_episode_id,
+    }

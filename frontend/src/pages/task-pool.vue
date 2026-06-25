@@ -2,11 +2,16 @@
 import { computed, onMounted, ref } from 'vue'
 import AppLayout from '../components/AppLayout.vue'
 import { fetchTaskPool, type TaskPoolPayload } from '../api/client'
+import { useSessionStore } from '../stores/session'
+
+const session = useSessionStore()
+const isReviewer = computed(() => session.user?.role === 'reviewer')
 
 const payload = ref<TaskPoolPayload | null>(null)
 const loading = ref(true)
 const error = ref('')
 const selectedBatchId = ref('')
+const reviewerFilter = ref<'all' | 'pending' | 'in_review' | 'done'>('all')
 
 const pickPreferredBatchId = (data: TaskPoolPayload, currentBatchId: string) => {
   const batchIds = new Set(data.batches.map((batch) => batch.id))
@@ -37,7 +42,17 @@ const dispatchPreviews = computed(() => payload.value?.dispatchPreviews ?? [])
 const qcTasks = computed(() => payload.value?.qcTasks ?? [])
 const selectedBatch = computed(() => batches.value.find((batch) => batch.id === selectedBatchId.value) ?? batches.value[0])
 const dispatchPreview = computed(() => dispatchPreviews.value.find((preview) => preview.batchId === selectedBatch.value?.id) ?? null)
-const currentTasks = computed(() => qcTasks.value.filter((task) => task.batchId === selectedBatch.value?.id))
+const currentTasks = computed(() => {
+  if (isReviewer.value) {
+    const myName = session.user?.name ?? ''
+    let tasks = qcTasks.value.filter((task) => task.assignee === myName)
+    if (reviewerFilter.value !== 'all') {
+      tasks = tasks.filter((task) => task.status === reviewerFilter.value)
+    }
+    return tasks
+  }
+  return qcTasks.value.filter((task) => task.batchId === selectedBatch.value?.id)
+})
 
 const statusType = (status: string) => {
   if (status === 'new') return 'info'
@@ -67,29 +82,49 @@ const lockLabel = (task: TaskPoolPayload['qcTasks'][number]) => {
       <section class="page-title-row database-hero">
         <div>
           <el-tag type="warning" effect="light">QC Queue Detail</el-tag>
-          <h1>人工质检入口</h1>
-          <p>这里仅保留当前批次任务明细、锁状态和进入人工质检入口。任务生成与批量派发已迁移到工作台。</p>
+          <h1>{{ isReviewer ? '我的质检任务' : '人工质检入口' }}</h1>
+          <p v-if="!isReviewer">这里仅保留当前批次任务明细、锁状态和进入人工质检入口。任务生成与批量派发已迁移到工作台。</p>
+          <p v-else>查看分配给你的所有质检任务，点击进入质检即可开始流水线工作。</p>
         </div>
         <div class="toolbar-actions">
-          <el-select v-model="selectedBatchId" filterable class="qc-select batch-select" style="width: 220px" :loading="loading">
-            <el-option v-for="b in batches" :key="b.id" :label="b.name" :value="b.id" />
-          </el-select>
-          <router-link to="/dashboard"><el-button type="primary" plain class="qc-btn-plain">返回工作台派发</el-button></router-link>
+          <template v-if="!isReviewer">
+            <el-select v-model="selectedBatchId" filterable class="qc-select batch-select" style="width: 220px" :loading="loading">
+              <el-option v-for="b in batches" :key="b.id" :label="b.name" :value="b.id" />
+            </el-select>
+            <router-link to="/dashboard"><el-button type="primary" plain class="qc-btn-plain">返回工作台派发</el-button></router-link>
+          </template>
+          <template v-else>
+            <el-radio-group v-model="reviewerFilter" size="small">
+              <el-radio-button value="all">全部</el-radio-button>
+              <el-radio-button value="pending">待处理</el-radio-button>
+              <el-radio-button value="in_review">进行中</el-radio-button>
+              <el-radio-button value="done">已完成</el-radio-button>
+            </el-radio-group>
+            <router-link to="/reviewer"><el-button plain>返回个人看板</el-button></router-link>
+          </template>
         </div>
       </section>
 
       <el-alert v-if="error" type="error" :closable="false" :title="error" />
 
       <el-row :gutter="18" v-loading="loading" class="task-pool-summary-row">
+        <template v-if="!isReviewer">
         <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-blue task-pool-stat-card"><span>当前活跃任务</span><strong>{{ activeTaskCount }}</strong><small>当前派发版本</small></el-card></el-col>
         <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-orange task-pool-stat-card"><span>待派发</span><strong>{{ dispatchPreview?.pendingAssignCount ?? 0 }}</strong><small>pending_assign</small></el-card></el-col>
         <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-purple task-pool-stat-card"><span>进行中</span><strong>{{ dispatchPreview?.inReviewTaskCount ?? 0 }}</strong><small>active review lock</small></el-card></el-col>
         <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-green task-pool-stat-card"><span>已退役旧任务</span><strong>{{ supersededTaskCount }}</strong><small>superseded</small></el-card></el-col>
+        </template>
+        <template v-else>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-blue task-pool-stat-card"><span>待处理</span><strong>{{ currentTasks.filter((t) => t.status === 'new' || t.status === 'assigned').length }}</strong><small>new / assigned</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-orange task-pool-stat-card"><span>进行中</span><strong>{{ currentTasks.filter((t) => t.status === 'in_review').length }}</strong><small>锁定中</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-green task-pool-stat-card"><span>已完成</span><strong>{{ currentTasks.filter((t) => t.status === 'done').length }}</strong><small>done</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-purple task-pool-stat-card"><span>总计</span><strong>{{ currentTasks.length }}</strong><small>分配给我的</small></el-card></el-col>
+        </template>
       </el-row>
 
       <el-card shadow="never" class="qc-card task-pool-table-card" v-loading="loading">
         <template #header>
-          <div class="card-header"><span>QC 任务明细</span><el-tag type="success">只读排障与进入质检</el-tag></div>
+          <div class="card-header"><span>{{ isReviewer ? '我的任务清单' : 'QC 任务明细' }}</span><el-tag type="success">{{ isReviewer ? '按状态筛选' : '只读排障与进入质检' }}</el-tag></div>
         </template>
         <el-table :data="currentTasks" stripe height="520" class="qc-table" scrollbar-always-on>
           <el-table-column prop="id" label="任务ID" width="150" />

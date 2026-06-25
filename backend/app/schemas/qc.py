@@ -411,3 +411,38 @@ class ManualQcSubmitRequest(BaseModel):
     primaryReason: str = ''
     note: str = ''
     version: int
+
+
+class ManualQcSubmitResponseSchema(BaseModel):
+    success: bool
+    message: str
+    remainingCount: int = 0
+    nextEpisodeId: str | None = None
+
+
+class ReviewerDashboardStatsSchema(BaseModel):
+    pendingCount: int = 0
+    inReviewCount: int = 0
+    doneTodayCount: int = 0
+    totalAssignedCount: int = 0
+
+
+class ReviewerBatchGroupSchema(BaseModel):
+    batchId: str
+    batchName: str
+    pendingCount: int = 0
+    doneCount: int = 0
+    totalCount: int = 0
+
+
+class ReviewerNextTaskSchema(BaseModel):
+    taskId: str
+    episodeId: str
+    batchName: str
+
+
+class ReviewerDashboardPayloadSchema(BaseModel):
+    stats: ReviewerDashboardStatsSchema
+    batchGroups: list[ReviewerBatchGroupSchema]
+    nextTask: ReviewerNextTaskSchema | None = None
+

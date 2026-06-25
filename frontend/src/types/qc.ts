@@ -271,3 +271,37 @@ export interface HistoryExportPayload {
   qcRevisions: QcRevision[]
   auditRecords: AuditRecord[]
 }
+
+export interface ReviewerStats {
+  pendingCount: number
+  inReviewCount: number
+  doneTodayCount: number
+  totalAssignedCount: number
+}
+
+export interface ReviewerBatchGroup {
+  batchId: string
+  batchName: string
+  pendingCount: number
+  doneCount: number
+  totalCount: number
+}
+
+export interface ReviewerNextTask {
+  taskId: string
+  episodeId: string
+  batchName: string
+}
+
+export interface ReviewerDashboardPayload {
+  stats: ReviewerStats
+  batchGroups: ReviewerBatchGroup[]
+  nextTask: ReviewerNextTask | null
+}
+
+export interface ManualQcSubmitResponse {
+  success: boolean
+  message: string
+  remainingCount: number
+  nextEpisodeId: string | null
+}

@@ -1,3 +1,47 @@
+## 2026-06-25 (Role-based view separation: reviewer dashboard + pipeline mode)
+
+- Type: implementation
+- Status: backend API verified (reviewer dashboard returns correct payload), frontend deployed, awaiting browser verification
+- Importance: critical
+- Reusable: yes
+- Objective: 实现角色视图分离，reviewer 使用专属界面完成流水线式质检工作
+- Work completed:
+  - 后端新增 `GET /api/reviewer/dashboard` 接口，返回 reviewer 个人统计、按批次分组、下一条待处理任务
+  - 后端 `submitManualQc` 返回 `remainingCount` + `nextEpisodeId` 支持流水线自动跳转
+  - 前端新建 `reviewer-dashboard.vue`（个人任务看板）：4 张统计卡片、一键开始质检按钮、按批次分组任务进度
+  - 前端新建 `composables/useCelebration.ts`：canvas-confetti 礼花 + Web Audio API 三音上升音效
+  - `manual-qc.vue` 增加流水线模式：reviewer 提交后自动跳转下一条，全部完成触发庆祝动画
+  - `task-pool.vue` reviewer 版：去掉批次选择，改为按状态筛选（全部/待处理/进行中/已完成），只显示分配给自己的任务
+  - 路由守卫更新：reviewer 登录 → `/reviewer`，拦截非授权页面访问
+  - `AppLayout.vue` 菜单按角色过滤：reviewer 只看个人看板+人工质检入口
+  - 安装 `canvas-confetti` + `@types/canvas-confetti`
+- Problems encountered:
+  - `QcTask` 模型字段是 `assignee`（字符串）而非 `assignee_id`，导致首轮 reviewer_dashboard 报 500；已修正为按 `assignee == reviewer_name` 查询
+  - reviewer 登录密码测试失败，通过管理员接口重置密码 `QcTest123!` 后恢复
+  - `ReviewerDashboardPayload` 需要正确导入/导出类型，前端构建报 TS2724；已拆分为独立 import from types/qc
+- Verification:
+  - `python3 -m compileall backend/app` → 通过
+  - `npm run build --prefix frontend` → 通过
+  - `docker compose build backend frontend && docker compose up -d` → 部署成功
+  - `curl -b reviewer_cookies /api/reviewer/dashboard` → pendingCount=17, batchGroups=2, nextTask 正确
+  - `curl -b admin_cookies /api/reviewer/dashboard` → 403（admin 不可访问）
+- Unverified items:
+  - 浏览器端 reviewer 登录 → 个人看板 → 开始质检 → 流水线提交 → 自动跳转 → 庆祝动画完整链路
+  - task-pool reviewer 版在浏览器中的筛选按钮交互
+- Files changed:
+  - `backend/app/api/routes/qc.py`
+  - `backend/app/schemas/qc.py`
+  - `backend/app/services/payloads.py`
+  - `frontend/src/pages/reviewer-dashboard.vue` (new)
+  - `frontend/src/composables/useCelebration.ts` (new)
+  - `frontend/src/pages/manual-qc.vue`
+  - `frontend/src/pages/task-pool.vue`
+  - `frontend/src/router/index.ts`
+  - `frontend/src/components/AppLayout.vue`
+  - `frontend/src/api/client.ts`
+  - `frontend/src/types/qc.ts`
+  - `frontend/package.json`
+
 ## 2026-06-25 (Manual QC metric panel: scrollable + severity-sorted, task-type search)
 
 - Type: implementation

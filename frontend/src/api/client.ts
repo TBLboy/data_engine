@@ -8,11 +8,13 @@ import type {
   HistoryReportPayload,
   IngestJob,
   ManualQcMedia,
+  ManualQcSubmitResponse,
   MetricCard,
   QcRevision,
   QcTask,
   ReviewLock,
   ReasonStat,
+  ReviewerDashboardPayload,
   ReviewerWorkload,
   TaskType,
   TaskTypeDetailPayload,
@@ -332,6 +334,10 @@ export async function detachBatchFromTaskType(taskTypeId: string, batchId: strin
   })
 }
 
+export async function fetchReviewerDashboard() {
+  return request<ReviewerDashboardPayload>('/reviewer/dashboard')
+}
+
 export async function fetchTaskPool() {
   return request<TaskPoolPayload>('/task-pool')
 }
@@ -398,7 +404,7 @@ export async function assignTask(taskId: string, assignee: string) {
 }
 
 export async function submitManualQc(episodeId: string, payload: ManualQcSubmitRequest) {
-  return request<{ status: string }>(`/qc/manual/${episodeId}`, {
+  return request<ManualQcSubmitResponse>(`/qc/manual/${episodeId}`, {
     method: 'POST',
     body: JSON.stringify(payload)
   })

@@ -6,9 +6,12 @@ import { ElMessage } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
 import QcReasonPicker from '../components/QcReasonPicker.vue'
 import { claimManualQc, downloadManualQcObject, fetchManualQcContext, refreshManualQcMedia, releaseManualQc, submitManualQc, type ManualQcContext } from '../api/client'
+import { useSessionStore } from '../stores/session'
+import { triggerCelebration } from '../composables/useCelebration'
 
 const route = useRoute()
 const router = useRouter()
+const session = useSessionStore()
 const result = ref<'pass' | 'fail'>('pass')
 const primaryReason = ref('')
 const currentFrame = ref(0)
@@ -24,7 +27,10 @@ const error = ref('')
 const payload = ref<ManualQcContext | null>(null)
 const selectedVariant = ref<'rgb' | 'depth_colormap'>('rgb')
 const syncingSlider = ref(false)
+const celebrating = ref(false)
+const celebrationDone = ref(false)
 const videoRefs = ref<Record<string, HTMLVideoElement | null>>({})
+const isReviewer = computed(() => session.user?.role === 'reviewer')
 let playbackLoopId: number | null = null
 
 const episodeId = computed(() => String(route.params.id))
@@ -284,15 +290,32 @@ const submit = async () => {
   }
   submitting.value = true
   try {
-    await submitManualQc(episodeId.value, {
+    const resp = await submitManualQc(episodeId.value, {
       result: result.value,
       primaryReason: primaryReason.value,
       note: note.value,
       version: reviewLock.value.version
     })
+
+    if (isReviewer.value && resp.remainingCount === 0) {
+      celebrating.value = true
+      triggerCelebration(() => {
+        celebrating.value = false
+        celebrationDone.value = true
+      })
+      return
+    }
+
+    if (isReviewer.value && resp.nextEpisodeId) {
+      ElMessage.success(`已提交，正在加载下一条...（剩余 ${resp.remainingCount} 条）`)
+      setTimeout(() => {
+        router.push(`/manual-qc/${resp.nextEpisodeId}`)
+      }, 800)
+      return
+    }
+
     ElMessage.success('人工质检结果已提交')
     await loadContext()
-    router.push('/qc-history')
   } catch (err) {
     ElMessage.error(formatError(err, '提交人工质检失败'))
     await loadContext()
@@ -471,6 +494,16 @@ const submit = async () => {
           </div>
         </el-card>
       </aside>
+
+      <div v-if="celebrating" class="celebration-overlay">
+        <div class="celebration-text">正在结算...</div>
+      </div>
+
+      <div v-if="celebrationDone" class="celebration-overlay celebration-done">
+        <div class="celebration-text">你已完成今日全部质检任务！</div>
+        <div class="celebration-sub">感谢你的辛勤工作</div>
+        <el-button type="primary" size="large" style="margin-top: 24px" @click="router.push('/reviewer')">返回个人看板</el-button>
+      </div>
     </div>
   </AppLayout>
 </template>
@@ -515,5 +548,29 @@ const submit = async () => {
 
 .metric-scroll::-webkit-scrollbar-track {
   background: transparent;
+}
+
+.celebration-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.92);
+}
+
+.celebration-text {
+  color: #fff;
+  font-size: 36px;
+  font-weight: 900;
+  letter-spacing: -0.5px;
+}
+
+.celebration-sub {
+  margin-top: 8px;
+  color: #94a3b8;
+  font-size: 18px;
 }
 </style>

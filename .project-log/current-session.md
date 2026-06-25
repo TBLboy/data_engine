@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-- 2026-06-25 (manual QC metric sort+scroll, task-type search, button abstraction)
+- 2026-06-25 (role-based view separation landed: reviewer dashboard + pipeline mode)
 
 ## Current Objective
 

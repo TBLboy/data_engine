@@ -17,11 +17,12 @@ const router = useRouter()
 const session = useSessionStore()
 
 const menuItems = [
-  { path: '/dashboard', label: '工作台', icon: Monitor },
-  { path: '/database', label: '数据总库', icon: Files },
+  { path: '/dashboard', label: '工作台', icon: Monitor, roles: ['admin', 'qc_manager', 'viewer'] },
+  { path: '/reviewer', label: '个人看板', icon: Monitor, roles: ['reviewer'] },
+  { path: '/database', label: '数据总库', icon: Files, roles: ['admin', 'qc_manager'] },
   { path: '/task-types', label: '任务类型管理', icon: CollectionTag, roles: ['admin', 'qc_manager'] },
   { path: '/task-pool', label: '人工质检入口', icon: VideoCamera },
-  { path: '/qc-history', label: '历史审计', icon: Finished },
+  { path: '/qc-history', label: '历史审计', icon: Finished, roles: ['admin', 'qc_manager'] },
   { path: '/accounts', label: '账号管理', icon: Setting, roles: ['admin', 'qc_manager'] }
 ]
 
@@ -76,7 +77,7 @@ const logout = async () => {
         </div>
         <div class="topbar-actions">
           <el-tag type="success" effect="light">LAN 内网访问</el-tag>
-          <el-button type="primary" plain class="qc-btn-plain" @click="router.push('/dashboard')">任务派发</el-button>
+          <el-button v-if="session.user?.role !== 'reviewer'" type="primary" plain class="qc-btn-plain" @click="router.push('/dashboard')">任务派发</el-button>
           <el-button plain @click="logout">退出登录</el-button>
           <el-avatar>{{ session.user?.avatar ?? '?' }}</el-avatar>
           <div class="user-meta">

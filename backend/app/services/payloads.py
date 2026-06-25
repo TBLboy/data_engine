@@ -1018,6 +1018,77 @@ def manual_qc_context_payload(db: Session, episode_id: str, current_user: User |
     }
 
 
+def reviewer_dashboard_payload(db: Session, reviewer_id: str) -> dict:
+    user = db.query(User).filter(User.id == reviewer_id).first()
+    reviewer_name = user.name if user else ''
+
+    tasks = db.query(QcTask).filter(
+        QcTask.assignee == reviewer_name,
+        QcTask.is_active == 1,
+    ).all()
+
+    stats = reviewer_dashboard_stats_payload(tasks)
+    batch_groups = _reviewer_batch_groups_payload(db, tasks)
+    next_task = _reviewer_next_task_payload(tasks)
+
+    return {
+        'stats': stats,
+        'batchGroups': batch_groups,
+        'nextTask': next_task,
+    }
+
+
+def reviewer_dashboard_stats_payload(tasks: list[QcTask]) -> dict:
+    pending = sum(1 for t in tasks if t.status in ('new', 'assigned'))
+    in_review = sum(1 for t in tasks if t.status == 'in_review')
+    today = datetime.now(timezone.utc).date()
+    done_today = sum(1 for t in tasks if t.status == 'done' and t.updated_at and t.updated_at.date() == today)
+    total = len(tasks)
+    return {
+        'pendingCount': pending,
+        'inReviewCount': in_review,
+        'doneTodayCount': done_today,
+        'totalAssignedCount': total,
+    }
+
+
+def _reviewer_batch_groups_payload(db: Session, tasks: list[QcTask]) -> list[dict]:
+    batch_ids = list({t.batch_id for t in tasks})
+    if not batch_ids:
+        return []
+    batches = {b.id: b for b in db.query(Batch).filter(Batch.id.in_(batch_ids)).all()}
+    groups: dict[str, dict] = {}
+    for t in tasks:
+        g = groups.setdefault(t.batch_id, {
+            'batchId': t.batch_id,
+            'batchName': batches.get(t.batch_id, Batch()).name,
+            'pendingCount': 0,
+            'doneCount': 0,
+            'totalCount': 0,
+        })
+        g['totalCount'] += 1
+        if t.status in ('new', 'assigned'):
+            g['pendingCount'] += 1
+        elif t.status == 'done':
+            g['doneCount'] += 1
+    return list(groups.values())
+
+
+def _reviewer_next_task_payload(tasks: list[QcTask]) -> dict | None:
+    pending = sorted(
+        [t for t in tasks if t.status in ('new', 'assigned')],
+        key=lambda t: t.created_at or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    if not pending:
+        return None
+    t = pending[0]
+    return {
+        'taskId': t.id,
+        'episodeId': t.episode_id,
+        'batchName': t.batch_name or '',
+    }
+
+
 def home_payload(db: Session, current_user: User) -> dict:
     return {
         'dashboard': dashboard_payload(db, current_user),
