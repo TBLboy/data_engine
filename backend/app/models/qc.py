@@ -1,4 +1,4 @@
-from sqlalchemy import DateTime, ForeignKey, Integer, String
+from sqlalchemy import DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
@@ -26,6 +26,7 @@ class QcTask(Base):
     lock_acquired_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     lock_expires_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), nullable=False)
+    updated_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), nullable=False, default=func.now(), onupdate=func.now())
 
     episode = relationship('Episode', back_populates='qc_tasks')
     batch = relationship('Batch', back_populates='qc_tasks')

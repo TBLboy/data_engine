@@ -1042,7 +1042,7 @@ def reviewer_dashboard_stats_payload(tasks: list[QcTask]) -> dict:
     pending = sum(1 for t in tasks if t.status in ('new', 'assigned'))
     in_review = sum(1 for t in tasks if t.status == 'in_review')
     today = datetime.now(timezone.utc).date()
-    done_today = sum(1 for t in tasks if t.status == 'done' and t.created_at and t.created_at.date() == today)
+    done_today = sum(1 for t in tasks if t.status == 'done' and t.updated_at and t.updated_at.date() == today)
     total = len(tasks)
     return {
         'pendingCount': pending,
