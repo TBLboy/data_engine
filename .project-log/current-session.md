@@ -112,6 +112,10 @@
 - 已完成 L3 超参数配置页面：新增 `l3_config` 表 + migration `20260625_0009`，后端 `GET/PUT /api/admin/l3-params` 仅限 admin，前端 `/settings` 页面含 10 组 32 项参数输入，修改即时生效
 - 已完成遥操作曲线联动视图：新增 `GET /api/episodes/{id}/telemetry-curve` 返回 arm/hand 分维 qpos+actions 时序数据（>500 帧自动降采样），前端 manual-qc.vue 集成 Chart.js 多系列折线图，实线=qpos 实际位置、虚线=actions 目标位置，支持 arm/hand 切换
 - 已完成 L3 优化第一轮：修复 sync 阈值硬编码→使用 `sync_bad_threshold_ms`、修正 `_sliding_window_mask` 卷积实现替代错误的 cumsum、LDLJ `max_val`→`ldlj_max_val` 可配置、dead/static timeline 标签区分（动作消失 vs 运动停滞）、简化 `_merge_segments` 双 pass→单 pass、移除未使用 import
+- 已完成多角色审查与修复：
+  - [HIGH] PermissionError 返回 HTTP 500→修复为 403（新增全局 exception handler）
+  - [LOW] 清理 payloads.py 中已废弃的 `_metric_level`/`_window_to_segment`/`_merge_segments`（~70行）
+  - API 级验证：reviewer 越权返回 403、admin 全端点 200、L3 params 31 键完整、Q_motion weights 和=1.00、telemetry curve 数据结构正确
 
 ## Current Risks
 
