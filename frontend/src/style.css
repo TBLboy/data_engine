@@ -6,6 +6,8 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  --el-input-border-color: #c0c4cc;
+  --el-border-color-base: #c0c4cc;
 }
 
 * {

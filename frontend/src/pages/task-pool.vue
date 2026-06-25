@@ -67,11 +67,11 @@ const lockLabel = (task: TaskPoolPayload['qcTasks'][number]) => {
       <section class="page-title-row database-hero">
         <div>
           <el-tag type="warning" effect="light">QC Queue Detail</el-tag>
-          <h1>任务明细中心</h1>
+          <h1>人工质检入口</h1>
           <p>这里仅保留当前批次任务明细、锁状态和进入人工质检入口。任务生成与批量派发已迁移到工作台。</p>
         </div>
         <div class="toolbar-actions">
-          <el-select v-model="selectedBatchId" filterable style="width: 220px" :loading="loading">
+          <el-select v-model="selectedBatchId" filterable class="batch-select" style="width: 220px" :loading="loading">
             <el-option v-for="b in batches" :key="b.id" :label="b.name" :value="b.id" />
           </el-select>
           <router-link to="/dashboard"><el-button type="primary" plain>返回工作台派发</el-button></router-link>
@@ -154,5 +154,13 @@ const lockLabel = (task: TaskPoolPayload['qcTasks'][number]) => {
 
 .task-pool-table-card :deep(.el-scrollbar__thumb:hover) {
   background-color: #374151;
+}
+
+.batch-select :deep(.el-select__wrapper) {
+  box-shadow: 0 0 0 1px #2563eb inset;
+}
+
+.batch-select :deep(.el-select__wrapper:hover) {
+  box-shadow: 0 0 0 1px #3b82f6 inset;
 }
 </style>
