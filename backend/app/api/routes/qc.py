@@ -126,6 +126,10 @@ def _supersede_pending_batch_tasks(db: Session, batch_id: str, *, next_generatio
 
 def _ensure_task_claimable(task: QcTask, current_user: User) -> None:
     active_owner = _active_lock_owner(task)
+    # 锁已自然过期但任务状态仍卡在 in_review → 回退，防止出现"进行中却待认领"矛盾态
+    if not active_owner and task.status == 'in_review':
+        task.status = 'assigned' if task.assignee != '未派发' else 'new'
+        _clear_task_lock(task)
     if active_owner and active_owner != current_user.id:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='任务已被其他审核员认领')
     if current_user.role == 'reviewer' and task.assignee not in ('未派发', current_user.name):

@@ -47,7 +47,8 @@ const currentTasks = computed(() => {
     const myName = session.user?.name ?? ''
     let tasks = qcTasks.value.filter((task) => task.assignee === myName)
     if (reviewerFilter.value !== 'all') {
-      tasks = tasks.filter((task) => task.status === reviewerFilter.value)
+      const filter = reviewerFilter.value
+      tasks = tasks.filter((task) => filter === 'pending' ? (task.status === 'new' || task.status === 'assigned') : task.status === filter)
     }
     return tasks
   }
