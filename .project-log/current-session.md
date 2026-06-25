@@ -2,6 +2,7 @@
 
 ## Last Updated
 
+- 2026-06-25 (锁机制重构与任务池标签动态扫描)
 - 2026-06-25 (双视角深度体验审计 + 10 项正确性修复 + 7 项体验优化，整体复检通过)
 - 2026-06-25 (QcTask updated_at, pipeline auto-advance fix, reviewer dashboard bugfix)
 

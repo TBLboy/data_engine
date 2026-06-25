@@ -1799,3 +1799,14 @@ PY'`
 - Next steps:
   - 继续其他数据集调研
   - 整合公开数据集QC对比表
+
+---
+
+## 2026-06-25 双视角审计 + 批量修复轮次
+
+- 审计：admin/reviewer 双角色真实 chromium 深度体验，产出 `audit-report-draft.md`（正确性+可用性双维度），方法论沉淀为 `~/.claude/skills/multi-role-ux-audit`
+- HIGH 修复：派发抽检%静默重置（v-if→v-show+二次确认）、assigned+fail 状态机黑洞（dispatch跳过done episode+migration 0007）、根路径/白屏崩溃（自我重定向→/login）
+- MEDIUM 修复：task-pool reviewer越权（按角色裁剪payload）、删除→停用文案、跨页计数统一口径（migration 0008）、锁释放（onBeforeRouteLeave+管理员强制释放）、派发可发现性、评分环固定Q_motion、任务类型名校验
+- LOW 修复：登录detail-only错误+空值校验、默认有活类型、返回按钮角色对齐、下载mimeType扩展名、无媒体禁用播放、全局中文locale
+- 验证：重建镜像+alembic upgrade head（0007/0008）+生产栈重启；db/API实测矛盾态=0、待分类4/303、reviewer越权已堵；chromium实测根路径不白屏+admin dashboard正常
+- 12 files changed, +335/-44, commit ec4b075 → main

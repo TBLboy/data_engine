@@ -48,7 +48,11 @@ const currentTasks = computed(() => {
     let tasks = qcTasks.value.filter((task) => task.assignee === myName)
     if (reviewerFilter.value !== 'all') {
       const filter = reviewerFilter.value
-      tasks = tasks.filter((task) => filter === 'pending' ? (task.status === 'new' || task.status === 'assigned') : task.status === filter)
+      tasks = tasks.filter((task) => {
+        if (filter === 'pending') return task.status !== 'done' && !task.reviewLock?.isLocked
+        if (filter === 'in_review') return !!task.reviewLock?.isLocked
+        return task.status === filter
+      })
     }
     return tasks
   }
@@ -116,8 +120,8 @@ const lockLabel = (task: TaskPoolPayload['qcTasks'][number]) => {
         <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-green task-pool-stat-card"><span>已退役旧任务</span><strong>{{ supersededTaskCount }}</strong><small>superseded</small></el-card></el-col>
         </template>
         <template v-else>
-        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-blue task-pool-stat-card"><span>待处理</span><strong>{{ currentTasks.filter((t) => t.status === 'new' || t.status === 'assigned').length }}</strong><small>new / assigned</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-orange task-pool-stat-card"><span>进行中</span><strong>{{ currentTasks.filter((t) => t.status === 'in_review').length }}</strong><small>锁定中</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-blue task-pool-stat-card"><span>待处理</span><strong>{{ currentTasks.filter((t) => t.status !== 'done' && !t.reviewLock?.isLocked).length }}</strong><small>未认领 · 待审核</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-orange task-pool-stat-card"><span>进行中</span><strong>{{ currentTasks.filter((t) => t.reviewLock?.isLocked).length }}</strong><small>锁定中</small></el-card></el-col>
         <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-green task-pool-stat-card"><span>已完成</span><strong>{{ currentTasks.filter((t) => t.status === 'done').length }}</strong><small>done</small></el-card></el-col>
         <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-purple task-pool-stat-card"><span>总计</span><strong>{{ currentTasks.length }}</strong><small>分配给我的</small></el-card></el-col>
         </template>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { QuestionFilled } from '@element-plus/icons-vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter, onBeforeRouteLeave } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
 import QcReasonPicker from '../components/QcReasonPicker.vue'
@@ -287,18 +287,6 @@ watch(selectedVariant, async () => {
 
 onBeforeUnmount(() => {
   pauseAll()
-})
-
-onBeforeRouteLeave(async () => {
-  // 离开质检工作台时可靠释放自己的审核锁，避免弃审任务被锁死到 20 分钟过期。
-  // 同路由 :id 变化（流水线自动跳转）不会触发本守卫，且提交时后端已释放锁。
-  if (reviewLock.value?.isMine && !submitting.value && !releasing.value) {
-    try {
-      await releaseManualQc(episodeId.value)
-    } catch {
-      // best-effort：释放失败不阻塞导航，后端锁过期兜底
-    }
-  }
 })
 
 const submit = async () => {
