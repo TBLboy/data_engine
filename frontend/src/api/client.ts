@@ -94,8 +94,10 @@ export interface DashboardPayload {
   taskTypes: TaskType[]
   batches: BatchSummary[]
   qcTasks: QcTask[]
+  dispatchPreviews: DispatchPreview[]
   reasonStats: ReasonStat[]
   reviewerWorkloads: ReviewerWorkload[]
+  reviewerAccounts: UserProfile[]
   ingestJobs: IngestJob[]
 }
 
@@ -195,6 +197,17 @@ export interface DispatchPlanRequest {
   dispatchMode: 'sampled' | 'full'
   samplingRatio: number
   note: string
+}
+
+export interface BatchDispatchAssignReviewer {
+  reviewerId: string
+  count: number
+}
+
+export interface BatchDispatchAssignRequest {
+  mode: 'even' | 'custom_counts'
+  reviewerIds: string[]
+  reviewers: BatchDispatchAssignReviewer[]
 }
 
 export interface ManualQcSubmitRequest {
@@ -365,6 +378,13 @@ export async function fetchDispatchPreview(batchId: string) {
 
 export async function submitDispatchPlan(batchId: string, payload: DispatchPlanRequest) {
   return request<DispatchPreview>(`/qc/batches/${batchId}/dispatch-plan`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export async function assignBatchTasks(batchId: string, payload: BatchDispatchAssignRequest) {
+  return request<DispatchPreview>(`/qc/batches/${batchId}/dispatch-assign`, {
     method: 'POST',
     body: JSON.stringify(payload)
   })

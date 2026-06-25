@@ -16,6 +16,7 @@ from app.schemas.qc import (
     AccountSchema,
     AssignTaskRequest,
     AuthLoginRequest,
+    BatchDispatchAssignRequest,
     BatchSummarySchema,
     BatchTaskTypeUpdateRequest,
     CreateAccountRequest,
@@ -48,6 +49,8 @@ from app.schemas.qc import (
 from app.services.authz import require_roles
 from app.services.minio_client import get_minio_service
 from app.services.payloads import (
+    _superseded_task_counts_by_batch,
+    _task_counts_by_batch,
     build_history_export_payload,
     build_history_report_payload,
     dashboard_payload,
@@ -94,6 +97,27 @@ def _clear_task_lock(task: QcTask) -> None:
     task.lock_owner_name = ''
     task.lock_acquired_at = None
     task.lock_expires_at = None
+
+
+def _active_task_for_episode(db: Session, episode_id: str) -> QcTask | None:
+    return db.query(QcTask).filter(QcTask.episode_id == episode_id, QcTask.is_active == 1).order_by(QcTask.dispatch_generation.desc(), QcTask.created_at.desc()).first()
+
+
+def _active_batch_tasks(db: Session, batch_id: str):
+    return db.query(QcTask).filter(QcTask.batch_id == batch_id, QcTask.is_active == 1)
+
+
+def _supersede_pending_batch_tasks(db: Session, batch_id: str, *, next_generation: int) -> list[QcTask]:
+    tasks = _active_batch_tasks(db, batch_id).all()
+    superseded = []
+    for task in tasks:
+        if task.status in {'in_review', 'done'}:
+            continue
+        _clear_task_lock(task)
+        task.is_active = 0
+        task.dispatch_generation = max(task.dispatch_generation, next_generation - 1)
+        superseded.append(task)
+    return superseded
 
 
 def _ensure_task_claimable(task: QcTask, current_user: User) -> None:
@@ -798,7 +822,9 @@ def dispatch_preview(batch_id: str, db: Session = Depends(get_db), _: User = Dep
     batch = db.query(Batch).filter(Batch.id == batch_id).first()
     if not batch:
         raise HTTPException(status_code=404, detail='Batch not found')
-    return dispatch_preview_payload(db, batch_id)
+    counts_by_batch = _task_counts_by_batch(db, [batch_id])
+    superseded_by_batch = _superseded_task_counts_by_batch(db, [batch_id])
+    return dispatch_preview_payload(batch, counts_by_batch.get(batch_id), superseded_by_batch.get(batch_id, 0))
 
 
 @router.post('/qc/batches/{batch_id}/dispatch-plan', response_model=DispatchPreviewSchema)
@@ -813,25 +839,41 @@ def apply_dispatch_plan(
     if not batch:
         raise HTTPException(status_code=404, detail='Batch not found')
 
+    active_tasks = _active_batch_tasks(db, batch_id).all()
+    if any(task.status == 'in_review' for task in active_tasks):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='当前批次存在审核中的任务，不能重生成派发任务')
+
     batch.dispatch_mode = payload.dispatchMode
     batch.sampling_ratio = 100 if payload.dispatchMode == 'full' else payload.samplingRatio
+    next_generation = batch.active_dispatch_generation + 1
+    batch.active_dispatch_generation = next_generation
 
     episodes = db.query(Episode).filter(Episode.batch_id == batch_id).order_by(Episode.id).all()
     target_count = batch.episode_count if payload.dispatchMode == 'full' else max(1, round(batch.episode_count * batch.sampling_ratio / 100))
     target_episode_ids = {episode.id for episode in episodes[:target_count]}
-    sampled_episode_ids = {
-        item.episode_id
-        for item in db.query(QcTask).filter(QcTask.batch_id == batch_id).all()
-    }
+
+    _supersede_pending_batch_tasks(db, batch_id, next_generation=next_generation)
 
     for episode in episodes:
         episode.sampled_for_qc = 1 if episode.id in target_episode_ids else 0
         if episode.id not in target_episode_ids:
+            if episode.qc_status != 'done':
+                episode.qc_status = 'new'
+                episode.reviewer = '-'
+                episode.updated_at = datetime.utcnow()
             continue
-        if episode.id in sampled_episode_ids:
+        task_id = f'task_{batch_id[-6:]}_{next_generation:03d}_{episode.id[-6:]}'
+        existing_task = db.query(QcTask).filter(QcTask.id == task_id).first()
+        if existing_task:
+            existing_task.is_active = 1
+            existing_task.dispatch_generation = next_generation
+            existing_task.dispatch_mode = batch.dispatch_mode
+            existing_task.sampling_ratio = batch.sampling_ratio
+            existing_task.assignment_mode = 'unassigned'
+            existing_task.assignee = '未派发'
+            existing_task.status = 'new'
+            _clear_task_lock(existing_task)
             continue
-        task_id = f'task_{batch_id[-3:]}_{len(sampled_episode_ids) + 1:03d}'
-        sampled_episode_ids.add(episode.id)
         db.add(QcTask(
             id=task_id,
             episode_id=episode.id,
@@ -840,24 +882,94 @@ def apply_dispatch_plan(
             task_name=episode.task_name,
             assignee='未派发',
             status='new',
-            priority='high' if len(sampled_episode_ids) == 1 else 'normal',
+            priority='high' if episode.id == episodes[0].id else 'normal',
             dispatch_mode=batch.dispatch_mode,
             sampling_ratio=batch.sampling_ratio,
+            dispatch_generation=next_generation,
+            is_active=1,
+            assignment_mode='unassigned',
             created_at=datetime.utcnow(),
         ))
+        episode.qc_status = 'new'
+        episode.reviewer = '-'
+        episode.updated_at = datetime.utcnow()
 
     sync_batch_metrics(db, batch)
     db.add(AuditEvent(
-        id=f'audit_dispatch_{batch_id}_{int(datetime.utcnow().timestamp())}',
+        id=f'audit_dispatch_{batch_id}_{next_generation}_{int(datetime.utcnow().timestamp())}',
         operator=current_user.name,
         action='更新派发计划',
         target=batch_id,
-        detail=f'{payload.dispatchMode}:{batch.sampling_ratio}% {payload.note}'.strip(),
+        detail=f'generation={next_generation} {payload.dispatchMode}:{batch.sampling_ratio}% {payload.note}'.strip(),
         time=datetime.utcnow(),
     ))
     db.commit()
     db.refresh(batch)
-    return dispatch_preview_payload(db, batch_id)
+    return dispatch_preview_payload(batch)
+
+
+@router.post('/qc/batches/{batch_id}/dispatch-assign', response_model=DispatchPreviewSchema)
+def assign_batch_tasks(
+    batch_id: str,
+    payload: BatchDispatchAssignRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    batch = db.query(Batch).filter(Batch.id == batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail='Batch not found')
+
+    active_tasks = _active_batch_tasks(db, batch_id).filter(QcTask.status == 'new').order_by(QcTask.created_at.asc(), QcTask.id.asc()).all()
+    if not active_tasks:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='当前批次没有待派发任务')
+
+    reviewers = db.query(User).filter(User.id.in_(payload.reviewerIds), User.role == 'reviewer', User.is_active == 1).order_by(User.username.asc()).all()
+    if len(reviewers) != len(set(payload.reviewerIds)) or not reviewers:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='请选择有效的审核员账号')
+
+    assignment_plan: list[tuple[str, int]] = []
+    if payload.mode == 'even':
+        base = len(active_tasks) // len(reviewers)
+        remainder = len(active_tasks) % len(reviewers)
+        for index, reviewer in enumerate(reviewers):
+            assignment_plan.append((reviewer.name, base + (1 if index < remainder else 0)))
+    elif payload.mode == 'custom_counts':
+        count_map = {item.reviewerId: item.count for item in payload.reviewers}
+        total = sum(max(0, count_map.get(reviewer.id, 0)) for reviewer in reviewers)
+        if total != len(active_tasks):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='自定义派发条数之和必须等于待派发任务数')
+        for reviewer in reviewers:
+            assignment_plan.append((reviewer.name, max(0, count_map.get(reviewer.id, 0))))
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='不支持的派发模式')
+
+    offset = 0
+    now = datetime.utcnow()
+    for reviewer_name, count in assignment_plan:
+        for task in active_tasks[offset:offset + count]:
+            task.assignee = reviewer_name
+            task.status = 'assigned'
+            task.assignment_mode = payload.mode
+            _clear_task_lock(task)
+            episode = db.query(Episode).filter(Episode.id == task.episode_id).one()
+            episode.reviewer = reviewer_name
+            episode.qc_status = 'assigned'
+            episode.updated_at = now
+        offset += count
+
+    sync_batch_metrics(db, batch)
+    db.add(AuditEvent(
+        id=f'audit_dispatch_assign_{batch_id}_{int(now.timestamp())}',
+        operator=current_user.name,
+        action='批量派发任务',
+        target=batch_id,
+        detail=f'mode={payload.mode} reviewers={"|".join(item.id for item in reviewers)}',
+        time=now,
+    ))
+    db.commit()
+    db.refresh(batch)
+    return dispatch_preview_payload(batch)
 
 
 @router.post('/qc/tasks/{task_id}/assign', response_model=QcTaskSchema)
@@ -906,7 +1018,7 @@ def claim_manual_qc(
     if not episode:
         raise HTTPException(status_code=404, detail='Episode not found')
 
-    task = db.query(QcTask).filter(QcTask.episode_id == episode_id).first()
+    task = _active_task_for_episode(db, episode_id)
     if not task:
         raise HTTPException(status_code=404, detail='Qc task not found')
 
@@ -939,7 +1051,7 @@ def release_manual_qc(
     if not episode:
         raise HTTPException(status_code=404, detail='Episode not found')
 
-    task = db.query(QcTask).filter(QcTask.episode_id == episode_id).first()
+    task = _active_task_for_episode(db, episode_id)
     if not task:
         raise HTTPException(status_code=404, detail='Qc task not found')
 

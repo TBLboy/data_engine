@@ -66,6 +66,20 @@
 - Question: `database` 页面在真实数据继续增长、并进入多用户远程使用后，长期正式方案应该优先做前端缓存、`KeepAlive`、前端本地分页，还是直接切换到服务端分页/筛选？
 - Resolution: 已确认长期正式方案应直接切换到“服务端分页 + 服务端筛选 + 前端短时缓存”。后端负责 `page/page_size/total` 与 `keyword/batch_id/qc_status/qc_result` 查询语义，前端只渲染当前页并可在短 TTL 内复用最近一次结果做秒开体验。`KeepAlive`、前端本地全量分页和只靠缓存掩盖卡顿都不作为长期主方案
 
+### Q-20260624-013（Resolved 2026-06-24）
+
+- Related node: D
+- Related edge: F->D
+- Question: 任务派发的长期正式流程到底应该留在 `task-pool` 这种单条任务操作页里，还是迁移到工作台中做 batch 级生成与批量分配？
+- Resolution: 已确定长期正式方案应迁移到工作台中完成。工作台负责选择 batch、生成待派发任务池、选择 reviewer 并执行平均派发或自定义条数派发；`manual-qc` 页面只做质检，`task-pool` 不再作为主派发入口
+
+### Q-20260624-014（Resolved 2026-06-24）
+
+- Related node: D
+- Related edge: F->D
+- Question: 当一个 batch 已经做过 `full` 派发，又重新切回 `sampled` 生成任务时，系统应如何处理旧任务？
+- Resolution: 已确定应引入“活跃派发版本”语义。每次重生成都创建新的当前版本；旧版本中未开始的任务必须退役或标记 superseded，不再参与当前运营视图。历史任务保留用于审计，但不能继续污染当前任务统计与派发状态
+
 ## Resolved Questions
 
 ### Q-20260623-006（Resolved 2026-06-23）

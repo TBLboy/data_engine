@@ -56,6 +56,45 @@
 - Impacted nodes: D, E
 - Status: active
 
+### 2026-06-24 - 任务派发主流程迁移到工作台，manual QC 页面只负责质检
+
+- Decision: `qc_admin/qc_manager` 的主派发流程不再以 `task-pool` 的逐条任务指派为中心，而是迁移到工作台（`dashboard`）中完成。工作台负责选择 batch、生成本轮待派发任务、选择 reviewer 并执行批量分配；`manual-qc` 页面只负责 claim/release/提交质检结果，不再混入派发语义或派发入口
+- Context: 当前实现把“任务派发”和“进入人工质检”混在同一个 `task-pool` 页面里，同时又在任务表中提供逐条派发 reviewer 的交互。这与真实工作流不一致，也让管理员操作成本过高
+- Alternatives considered:
+  - 继续在 `task-pool` 页面上迭代逐条派发
+  - 保持派发与人工质检混合，但只做局部 UI 美化
+  - 让 `manual-qc` 继续承担部分派发职责
+- Reason: 用户明确要求人工质检页面只做质检，派发应该是管理员在工作台里完成的批量运营动作，而不是 reviewer 执行页面里的附带操作
+- Evidence / Verification: 现有 `task-pool` 页面已确认同时包含 batch 预览、任务队列、单条派发和进入 manual QC 的入口，职责混杂；同时当前 `manual-qc` 已具备独立 review lock、媒体、提交链路，适合单独保留为质检执行面
+- Impacted nodes: D, E
+- Status: active
+
+### 2026-06-24 - 任务派发采用“两段式”：先生成待派发任务，再批量分配 reviewer
+
+- Decision: 任务派发的正式业务流程改为两段式。第一段是针对 batch 级别生成本轮待派发任务池（`full` / `sampled`）；第二段是在 reviewer 集合上执行批量分配，支持“平均派发”和“自定义每人条数”两种模式。逐条 `episode -> reviewer` 手工指定不再作为主流程
+- Context: 当前 `dispatch-plan` 接口会一边决定采样范围、一边直接创建 `QcTask`，而任务分配还需要管理员在表格里对每条任务分别选择 reviewer，流程冗长且不适合真实批量运营
+- Alternatives considered:
+  - 保留现有 `dispatch-plan + 单条 assign` 组合为主流程
+  - 仅支持平均派发，不支持自定义条数
+  - 继续把 reviewer 分配逻辑停留在逐条任务层面
+- Reason: 用户的真实工作流是“先生成待派发任务，再一次性派给若干 reviewer”，而不是生成后逐条人肉分发。批量分配是流程上的必要能力，不是 UI 小优化
+- Evidence / Verification: 当前 `task-pool` 实现和后端 `assign_task` 路由都证实系统目前仍以逐条派发为主；同时用户现场工作流已经明确要求平均派发与自定义条数两种模式
+- Impacted nodes: D, E
+- Status: active
+
+### 2026-06-24 - 任务重生成采用“活跃派发版本”语义，修复 full/sample 切换残留 bug
+
+- Decision: 对同一 batch 的任务生成必须引入“活跃派发版本”语义。每次重新生成派发任务，都视为新的派发版本；页面运营视图只看当前活跃版本。旧版本中未开始的任务必须被退役或标记为 superseded，不能继续作为当前有效任务出现
+- Context: 当前实现中，先执行 `full` 再切换到 `sampled` 重新生成后，旧的全量任务仍保留在活跃任务集中，导致用户看到的仍是 full 任务集而不是新的 sampled 结果
+- Alternatives considered:
+  - 保留旧任务不动，只继续追加新任务
+  - 每次重生成都直接物理删除旧任务
+  - 只更新 batch 的 dispatch_mode/sampling_ratio，不处理历史任务集
+- Reason: 追加不退役会直接破坏当前运营视图；直接物理删除又会丢失审计历史。引入“当前活跃版本 + 历史版本保留”的语义，既能修复当前 bug，也能保留后续审计与追溯能力
+- Evidence / Verification: 当前 `dispatch-plan` 路由已确认只创建缺失任务，不会回收旧任务，因此 `full -> sampled` 后旧 full 集合仍然存在；这正是用户现场复现出的 bug
+- Impacted nodes: D, E
+- Status: active
+
 - Decision: `task_types` 不再被定义为扫描器自动决定的正式业务分类，而是改为由 `admin` / `qc_manager` 人工维护的业务目录。扫描器的职责收窄为“同步 MinIO 数据到 PostgreSQL”，不再自动创建或自动决定正式任务类型；新批次和未确认批次统一归入 `待分类`
 - Context: 当前实现里 `task_type`、扫描归类规则、batch 外键和前端展示维度耦合过深，导致任务类型难以增删改，也不适合后续形成由质检主管主导的任务类型管理体系
 - Alternatives considered:

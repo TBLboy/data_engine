@@ -1,3 +1,69 @@
+## 2026-06-24 (Robot QC V1 dispatch workflow refactor: dashboard-owned dispatch + generation versioning)
+
+- Type: implementation
+- Status: validated by backend compile, frontend build, migration upgrade, runtime payload checks, and sampled/full/sampled regeneration verification
+- Importance: critical
+- Reusable: yes
+- Objective: 把任务派发从“task-pool 页逐条指派 reviewer”重构为“工作台 batch 级生成待派发任务 + 批量派发 reviewer”的正式流程，并修复 `full -> sampled` 重生成后旧任务仍留在当前活跃视图中的 bug
+- Work completed:
+  - 业务逻辑文档已先完成更新，正式确立三条约束：1）派发主流程迁移到工作台；2）派发采用“两段式”（先生成待派发任务池，再批量分配 reviewer）；3）同一 batch 的任务重生成采用“活跃派发版本”语义，旧版本未开始任务退役而非继续留在当前视图中
+  - 后端 `Batch` 新增 `active_dispatch_generation`；`QcTask` 新增 `dispatch_generation`、`is_active`、`assignment_mode`，并新增 Alembic revision `20260624_0005_dispatch_generation.py`
+  - `serialize_task()`、`DispatchPreviewSchema`、`TaskPoolPayloadSchema`、`DashboardPayloadSchema`、前端 `types/qc.ts` / `api/client.ts` 已同步升级，前后端都能识别任务活跃版本、是否活跃、批量分配模式和新增统计字段
+  - `backend/app/services/payloads.py` 已重构：`dispatch_preview_payload()` 现在按当前活跃任务统计 `pendingAssignCount/assigned/inReview/done`，并补 `supersededTaskCount` 与 `activeDispatchGeneration`；`dashboard_payload()` 已带上 `dispatchPreviews` 与 `reviewerAccounts`，供工作台直接承接派发主流程
+  - `backend/app/api/routes/qc.py` 的 `dispatch-plan` 已从“追加式创建任务”改为“切换 batch 活跃派发版本 + 退役旧版本未开始任务 + 生成新版本待派发任务池”；同时新增 `POST /qc/batches/{batch_id}/dispatch-assign`，支持 `even` 与 `custom_counts` 两种批量派发模式
+  - `dashboard.vue` 已重构为新的派发主入口：
+    - 批次总览表显示待派发/已派发/进行中/已完成统计
+    - 新增右侧 `派发工作区`，支持选择 `full/sample` 生成待派发任务、选择 reviewer、选择 `平均派发/指定每人条数` 并一次性完成批量派发
+    - 工作台不再依赖跳转到旧 `task-pool` 才能完成派发
+  - `task-pool.vue` 已降级为“任务明细中心”：保留按 batch 查看当前任务、锁状态和进入 manual QC 的入口，不再承载生成派发和逐条派发主流程
+  - `AppLayout.vue` 菜单与 topbar 已同步收口：原“人工质检与派发”菜单改为“任务明细中心”，顶部“派发任务”快捷入口改为跳转工作台
+- Business logic impact: 系统正式从“单条任务指派 + manual QC 混合入口”切换为“工作台派发运营 / manual QC 质检执行”双层模式。管理员现在可以先在工作台看到哪些 batch 还没质检完，再先生成待派发任务池，再一次性把任务均分或按指定条数分给多个 reviewer；manual QC 页面只保留 review 执行本身，职责边界清晰
+- Problems encountered:
+  - 当前生产库尚无 `active_dispatch_generation` 等新字段，必须先补 Alembic migration，否则 dashboard/task-pool payload 会直接报字段不存在
+  - 首轮 sampled/full/full API 验证中出现 `audit_events.id` 冲突，原因是原审计 ID 仅基于秒级时间戳；已改为把 `generation` 也纳入 audit id，避免同秒内重复生成冲突
+  - manual QC 与 payload 层多处仍通过 `episode_id -> first QcTask` 取任务；在引入活跃版本后，必须改为显式读取 `is_active == 1` 的当前任务，否则 manual QC 可能拿到旧版本任务
+  - mock 数据与前端类型因新增字段报错，已补齐 `dispatchGeneration/isActive/assignmentMode` 以及新的 preview 统计字段
+- Resolution:
+  - 先引入最小必要字段扩展而不推翻 `QcTask` 模型，用版本语义解决“当前活跃任务池”和“历史任务审计”并存问题
+  - 将派发生成与 reviewer 分配拆成两个接口，避免继续把“采样决定”和“逐条指派”耦死在一起
+  - 用工作台承接批次级派发运营，而 `task-pool` 只保留明细和排障价值
+- Verification:
+  - `cd /home/tbl/Project/data_collect/software && python3 -m compileall backend/app`
+  - `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml build backend frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up -d backend frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml exec -T backend python -m alembic upgrade head`
+  - `curl -sS -c /tmp/robot_qc_admin.cookies -H 'Content-Type: application/json' -d '{"username":"admin","password":"Admin123!"}' http://127.0.0.1:8080/api/auth/login`
+  - `curl -sS -b /tmp/robot_qc_admin.cookies http://127.0.0.1:8080/api/dashboard`
+  - `curl -sS -b /tmp/robot_qc_admin.cookies http://127.0.0.1:8080/api/task-pool`
+  - `curl -sS -b /tmp/robot_qc_admin.cookies -H 'Content-Type: application/json' -d '{"dispatchMode":"sampled","samplingRatio":25,"note":"api test sampled"}' http://127.0.0.1:8080/api/qc/batches/batch_871627c45789aecb/dispatch-plan`
+  - `curl -sS -b /tmp/robot_qc_admin.cookies -H 'Content-Type: application/json' -d '{"dispatchMode":"full","samplingRatio":100,"note":"api test full"}' http://127.0.0.1:8080/api/qc/batches/batch_871627c45789aecb/dispatch-plan`
+  - `curl -sS -b /tmp/robot_qc_admin.cookies -H 'Content-Type: application/json' -d '{"dispatchMode":"sampled","samplingRatio":25,"note":"api test sampled again"}' http://127.0.0.1:8080/api/qc/batches/batch_871627c45789aecb/dispatch-plan`
+  - `docker exec robot-qc-db psql -U robot_qc -d robot_qc -c "select batch_id, count(*) filter (where is_active=1) as active_tasks, count(*) filter (where is_active=0) as superseded_tasks, max(dispatch_generation) as max_generation from qc_tasks where batch_id='batch_871627c45789aecb' group by batch_id;"`
+- Unverified items:
+  - 还未做浏览器肉眼验收来确认工作台右侧 `派发工作区` 的完整交互体验是否满足你的操作习惯
+  - 新增的 `dispatch-assign` 虽已完成接口与前端接线，但还未在浏览器里用 `平均派发` / `指定每人条数` 两种模式各实点一轮
+  - 当前 `full -> sampled -> full -> sampled` 重生成链路已经在 API 层验证了旧任务会被退役，但还没在 UI 上完成完整人工回归
+- Files changed:
+  - `software/backend/app/models/batch.py`
+  - `software/backend/app/models/qc.py`
+  - `software/backend/migrations/versions/20260624_0005_dispatch_generation.py`
+  - `software/backend/app/schemas/qc.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/backend/app/api/routes/qc.py`
+  - `software/frontend/src/types/qc.ts`
+  - `software/frontend/src/api/client.ts`
+  - `software/frontend/src/api/mock.ts`
+  - `software/frontend/src/pages/dashboard.vue`
+  - `software/frontend/src/pages/task-pool.vue`
+  - `software/frontend/src/components/AppLayout.vue`
+  - `software/frontend/src/style.css`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 让用户在真实浏览器里按新的工作流点测：选择 batch → 生成待派发任务 → 选择 reviewer → 平均/自定义派发 → 从任务明细进入 manual QC
+  - 如果工作台布局仍有不顺手的地方，再继续做第二轮 UI 收口，但不再回退到旧 task-pool 逐条派发模式
+
 ## 2026-06-24 (Robot QC V1 task-pool assignee source and stat-card display fix)
 
 - Type: implementation

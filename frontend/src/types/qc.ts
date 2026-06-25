@@ -89,6 +89,9 @@ export interface QcTask {
   priority: 'normal' | 'high'
   dispatchMode: DispatchMode
   samplingRatio: number
+  dispatchGeneration: number
+  isActive: boolean
+  assignmentMode: string
   createdAt: string
   reviewLock: ReviewLock
 }
@@ -102,8 +105,11 @@ export interface DispatchPreview {
   assignedTaskCount: number
   inReviewTaskCount: number
   doneTaskCount: number
+  supersededTaskCount: number
+  pendingAssignCount: number
   dispatchMode: DispatchMode
   samplingRatio: number
+  activeDispatchGeneration: number
 }
 
 export interface MetricCard {
@@ -157,6 +163,17 @@ export interface ReviewerWorkload {
   done: number
   passRate: number
   avgMinutes: number
+}
+
+export interface BatchDispatchAssignReviewer {
+  reviewerId: string
+  count: number
+}
+
+export interface BatchDispatchAssignRequest {
+  mode: 'even' | 'custom_counts'
+  reviewerIds: string[]
+  reviewers: BatchDispatchAssignReviewer[]
 }
 
 export interface TaskPoolPayload {

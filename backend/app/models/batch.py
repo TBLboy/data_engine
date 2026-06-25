@@ -16,6 +16,7 @@ class Batch(Base):
     completed_sample_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     dispatch_mode: Mapped[str] = mapped_column(String(32), default='sampled', nullable=False)
     sampling_ratio: Mapped[int] = mapped_column(Integer, default=25, nullable=False)
+    active_dispatch_generation: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     qc_status: Mapped[str] = mapped_column(String(32), default='new', nullable=False)
     pass_rate: Mapped[float] = mapped_column(nullable=False, default=0)
     top_reason: Mapped[str] = mapped_column(String(128), default='-', nullable=False)

@@ -138,6 +138,9 @@ class QcTaskSchema(BaseModel):
     priority: str
     dispatchMode: str
     samplingRatio: int
+    dispatchGeneration: int
+    isActive: bool
+    assignmentMode: str
     createdAt: str
     reviewLock: ReviewLockSchema
 
@@ -151,8 +154,11 @@ class DispatchPreviewSchema(BaseModel):
     assignedTaskCount: int
     inReviewTaskCount: int
     doneTaskCount: int
+    supersededTaskCount: int
+    pendingAssignCount: int
     dispatchMode: str
     samplingRatio: int
+    activeDispatchGeneration: int
 
 
 class MetricCardSchema(BaseModel):
@@ -330,8 +336,10 @@ class DashboardPayloadSchema(BaseModel):
     taskTypes: list[TaskTypeSchema]
     batches: list[BatchSummarySchema]
     qcTasks: list[QcTaskSchema]
+    dispatchPreviews: list[DispatchPreviewSchema]
     reasonStats: list[ReasonStatSchema]
     reviewerWorkloads: list[ReviewerWorkloadSchema]
+    reviewerAccounts: list[UserProfileSchema]
     ingestJobs: list[IngestJobSchema]
 
 
@@ -380,6 +388,17 @@ class DispatchPlanRequest(BaseModel):
 
 class AssignTaskRequest(BaseModel):
     assignee: str
+
+
+class BatchDispatchAssignReviewerSchema(BaseModel):
+    reviewerId: str
+    count: int = 0
+
+
+class BatchDispatchAssignRequest(BaseModel):
+    mode: str
+    reviewerIds: list[str]
+    reviewers: list[BatchDispatchAssignReviewerSchema] = []
 
 
 class ManualQcClaimResponseSchema(BaseModel):

@@ -58,7 +58,9 @@
 - 已落地任务类型管理首版：新增独立一级页面 `任务类型管理`，仅对 `admin/qc_manager` 显示；支持任务类型列表、详情、创建、重命名、删除，以及从 `待分类` 加入批次、从任务类型移出批次回到 `待分类`
 - 已新增任务类型管理后端 API：`GET/POST/PATCH/DELETE /api/task-types`、`GET /api/task-types/{id}/batches`、`GET /api/batches?task_type_id=...`、`POST /api/task-types/{id}/batches:attach`、`POST /api/task-types/{id}/batches/{batchId}:detach`
 - 已把 `task_type:unclassified` 固化为系统保底任务类型：禁止编辑、禁止删除；删除普通任务类型时，其关联批次会自动回收到 `待分类`，不会破坏 batch / episode / QC 历史
-- 已收口扫描器与任务类型解耦：扫描器继续同步 MinIO 数据，但新 batch 默认落到 `待分类`；对已人工分类 batch，rescan 不再自动覆盖其正式任务类型
+- 已完成任务派发主流程第一轮重构：工作台 `dashboard` 已承接 batch 级任务生成与批量派发工作区，`task-pool` 已降级为任务明细中心；`manual-qc` 继续只保留 claim/release/提交质检结果链路
+- 已落地派发版本语义与批量分配能力：新增 `Batch.active_dispatch_generation`、`QcTask.dispatch_generation/is_active/assignment_mode`，`dispatch-plan` 现在会退役旧版本未开始任务并切换活跃派发版本；新增 `dispatch-assign` 批量派发接口，支持平均派发和自定义每人条数
+- 已完成运行态验证：production compose 中已成功升级 Alembic `20260624_0005_dispatch_generation`，`/api/dashboard` 与 `/api/task-pool` 都已返回新的 `dispatchPreviews/reviewerAccounts` 结构；对 `batch_871627c45789aecb` 走通了 sampled → full → sampled 重生成流程，当前版本最终稳定在 `activeDispatchGeneration=4` 且旧任务被累计退役 `264` 条，不再继续污染当前视图
 - 已增强 `database` 页筛选交互：批次、QC 状态、QC 结果下拉框均支持键盘输入筛选，方便后期大量 batch 下快速定位
 - 已在生产 API 层验证任务类型管理闭环：创建任务类型成功、`待分类` 批次池查询成功、attach/detach 往返成功、普通任务类型删除后批次成功回到 `待分类`、`待分类` 自身编辑/删除被拒绝
 - 已明确 `yaocao` bucket 全量扫描原则：扫描器不能假设 list 固定在第一层或第二层，而应递归遍历所有层级 prefix，并用“直接子级命中 `raw/`、`processed/`，且其下存在 `episode_xxxxxx/`”的结构特征识别 list，确保 `yaocao/<list>/...` 与 `yaocao/K1/<list>/...` 都不会漏扫

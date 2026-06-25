@@ -243,6 +243,9 @@ def serialize_task(task: QcTask, current_user: User | None = None) -> dict:
         'priority': task.priority,
         'dispatchMode': task.dispatch_mode,
         'samplingRatio': task.sampling_ratio,
+        'dispatchGeneration': task.dispatch_generation,
+        'isActive': bool(task.is_active),
+        'assignmentMode': task.assignment_mode,
         'createdAt': format_time(task.created_at),
         'reviewLock': review_lock_payload(task, current_user),
     }
@@ -413,7 +416,7 @@ def _manual_qc_media(db: Session, episode_id: str, current_user: User | None) ->
         return []
 
     inventory, bucket = inventory_row
-    task = db.query(QcTask).filter(QcTask.episode_id == episode_id).first()
+    task = db.query(QcTask).filter(QcTask.episode_id == episode_id, QcTask.is_active == 1).order_by(QcTask.dispatch_generation.desc(), QcTask.created_at.desc()).first()
     review_lock = review_lock_payload(task, current_user) if task else None
     refreshable = bool(review_lock and review_lock['isMine'])
     preview_ttl = timedelta(minutes=5)
@@ -582,13 +585,23 @@ def unclassified_batch_payload(db: Session) -> list[dict]:
 def dashboard_payload(db: Session, current_user: User) -> dict:
     batches = _active_batch_query(db).options(joinedload(Batch.episodes)).order_by(Batch.imported_at.desc()).all()
     active_batch_ids = {item.id for item in batches}
+    counts_by_batch = _task_counts_by_batch(db, active_batch_ids)
+    superseded_by_batch = _superseded_task_counts_by_batch(db, active_batch_ids)
     return {
         'currentUser': serialize_user(current_user),
         'taskTypes': [serialize_task_type(item) for item in db.query(TaskType).filter(TaskType.is_active == True).order_by(TaskType.id).all()],
         'batches': _serialize_batches(db, batches),
-        'qcTasks': [serialize_task(item, current_user) for item in db.query(QcTask).filter(QcTask.batch_id.in_(active_batch_ids)).order_by(QcTask.created_at.desc()).all()],
+        'qcTasks': [
+            serialize_task(item, current_user)
+            for item in db.query(QcTask)
+            .filter(QcTask.batch_id.in_(active_batch_ids), QcTask.is_active == 1)
+            .order_by(QcTask.created_at.desc())
+            .all()
+        ],
+        'dispatchPreviews': [dispatch_preview_payload(item, counts_by_batch.get(item.id), superseded_by_batch.get(item.id, 0)) for item in batches],
         'reasonStats': reason_stats_payload_from_db(db),
         'reviewerWorkloads': reviewer_workload_payload(db),
+        'reviewerAccounts': reviewer_account_payload(db),
         'ingestJobs': _recent_ingest_jobs_payload(db),
     }
 
@@ -868,32 +881,82 @@ def reviewer_account_payload(db: Session) -> list[dict]:
     return [serialize_user(item) for item in reviewers]
 
 
-def dispatch_preview_payload(db: Session, batch_id: str) -> dict:
-    batch = db.query(Batch).filter(Batch.id == batch_id).one()
-    created = db.query(func.count(QcTask.id)).filter(QcTask.batch_id == batch_id).scalar() or 0
-    assigned = db.query(func.count(QcTask.id)).filter(QcTask.batch_id == batch_id, QcTask.status == 'assigned').scalar() or 0
-    in_review = db.query(func.count(QcTask.id)).filter(QcTask.batch_id == batch_id, QcTask.status == 'in_review').scalar() or 0
-    done = db.query(func.count(QcTask.id)).filter(QcTask.batch_id == batch_id, QcTask.status == 'done').scalar() or 0
+def _active_qc_task_query(db: Session):
+    return db.query(QcTask).filter(QcTask.is_active == 1)
+
+
+def _task_counts_by_batch(db: Session, batch_ids: Iterable[str]) -> dict[str, dict[str, int]]:
+    batch_ids = [item for item in batch_ids if item]
+    if not batch_ids:
+        return {}
+
+    rows = db.query(
+        QcTask.batch_id,
+        QcTask.status,
+        func.count(QcTask.id).label('count'),
+    ).filter(
+        QcTask.batch_id.in_(batch_ids),
+        QcTask.is_active == 1,
+    ).group_by(QcTask.batch_id, QcTask.status).all()
+
+    counts = {
+        batch_id: {
+            'new': 0,
+            'assigned': 0,
+            'in_review': 0,
+            'done': 0,
+        }
+        for batch_id in batch_ids
+    }
+    for row in rows:
+        if row.batch_id not in counts:
+            continue
+        counts[row.batch_id][row.status] = row.count
+    return counts
+
+
+def _superseded_task_counts_by_batch(db: Session, batch_ids: Iterable[str]) -> dict[str, int]:
+    batch_ids = [item for item in batch_ids if item]
+    if not batch_ids:
+        return {}
+
+    rows = db.query(
+        QcTask.batch_id,
+        func.count(QcTask.id).label('count'),
+    ).filter(
+        QcTask.batch_id.in_(batch_ids),
+        QcTask.is_active == 0,
+    ).group_by(QcTask.batch_id).all()
+    return {row.batch_id: row.count for row in rows}
+
+
+def dispatch_preview_payload(batch: Batch, counts: dict[str, int] | None = None, superseded_count: int = 0) -> dict:
+    counts = counts or {'new': 0, 'assigned': 0, 'in_review': 0, 'done': 0}
     return {
         'batchId': batch.id,
         'candidateEpisodeCount': batch.episode_count,
         'sampledEpisodeCount': batch.sampled_episode_count,
         'unsampledEpisodeCount': max(batch.episode_count - batch.sampled_episode_count, 0),
-        'createdTaskCount': created,
-        'assignedTaskCount': assigned,
-        'inReviewTaskCount': in_review,
-        'doneTaskCount': done,
+        'createdTaskCount': counts['new'] + counts['assigned'] + counts['in_review'] + counts['done'],
+        'assignedTaskCount': counts['assigned'],
+        'inReviewTaskCount': counts['in_review'],
+        'doneTaskCount': counts['done'],
+        'supersededTaskCount': superseded_count,
+        'pendingAssignCount': counts['new'],
         'dispatchMode': batch.dispatch_mode,
         'samplingRatio': batch.sampling_ratio,
+        'activeDispatchGeneration': batch.active_dispatch_generation,
     }
 
 
 def task_pool_payload(db: Session, current_user: User | None = None) -> dict:
     batches = db.query(Batch).order_by(Batch.imported_at.desc()).all()
+    counts_by_batch = _task_counts_by_batch(db, [item.id for item in batches])
+    superseded_by_batch = _superseded_task_counts_by_batch(db, [item.id for item in batches])
     return {
         'batches': _serialize_batches(db, batches),
-        'dispatchPreviews': [dispatch_preview_payload(db, item.id) for item in batches],
-        'qcTasks': [serialize_task(item, current_user) for item in db.query(QcTask).order_by(QcTask.created_at.desc()).all()],
+        'dispatchPreviews': [dispatch_preview_payload(item, counts_by_batch.get(item.id), superseded_by_batch.get(item.id, 0)) for item in batches],
+        'qcTasks': [serialize_task(item, current_user) for item in _active_qc_task_query(db).order_by(QcTask.created_at.desc()).all()],
         'reviewerWorkloads': reviewer_workload_payload(db),
         'reviewerAccounts': reviewer_account_payload(db),
     }
@@ -902,7 +965,7 @@ def task_pool_payload(db: Session, current_user: User | None = None) -> dict:
 def manual_qc_context_payload(db: Session, episode_id: str, current_user: User | None = None) -> dict:
     episode = db.query(Episode).filter(Episode.id == episode_id).one()
     revisions = db.query(QcReviewRevision).filter(QcReviewRevision.episode_id == episode_id).order_by(QcReviewRevision.revision_no.desc()).all()
-    task = db.query(QcTask).filter(QcTask.episode_id == episode_id).first()
+    task = db.query(QcTask).filter(QcTask.episode_id == episode_id, QcTask.is_active == 1).order_by(QcTask.dispatch_generation.desc(), QcTask.created_at.desc()).first()
     review_lock = review_lock_payload(task, current_user) if task else {
         'isLocked': False,
         'isMine': False,

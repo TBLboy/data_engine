@@ -143,6 +143,9 @@ export const qcTasks: QcTask[] = [
     priority: 'high',
     dispatchMode: 'sampled',
     samplingRatio: 25,
+    dispatchGeneration: 1,
+    isActive: true,
+    assignmentMode: 'unassigned',
     createdAt: '2026-06-22 09:45',
     reviewLock: { isLocked: false, isMine: false, ownerUserId: '', ownerName: '', acquiredAt: null, expiresAt: null, version: 1 }
   },
@@ -157,6 +160,9 @@ export const qcTasks: QcTask[] = [
     priority: 'normal',
     dispatchMode: 'sampled',
     samplingRatio: 25,
+    dispatchGeneration: 1,
+    isActive: true,
+    assignmentMode: 'even',
     createdAt: '2026-06-22 09:47',
     reviewLock: { isLocked: false, isMine: false, ownerUserId: '', ownerName: '', acquiredAt: null, expiresAt: null, version: 3 }
   },
@@ -171,6 +177,9 @@ export const qcTasks: QcTask[] = [
     priority: 'normal',
     dispatchMode: 'sampled',
     samplingRatio: 25,
+    dispatchGeneration: 1,
+    isActive: true,
+    assignmentMode: 'even',
     createdAt: '2026-06-22 09:51',
     reviewLock: { isLocked: true, isMine: false, ownerUserId: 'u_003', ownerName: '赵审核', acquiredAt: '2026-06-22 10:04', expiresAt: '2026-06-22 10:24', version: 4 }
   },
@@ -185,6 +194,9 @@ export const qcTasks: QcTask[] = [
     priority: 'normal',
     dispatchMode: 'sampled',
     samplingRatio: 25,
+    dispatchGeneration: 1,
+    isActive: false,
+    assignmentMode: 'unassigned',
     createdAt: '2026-06-22 10:03',
     reviewLock: { isLocked: false, isMine: false, ownerUserId: '', ownerName: '', acquiredAt: null, expiresAt: null, version: 1 }
   }
@@ -200,8 +212,11 @@ export const dispatchPreviews: DispatchPreview[] = [
     assignedTaskCount: 11,
     inReviewTaskCount: 3,
     doneTaskCount: 5,
+    supersededTaskCount: 4,
+    pendingAssignCount: 1,
     dispatchMode: 'sampled',
-    samplingRatio: 25
+    samplingRatio: 25,
+    activeDispatchGeneration: 1
   },
   {
     batchId: 'batch_20260621_002',
@@ -212,8 +227,11 @@ export const dispatchPreviews: DispatchPreview[] = [
     assignedTaskCount: 3,
     inReviewTaskCount: 0,
     doneTaskCount: 15,
+    supersededTaskCount: 0,
+    pendingAssignCount: 0,
     dispatchMode: 'sampled',
-    samplingRatio: 30
+    samplingRatio: 30,
+    activeDispatchGeneration: 2
   },
   {
     batchId: 'batch_20260620_001',
@@ -224,8 +242,11 @@ export const dispatchPreviews: DispatchPreview[] = [
     assignedTaskCount: 0,
     inReviewTaskCount: 0,
     doneTaskCount: 72,
+    supersededTaskCount: 0,
+    pendingAssignCount: 0,
     dispatchMode: 'full',
-    samplingRatio: 100
+    samplingRatio: 100,
+    activeDispatchGeneration: 3
   }
 ]
 
