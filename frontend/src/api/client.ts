@@ -434,7 +434,7 @@ export interface L3Params {
   jitter_good: number; jitter_warn: number
   tracking_arm_weight: number; tracking_hand_weight: number
   tracking_good: number; tracking_warn: number
-  ldlj_good: number; ldlj_warn: number
+  ldlj_good: number; ldlj_warn: number; ldlj_max_val: number
   chatter_threshold: number; chatter_good: number; chatter_warn: number
   effort_good: number; effort_warn: number
   timeline_min_dur: number; timeline_gap_merge: number

@@ -111,6 +111,7 @@
 - 已验证真实 MinIO telemetry 数据的 arm/hand 维度结构：单臂 7+6 或双臂 14+12，含零值维度过滤；L3 指标在 batch_3585f01e8960f236_episode_000026 上产出 9 条指标卡片 + 7 个 timeline 段
 - 已完成 L3 超参数配置页面：新增 `l3_config` 表 + migration `20260625_0009`，后端 `GET/PUT /api/admin/l3-params` 仅限 admin，前端 `/settings` 页面含 10 组 32 项参数输入，修改即时生效
 - 已完成遥操作曲线联动视图：新增 `GET /api/episodes/{id}/telemetry-curve` 返回 arm/hand 分维 qpos+actions 时序数据（>500 帧自动降采样），前端 manual-qc.vue 集成 Chart.js 多系列折线图，实线=qpos 实际位置、虚线=actions 目标位置，支持 arm/hand 切换
+- 已完成 L3 优化第一轮：修复 sync 阈值硬编码→使用 `sync_bad_threshold_ms`、修正 `_sliding_window_mask` 卷积实现替代错误的 cumsum、LDLJ `max_val`→`ldlj_max_val` 可配置、dead/static timeline 标签区分（动作消失 vs 运动停滞）、简化 `_merge_segments` 双 pass→单 pass、移除未使用 import
 
 ## Current Risks
 

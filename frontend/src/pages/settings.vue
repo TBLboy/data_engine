@@ -66,6 +66,7 @@ const groups = [
     fields: [
       { key: 'ldlj_good', label: 'good 阈值 (>=)', step: 0.1, min: 0, max: 10 },
       { key: 'ldlj_warn', label: 'warn 阈值 (>=)', step: 0.1, min: 0, max: 10 },
+      { key: 'ldlj_max_val', label: 'jerk归一化参考上限', step: 0.001, min: 0.001, max: 1 },
     ]
   },
   {

@@ -1278,6 +1278,7 @@ def _l3_params_schema(params: dict) -> dict:
         'tracking_warn': merged.get('tracking_warn', 0.20),
         'ldlj_good': merged.get('ldlj_good', 7.0),
         'ldlj_warn': merged.get('ldlj_warn', 5.0),
+        'ldlj_max_val': merged.get('ldlj_max_val', 0.05),
         'chatter_threshold': merged.get('chatter_threshold', 2.0),
         'chatter_good': merged.get('chatter_good', 1.0),
         'chatter_warn': merged.get('chatter_warn', 2.0),

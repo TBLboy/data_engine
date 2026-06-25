@@ -1,6 +1,6 @@
 import numpy as np
-from dataclasses import dataclass, field
-from typing import Any, Callable
+from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -37,6 +37,7 @@ class L3HyperParams:
     timeline_min_dur: float = 0.5
     timeline_gap_merge: float = 0.3
     sync_bad_threshold_ms: float = 700.0
+    ldlj_max_val: float = 0.05  # 用于归一化 jerk 的参考上限
 
     @property
     def qmotion_weights(self) -> dict:
@@ -64,17 +65,13 @@ def _level(v: float, warn: float, bad: float, reverse: bool = False) -> str:
     return "good"
 
 
-def _sliding_mask(signal: np.ndarray, win: int, cond_fn: Callable) -> np.ndarray:
-    mask = np.zeros(len(signal), dtype=bool)
-    if len(signal) < win or win < 1:
-        return mask
-    cum = np.cumsum(np.pad(cond_fn(signal).astype(float), (1, 0))[:-1])
-    win_sum = cum[win:] - cum[:-win]
-    hit = win_sum >= win
-    expanded = np.zeros(len(signal), dtype=bool)
-    half = win // 2
-    expanded[half:half + len(hit)] = hit
-    return expanded
+def _sliding_window_mask(condition_mask: np.ndarray, win: int) -> np.ndarray:
+    """Return True for frames where >= win/2 frames in a window of size win satisfy condition."""
+    if win <= 1 or len(condition_mask) < win:
+        return condition_mask.copy()
+    kernel = np.ones(win)
+    conv = np.convolve(condition_mask.astype(float), kernel, mode='same')
+    return conv >= (win * 0.5)
 
 
 def _mask_to_segments(mask: np.ndarray, t_rel: np.ndarray, label: str, level: str) -> list:
@@ -110,18 +107,7 @@ def _merge_segments(segments: list, max_gap: float = 0.3, min_dur: float = 0.5) 
     for s in merged:
         if s["end"] - s["start"] < min_dur:
             s["end"] = s["start"] + int(min_dur)
-    merged = sorted(merged, key=lambda s: (s["label"], s["start"]))
-    merged2 = []
-    for s in merged:
-        if not merged2:
-            merged2.append(s)
-            continue
-        cur = merged2[-1]
-        if cur["label"] == s["label"] and cur["level"] == s["level"] and s["start"] <= cur["end"] + max_gap:
-            cur["end"] = max(cur["end"], s["end"])
-        else:
-            merged2.append(s)
-    return sorted(merged2, key=lambda s: (s["start"], s["label"]))
+    return sorted(merged, key=lambda s: (s["start"], s["label"]))
 
 
 class L3MetricsEngine:
@@ -170,8 +156,7 @@ class L3MetricsEngine:
             return {"key": "ldlj", "label": "平滑度 LDLJ*", "value": "--", "level": "good", "description": "平滑度指标需要至少3帧数据才能计算"}
         jerk = np.abs(np.diff(qa, n=2, axis=0)).mean(axis=1)
         jerk_rms = float(np.sqrt(np.mean(jerk ** 2)))
-        max_val = 0.05
-        score = max(0.0, min(10.0, 10.0 * (1.0 - min(jerk_rms / max_val, 1.0))))
+        score = max(0.0, min(10.0, 10.0 * (1.0 - min(jerk_rms / self.p.ldlj_max_val, 1.0))))
         return {
             "key": "ldlj",
             "label": "平滑度 LDLJ*",
@@ -200,7 +185,7 @@ class L3MetricsEngine:
 
     def _dead_timeline(self) -> list:
         mask = np.all(np.abs(self.actions_arm) < self.p.eps_arm, axis=1) | np.all(np.abs(self.actions_hand) < self.p.eps_hand, axis=1)
-        return _mask_to_segments(mask, self.t_rel, "停滞", "warn")
+        return _mask_to_segments(mask, self.t_rel, "动作消失", "warn")
 
     # ----------------------------------------------------------------
     # P0-3: Action Saturation
@@ -251,14 +236,10 @@ class L3MetricsEngine:
         arm_mag = np.abs(self.actions_arm).mean(axis=1)
         arm_vel_mag = np.abs(self.qvel_arm).mean(axis=1)
         hand_mag = np.abs(self.actions_hand).mean(axis=1)
-        def _is_static(arr): return arr < self.p.static_arm_act
-        arm_slow = _is_static(arm_mag) & _is_static(arm_vel_mag)
-        hand_slow = _is_static(hand_mag)
-        if ws > 1:
-            arm_mask = _sliding_mask(arm_slow.astype(float), ws, lambda x: x > 0.5)
-            hand_mask = _sliding_mask(hand_slow.astype(float), ws, lambda x: x > 0.5)
-        else:
-            arm_mask, hand_mask = arm_slow, hand_slow
+        arm_slow = (arm_mag < self.p.static_arm_act) & (arm_vel_mag < self.p.static_arm_vel)
+        hand_slow = hand_mag < self.p.static_hand_act
+        arm_mask = _sliding_window_mask(arm_slow, ws)
+        hand_mask = _sliding_window_mask(hand_slow, ws) if hand_slow.shape[0] > 0 else np.zeros(self._n, dtype=bool)
         mask = arm_mask | hand_mask
         val = float(np.mean(mask))
         return {
@@ -278,12 +259,9 @@ class L3MetricsEngine:
         hand_mag = np.abs(self.actions_hand).mean(axis=1)
         arm_slow = (arm_mag < self.p.static_arm_act) & (arm_vel_mag < self.p.static_arm_vel)
         hand_slow = hand_mag < self.p.static_hand_act
-        if ws > 1:
-            arm_mask = _sliding_mask(arm_slow.astype(float), ws, lambda x: x > 0.5)
-            hand_mask = _sliding_mask(hand_slow.astype(float), ws, lambda x: x > 0.5)
-        else:
-            arm_mask, hand_mask = arm_slow, hand_slow
-        return _mask_to_segments(arm_mask | hand_mask, self.t_rel, "停滞", "warn")
+        arm_mask = _sliding_window_mask(arm_slow, ws)
+        hand_mask = _sliding_window_mask(hand_slow, ws) if hand_slow.shape[0] > 0 else np.zeros(self._n, dtype=bool)
+        return _mask_to_segments(arm_mask | hand_mask, self.t_rel, "运动停滞", "warn")
 
     # ----------------------------------------------------------------
     # P0-5: Timestamp Jitter
@@ -431,7 +409,7 @@ class L3MetricsEngine:
         tl.extend(self._static_timeline())
         tl.extend(self._tracking_timeline())
         tl.extend(self._chatter_timeline())
-        sync_mask = self.sync_diff > 700.0
+        sync_mask = self.sync_diff > self.p.sync_bad_threshold_ms
         tl.extend(_mask_to_segments(sync_mask, self.t_rel, "同步异常", "bad"))
         tl = _merge_segments(tl, self.p.timeline_gap_merge, self.p.timeline_min_dur)
 
