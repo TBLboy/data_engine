@@ -351,6 +351,7 @@ watch(selectedVariant, async () => {
 })
 
 watch(curveMode, () => {
+  destroyChart()
   renderChart()
 })
 
