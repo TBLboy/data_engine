@@ -509,8 +509,8 @@ const submit = async () => {
             <div style="display:flex; justify-content:space-between; align-items:center">
               <span>遥操作曲线联动视图</span>
               <el-radio-group v-model="curveMode" size="small" :disabled="!curveData">
-                <el-radio-button label="arm" :disabled="!curveData?.armDims">机械臂 ({{ curveData?.armDims || 0 }} 维)</el-radio-button>
-                <el-radio-button label="hand" :disabled="!curveData?.handDims">灵巧手 ({{ curveData?.handDims || 0 }} 维)</el-radio-button>
+                <el-radio-button value="arm">机械臂 ({{ curveData?.armDims || 0 }} 维)</el-radio-button>
+                <el-radio-button v-if="curveData?.handDims" value="hand">灵巧手 ({{ curveData?.handDims || 0 }} 维)</el-radio-button>
               </el-radio-group>
             </div>
           </template>
