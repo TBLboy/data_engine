@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
 import { fetchL3Params, updateL3Params, type L3Params } from '../api/client'
@@ -93,15 +93,6 @@ const groups = [
     ]
   },
 ]
-
-function getLabel(key: string) {
-  for (const g of groups) {
-    for (const f of g.fields) {
-      if (f.key === key) return f.label
-    }
-  }
-  return key
-}
 
 async function load() {
   loading.value = true
