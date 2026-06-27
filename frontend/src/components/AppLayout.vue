@@ -106,19 +106,18 @@ const logout = async () => {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 20px;
-  margin: 0 8px 12px;
+  height: 46px;
+  margin: 6px 8px;
+  padding: 0 20px;
   border-radius: 12px;
-  color: #94a3b8;
+  color: #cbd5e1;
   font-size: 14px;
   cursor: pointer;
   transition: all 0.2s;
-  border: 1px solid rgba(148, 163, 184, 0.15);
 }
 
 .settings-entry:hover {
-  color: #e2e8f0;
-  background: rgba(148, 163, 184, 0.08);
-  border-color: rgba(148, 163, 184, 0.25);
+  color: #fff;
+  background: rgba(37, 99, 235, 0.22);
 }
 </style>
