@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
 import {
@@ -26,6 +26,8 @@ const revisionPage = ref(1)
 const revisionPageSize = 20
 const auditPage = ref(1)
 const auditPageSize = 50
+const revisionScrollRef = ref<HTMLElement | null>(null)
+const auditTableRef = ref<any>(null)
 
 const canManageReports = computed(() => ['admin', 'qc_manager'].includes(session.user?.role ?? 'viewer'))
 
@@ -41,14 +43,18 @@ const loadHistory = async () => {
   }
 }
 
-const onRevisionPageChange = (page: number) => {
+const onRevisionPageChange = async (page: number) => {
   revisionPage.value = page
-  loadHistory()
+  await loadHistory()
+  await nextTick()
+  revisionScrollRef.value?.scrollTo({ top: 0, behavior: 'instant' })
 }
 
-const onAuditPageChange = (page: number) => {
+const onAuditPageChange = async (page: number) => {
   auditPage.value = page
-  loadHistory()
+  await loadHistory()
+  await nextTick()
+  auditTableRef.value?.setScrollTop(0)
 }
 
 const loadReport = async () => {
@@ -264,15 +270,17 @@ const reasonTagType = (category: string) => {
         <el-col :span="10">
           <el-card shadow="never" class="qc-card" v-loading="loading">
             <template #header>Revision 时间线</template>
-            <el-timeline>
-              <el-timeline-item v-for="revision in filteredRevisions" :key="`${revision.episodeId}-${revision.revisionNo}-${revision.time}`" :timestamp="revision.time" placement="top">
-                <div class="revision-item audit-revision">
-                  <strong>{{ revision.batchName }} / {{ revision.episodeId }}</strong>
-                  <span>#{{ revision.revisionNo }} · {{ revision.operator }} · {{ revision.result }} · {{ revision.primaryReason || '-' }}</span>
-                  <p>{{ revision.note || '无备注' }}</p>
-                </div>
-              </el-timeline-item>
-            </el-timeline>
+            <div ref="revisionScrollRef" style="max-height: 480px; overflow-y: auto; padding-right: 4px">
+              <el-timeline>
+                <el-timeline-item v-for="revision in filteredRevisions" :key="`${revision.episodeId}-${revision.revisionNo}-${revision.time}`" :timestamp="revision.time" placement="top">
+                  <div class="revision-item audit-revision">
+                    <strong>{{ revision.batchName }} / {{ revision.episodeId }}</strong>
+                    <span>#{{ revision.revisionNo }} · {{ revision.operator }} · {{ revision.result }} · {{ revision.primaryReason || '-' }}</span>
+                    <p>{{ revision.note || '无备注' }}</p>
+                  </div>
+                </el-timeline-item>
+              </el-timeline>
+            </div>
             <div style="display:flex; justify-content:center; margin-top:12px">
               <el-pagination
                 v-if="(payload?.revisionTotal ?? 0) > revisionPageSize"
@@ -289,7 +297,7 @@ const reasonTagType = (category: string) => {
         <el-col :span="14">
           <el-card shadow="never" class="qc-card" v-loading="loading">
             <template #header>系统审计事件</template>
-            <el-table :data="filteredAuditRecords" stripe class="qc-table" height="480">
+            <el-table ref="auditTableRef" :data="filteredAuditRecords" stripe class="qc-table" height="480">
               <el-table-column prop="time" label="时间" width="170" />
               <el-table-column prop="operator" label="操作人" width="110" />
               <el-table-column prop="action" label="动作" width="140" />
