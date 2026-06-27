@@ -18,8 +18,7 @@
   overflow: hidden;
 }
 
-.qc-stat-card .el-card__body,
-.qc-stat-card :deep(.el-card__body) {
+.qc-stat-card .el-card__body {
   position: relative;
   display: flex;
   flex-direction: column;
@@ -29,8 +28,7 @@
   overflow: hidden;
 }
 
-.qc-stat-card .el-card__body::after,
-.qc-stat-card :deep(.el-card__body)::after {
+.qc-stat-card .el-card__body::after {
   position: absolute;
   right: -22px;
   bottom: -34px;
@@ -56,84 +54,80 @@
   color: #94a3b8;
 }
 
-.qc-stat-card-blue .el-card__body::after,
-.qc-stat-card-blue :deep(.el-card__body)::after { background: #2563eb; }
+.qc-stat-card-blue .el-card__body::after { background: #2563eb; }
 
-.qc-stat-card-orange .el-card__body::after,
-.qc-stat-card-orange :deep(.el-card__body)::after { background: #f59e0b; }
+.qc-stat-card-orange .el-card__body::after { background: #f59e0b; }
 
-.qc-stat-card-green .el-card__body::after,
-.qc-stat-card-green :deep(.el-card__body)::after { background: #16a34a; }
+.qc-stat-card-green .el-card__body::after { background: #16a34a; }
 
-.qc-stat-card-purple .el-card__body::after,
-.qc-stat-card-purple :deep(.el-card__body)::after { background: #7c3aed; }
+.qc-stat-card-purple .el-card__body::after { background: #7c3aed; }
 
 /* ---- Select 下拉框 ---- */
 
-.qc-select :deep(.el-select__wrapper) {
+.qc-select .el-select__wrapper {
   box-shadow: 0 0 0 1px #2563eb inset;
 }
 
-.qc-select :deep(.el-select__wrapper:hover) {
+.qc-select .el-select__wrapper:hover {
   box-shadow: 0 0 0 1px #3b82f6 inset;
 }
 
 /* ---- Input 输入框 ---- */
 
-.qc-input :deep(.el-input__wrapper) {
+.qc-input .el-input__wrapper {
   box-shadow: 0 0 0 1px #c0c4cc inset;
 }
 
-.qc-input :deep(.el-input__wrapper:hover) {
+.qc-input .el-input__wrapper:hover {
   box-shadow: 0 0 0 1px #b0b3b8 inset;
 }
 
 /* ---- Table 表格（含选中行高亮 + 滚动条） ---- */
 
-.qc-table :deep(.el-scrollbar__bar) {
+.qc-table .el-scrollbar__bar {
   opacity: 1 !important;
 }
 
-.qc-table :deep(.el-scrollbar__bar.is-horizontal > div),
-.qc-table :deep(.el-scrollbar__bar.is-vertical > div) {
+.qc-table .el-scrollbar__bar.is-horizontal > div,
+.qc-table .el-scrollbar__bar.is-vertical > div {
   background: #475569;
 }
 
-.qc-table :deep(.el-scrollbar__thumb) {
+.qc-table .el-scrollbar__thumb {
   background: #475569;
   opacity: 1;
 }
 
-.qc-table :deep(.el-scrollbar__thumb:hover) {
+.qc-table .el-scrollbar__thumb:hover {
   background: #334155;
 }
 
 /* 选中行 */
-.qc-table :deep(.el-table__body tr.current-row > td.el-table__cell),
-.qc-table :deep(.el-table__body tr.current-row > td.el-table__cell.el-table-fixed-column--left),
-.qc-table :deep(.el-table__body tr.current-row > td.el-table__cell.el-table-fixed-column--right) {
+.qc-table .el-table__body tr.current-row > td.el-table__cell,
+.qc-table .el-table__body tr.current-row > td.el-table__cell.el-table-fixed-column--left,
+.qc-table .el-table__body tr.current-row > td.el-table__cell.el-table-fixed-column--right {
   background: #93c5fd !important;
 }
 
-.qc-table :deep(.el-table__body tr.current-row > td.el-table__cell .cell) {
+.qc-table .el-table__body tr.current-row > td.el-table__cell .cell {
   background: transparent;
 }
 
-.qc-table :deep(.el-table__body tr.current-row > td.el-table__cell:first-child) {
+.qc-table .el-table__body tr.current-row > td.el-table__cell:first-child {
   box-shadow: inset 4px 0 0 #2563eb;
 }
 
-.qc-table :deep(.el-table__body tr.current-row:hover > td.el-table__cell),
-.qc-table :deep(.el-table__body tr.current-row:hover > td.el-table__cell.el-table-fixed-column--left),
-.qc-table :deep(.el-table__body tr.current-row:hover > td.el-table__cell.el-table-fixed-column--right),
-.qc-table :deep(.el-table__body tr.current-row.hover-row > td.el-table__cell),
-.qc-table :deep(.el-table__body tr.current-row.hover-row > td.el-table__cell.el-table-fixed-column--left),
-.qc-table :deep(.el-table__body tr.current-row.hover-row > td.el-table__cell.el-table-fixed-column--right) {
+.qc-table .el-table__body tr.current-row:hover > td.el-table__cell,
+.qc-table .el-table__body tr.current-row:hover > td.el-table__cell.el-table-fixed-column--left,
+.qc-table .el-table__body tr.current-row:hover > td.el-table__cell.el-table-fixed-column--right,
+.qc-table .el-table__body tr.current-row.hover-row > td.el-table__cell,
+.qc-table .el-table__body tr.current-row.hover-row > td.el-table__cell.el-table-fixed-column--left,
+.qc-table .el-table__body tr.current-row.hover-row > td.el-table__cell.el-table-fixed-column--right {
   background: #93c5fd !important;
 }
 
 /* 选中行内的 tag 融入底色 */
-.qc-table :deep(.el-table__body tr.current-row .el-tag) {
+.qc-table .el-table__body tr.current-row .el-tag {
   background: transparent;
   border-color: transparent;
   box-shadow: none;
@@ -141,13 +135,13 @@
 
 /* ---- Progress 进度条（表格内） ---- */
 
-.qc-table :deep(.el-progress-bar__outer) {
+.qc-table .el-progress-bar__outer {
   background: #cbd5e1;
 }
 
 /* ---- Progress 进度条（独立使用） ---- */
 
-.qc-progress :deep(.el-progress-bar__outer) {
+.qc-progress .el-progress-bar__outer {
   background: #cbd5e1;
 }
 
