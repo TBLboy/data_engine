@@ -368,7 +368,9 @@ class TaskPoolPayloadSchema(BaseModel):
 
 class HistoryPayloadSchema(BaseModel):
     auditRecords: list[AuditRecordSchema]
+    auditTotal: int = 0
     qcRevisions: list[QcRevisionSchema]
+    revisionTotal: int = 0
     episodes: list[EpisodeRowSchema]
     batches: list[BatchSummarySchema]
 

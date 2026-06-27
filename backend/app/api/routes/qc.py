@@ -723,8 +723,15 @@ def task_pool(db: Session = Depends(get_db), current_user: User = Depends(get_cu
 
 
 @router.get('/qc-history', response_model=HistoryPayloadSchema)
-def qc_history(db: Session = Depends(get_db), _: User = Depends(get_current_user)):
-    return history_payload(db)
+def qc_history(
+    revision_page: int = Query(1, ge=1),
+    revision_page_size: int = Query(20, ge=1, le=200),
+    audit_page: int = Query(1, ge=1),
+    audit_page_size: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    return history_payload(db, revision_page, revision_page_size, audit_page, audit_page_size)
 
 
 @router.get('/qc-history/report', response_model=HistoryReportPayloadSchema)

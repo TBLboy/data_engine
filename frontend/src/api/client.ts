@@ -154,7 +154,9 @@ export interface TaskPoolPayload {
 
 export interface HistoryPayload {
   auditRecords: AuditRecord[]
+  auditTotal: number
   qcRevisions: QcRevision[]
+  revisionTotal: number
   episodes: EpisodeRow[]
   batches: BatchSummary[]
 }
@@ -342,8 +344,17 @@ export async function fetchTaskPool() {
   return request<TaskPoolPayload>('/task-pool')
 }
 
-export async function fetchHistory() {
-  return request<HistoryPayload>('/qc-history')
+export async function fetchHistory(
+  revisionPage = 1, revisionPageSize = 20,
+  auditPage = 1, auditPageSize = 50
+) {
+  const params = new URLSearchParams({
+    revision_page: String(revisionPage),
+    revision_page_size: String(revisionPageSize),
+    audit_page: String(auditPage),
+    audit_page_size: String(auditPageSize),
+  })
+  return request<HistoryPayload>(`/qc-history?${params.toString()}`)
 }
 
 export async function fetchHistoryReport(batchId = 'all') {

@@ -22,18 +22,33 @@ const reportError = ref('')
 const keyword = ref('')
 const selectedBatchId = ref('all')
 
+const revisionPage = ref(1)
+const revisionPageSize = 20
+const auditPage = ref(1)
+const auditPageSize = 50
+
 const canManageReports = computed(() => ['admin', 'qc_manager'].includes(session.user?.role ?? 'viewer'))
 
 const loadHistory = async () => {
   loading.value = true
   error.value = ''
   try {
-    payload.value = await fetchHistory()
+    payload.value = await fetchHistory(revisionPage.value, revisionPageSize, auditPage.value, auditPageSize)
   } catch (err) {
     error.value = err instanceof Error ? err.message : '加载历史与审计失败'
   } finally {
     loading.value = false
   }
+}
+
+const onRevisionPageChange = (page: number) => {
+  revisionPage.value = page
+  loadHistory()
+}
+
+const onAuditPageChange = (page: number) => {
+  auditPage.value = page
+  loadHistory()
 }
 
 const loadReport = async () => {
@@ -161,8 +176,8 @@ const reasonTagType = (category: string) => {
       />
 
       <el-row :gutter="18" v-loading="loading || reportLoading">
-        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-blue"><span>审计事件</span><strong>{{ summary?.auditEventCount ?? auditRecords.length }}</strong><small>{{ selectedBatchLabel }}</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-green"><span>历史 Revision</span><strong>{{ summary?.revisionCount ?? qcRevisions.length }}</strong><small>支持按批次筛选</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-blue"><span>审计事件</span><strong>{{ payload?.auditTotal ?? 0 }}</strong><small>{{ selectedBatchLabel }}</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-green"><span>历史 Revision</span><strong>{{ payload?.revisionTotal ?? 0 }}</strong><small>支持按批次筛选</small></el-card></el-col>
         <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-orange"><span>Fail 记录</span><strong>{{ summary?.failEpisodeCount ?? episodes.filter((item) => item.qcResult === 'fail').length }}</strong><small>可追溯主原因码</small></el-card></el-col>
         <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-purple"><span>通过率</span><strong>{{ passRateText }}</strong><small>{{ summary?.completedSampleCount ?? episodes.filter((item) => item.qcStatus === 'done').length }} 条已完成抽检</small></el-card></el-col>
       </el-row>
@@ -258,6 +273,17 @@ const reasonTagType = (category: string) => {
                 </div>
               </el-timeline-item>
             </el-timeline>
+            <div style="display:flex; justify-content:center; margin-top:12px">
+              <el-pagination
+                v-if="(payload?.revisionTotal ?? 0) > revisionPageSize"
+                v-model:current-page="revisionPage"
+                :page-size="revisionPageSize"
+                :total="payload?.revisionTotal ?? 0"
+                layout="prev, pager, next"
+                size="small"
+                @current-change="onRevisionPageChange"
+              />
+            </div>
           </el-card>
         </el-col>
         <el-col :span="14">
@@ -270,6 +296,17 @@ const reasonTagType = (category: string) => {
               <el-table-column prop="target" label="对象" width="170" />
               <el-table-column prop="detail" label="详情" min-width="260" />
             </el-table>
+            <div style="display:flex; justify-content:center; margin-top:12px">
+              <el-pagination
+                v-if="(payload?.auditTotal ?? 0) > auditPageSize"
+                v-model:current-page="auditPage"
+                :page-size="auditPageSize"
+                :total="payload?.auditTotal ?? 0"
+                layout="prev, pager, next"
+                size="small"
+                @current-change="onAuditPageChange"
+              />
+            </div>
           </el-card>
         </el-col>
       </el-row>

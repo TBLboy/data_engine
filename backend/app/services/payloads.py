@@ -566,14 +566,22 @@ def reason_stats_payload_from_db(db: Session) -> list[dict]:
     ]
 
 
-def history_payload(db: Session) -> dict:
-    revisions = db.query(QcReviewRevision).join(Episode, QcReviewRevision.episode_id == Episode.id).join(Batch, Episode.batch_id == Batch.id).filter(Batch.is_active == True).order_by(QcReviewRevision.time.desc(), QcReviewRevision.revision_no.desc()).all()
-    audits = db.query(AuditEvent).order_by(AuditEvent.time.desc()).all()
+def history_payload(db: Session, revision_page: int = 1, revision_page_size: int = 20, audit_page: int = 1, audit_page_size: int = 50) -> dict:
+    revision_query = db.query(QcReviewRevision).join(Episode, QcReviewRevision.episode_id == Episode.id).join(Batch, Episode.batch_id == Batch.id).filter(Batch.is_active == True).order_by(QcReviewRevision.time.desc(), QcReviewRevision.revision_no.desc())
+    revision_total = revision_query.count()
+    revisions = revision_query.offset((revision_page - 1) * revision_page_size).limit(revision_page_size).all()
+
+    audit_query = db.query(AuditEvent).order_by(AuditEvent.time.desc())
+    audit_total = audit_query.count()
+    audits = audit_query.offset((audit_page - 1) * audit_page_size).limit(audit_page_size).all()
+
     episodes = _active_episode_query(db).order_by(Episode.updated_at.desc()).all()
     batches = _batch_query(db).options(joinedload(Batch.episodes)).order_by(Batch.imported_at.desc()).all()
     return {
         'auditRecords': [serialize_audit(item) for item in audits],
+        'auditTotal': audit_total,
         'qcRevisions': [serialize_revision(item) for item in revisions],
+        'revisionTotal': revision_total,
         'episodes': [serialize_episode(item) for item in episodes],
         'batches': _serialize_batches(db, batches),
     }
