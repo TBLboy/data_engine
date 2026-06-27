@@ -3,6 +3,7 @@
 ## Last Updated
 
 - 2026-06-25 (L2 质检指南 + 原因码汉化 + 视频安全加固，准备进入 L3)
+- 2026-06-27 (修复 settings 页面未部署、遥操作曲线切换、历史审计分页)
 - 2026-06-25 (L3 指标计算引擎落地：新建 l3_metrics.py 含 8 项 P0+P1 指标、arm/hand 自动检测、timeline 段生成，替换 payloads.py 手写 6 项指标为 L3MetricsEngine 统一入口)
 - 2026-06-25 (L2/L3 质检指标补全启动：L2 视觉指南 + L3 指标计算重构)
 - 2026-06-25 (锁机制重构与任务池标签动态扫描)
@@ -118,6 +119,9 @@
   - API 级验证：reviewer 越权返回 403、admin 全端点 200、L3 params 31 键完整、Q_motion weights 和=1.00、telemetry curve 数据结构正确
   - [MEDIUM] telemetry curve 加错误状态（替代永久 loading）、lock panel 加 z-index 防侧边栏遮挡
   - Reviewer 浏览器审计 8 项发现已处理；Admin 浏览器审计 10 项发现中 settings 页面已验证可用、账号创建标签已确认存在
+- 已修复 settings 页面未部署问题：Dockerfile 仅复制预编译 dist/，settings.vue 含 TS 编译错误（未使用 computed/getLabel）导致 npm run build 失败，dist 中缺少 settings-*.js。修复 TS 错误后重新 build + deploy，页面正常可用
+- 已修复遥操作曲线 arm/hand 切换无响应：根因是 Chart.js 不允许同一 canvas 创建第二个实例，切换模式时 renderChart() 未先销毁旧 Chart。修复为 watch(curveMode) 中先 destroyChart() 再 renderChart()
+- 已完成历史审计页面分页改造：Revision 时间线（每页20条，共26条）和系统审计事件（每页50条，共198条）从一次全量返回改为服务端分页，后端 history_payload 新增 revision_page/size 和 audit_page/size 参数，前端加入 el-pagination 控件
 
 ## Current Risks
 
