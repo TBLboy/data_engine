@@ -4,7 +4,6 @@ import {
   Finished,
   Monitor,
   Setting,
-  Tools,
   VideoCamera,
   CollectionTag
 } from '@element-plus/icons-vue'
@@ -24,9 +23,10 @@ const menuItems = [
   { path: '/task-types', label: '任务类型管理', icon: CollectionTag, roles: ['admin', 'qc_manager'] },
   { path: '/task-pool', label: '人工质检入口', icon: VideoCamera },
   { path: '/qc-history', label: '历史审计', icon: Finished, roles: ['admin', 'qc_manager'] },
-  { path: '/accounts', label: '账号管理', icon: Setting, roles: ['admin', 'qc_manager'] },
-  { path: '/settings', label: 'L3 参数配置', icon: Tools, roles: ['admin'] }
+  { path: '/accounts', label: '账号管理', icon: Setting, roles: ['admin', 'qc_manager'] }
 ]
+
+const isAdmin = computed(() => session.user?.role === 'admin')
 
 const visibleMenuItems = computed(() => menuItems.filter((item) => !item.roles || item.roles.includes(session.user?.role ?? 'viewer')))
 
@@ -63,6 +63,11 @@ const logout = async () => {
         </el-menu-item>
       </el-menu>
 
+      <div v-if="isAdmin" class="settings-entry" @click="router.push('/settings')">
+        <el-icon><Setting /></el-icon>
+        <span>设置</span>
+      </div>
+
       <div class="storage-card">
         <div class="storage-title">MinIO 对象存储</div>
         <div class="storage-path">默认 bucket: yaocao</div>
@@ -95,3 +100,25 @@ const logout = async () => {
     </el-container>
   </el-container>
 </template>
+
+<style scoped>
+.settings-entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  margin: 0 8px 12px;
+  border-radius: 12px;
+  color: #94a3b8;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.settings-entry:hover {
+  color: #e2e8f0;
+  background: rgba(148, 163, 184, 0.08);
+  border-color: rgba(148, 163, 184, 0.25);
+}
+</style>
