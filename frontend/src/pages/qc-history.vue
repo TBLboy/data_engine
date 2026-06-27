@@ -167,7 +167,7 @@ const reasonTagType = (category: string) => {
           <el-select v-model="selectedBatchId" style="width: 240px" class="qc-select" @change="handleBatchChange">
             <el-option v-for="item in batchOptions" :key="item.id" :label="item.name" :value="item.id" />
           </el-select>
-          <el-input v-model="keyword" placeholder="搜索 operator / episode / action" style="width: 320px" />
+          <el-input v-model="keyword" placeholder="搜索 operator / episode / action" class="qc-input" style="width: 320px" />
           <el-button @click="refreshPage">刷新</el-button>
         </div>
       </section>

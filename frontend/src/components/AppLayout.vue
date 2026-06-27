@@ -51,8 +51,8 @@ const logout = async () => {
       <div class="brand">
         <div class="brand-mark">QC</div>
         <div>
-          <div class="brand-title">Robot QC</div>
-          <div class="brand-subtitle">V1.0 人工质检平台</div>
+          <div class="brand-title">灵机启物</div>
+          <div class="brand-subtitle">机器人数采质检平台</div>
         </div>
       </div>
 
@@ -79,7 +79,7 @@ const logout = async () => {
     <el-container>
       <el-header class="topbar">
         <div>
-          <div class="topbar-title">机器人采集数据质检系统</div>
+          <div class="topbar-title">灵机启物机器人数采质检平台</div>
           <div class="topbar-subtitle">入库、派发、人工 QC、审计与批次统计闭环</div>
         </div>
         <div class="topbar-actions">

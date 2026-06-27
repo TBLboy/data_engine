@@ -6,6 +6,7 @@ import { fetchL3Params, updateL3Params, type L3Params } from '../api/client'
 
 const loading = ref(true)
 const saving = ref(false)
+const activeTab = ref('l3')
 const params = ref<L3Params>({} as L3Params)
 
 const groups = [
@@ -122,61 +123,46 @@ onMounted(load)
 
 <template>
   <AppLayout>
-    <div class="l3-settings" v-loading="loading">
-      <div class="settings-header">
-        <h1>L3 指标超参数配置</h1>
-        <el-button type="primary" :loading="saving" @click="save">保存全部</el-button>
+    <div class="qc-settings-page" v-loading="loading">
+      <div class="qc-settings-header">
+        <h1>设置</h1>
       </div>
-      <el-alert type="info" :closable="false" style="margin-bottom: 20px">
-        修改后立即生效，下次加载 manual QC 时自动使用新参数。参数值为空时将回退到系统默认值。
-      </el-alert>
 
-      <el-card v-for="group in groups" :key="group.title" shadow="never" class="qc-card" style="margin-bottom: 16px">
-        <template #header><strong>{{ group.title }}</strong></template>
-        <el-row :gutter="20">
-          <el-col :span="8" v-for="field in group.fields" :key="field.key" style="margin-bottom: 12px">
-            <div class="field-label">{{ field.label }}</div>
-            <el-input-number
-              v-model="(params as any)[field.key]"
-              :step="field.step"
-              :min="field.min"
-              :max="field.max"
-              :precision="field.step < 0.01 ? 4 : field.step < 0.1 ? 3 : field.step < 1 ? 2 : 0"
-              controls-position="right"
-              style="width: 100%"
-            />
-          </el-col>
-        </el-row>
-      </el-card>
+      <el-tabs v-model="activeTab">
+        <el-tab-pane label="L3 指标参数" name="l3">
+          <div style="display:flex; justify-content:flex-end; margin-bottom:16px">
+            <el-button type="primary" :loading="saving" @click="save">保存全部</el-button>
+          </div>
+          <el-alert type="info" :closable="false" style="margin-bottom: 20px">
+            修改后立即生效，下次加载 manual QC 时自动使用新参数。参数值为空时将回退到系统默认值。
+          </el-alert>
+
+          <el-card v-for="group in groups" :key="group.title" shadow="never" class="qc-card qc-field-group" style="margin-bottom: 16px">
+            <template #header><strong>{{ group.title }}</strong></template>
+            <el-row :gutter="20">
+              <el-col :span="8" v-for="field in group.fields" :key="field.key">
+                <div class="qc-field-row">
+                  <div class="qc-field-label">{{ field.label }}</div>
+                  <el-input-number
+                    v-model="(params as any)[field.key]"
+                    :step="field.step"
+                    :min="field.min"
+                    :max="field.max"
+                    :precision="field.step < 0.01 ? 4 : field.step < 0.1 ? 3 : field.step < 1 ? 2 : 0"
+                    controls-position="right"
+                    style="width: 100%"
+                  />
+                </div>
+              </el-col>
+            </el-row>
+          </el-card>
+        </el-tab-pane>
+
+        <el-tab-pane label="通用" name="general" disabled />
+      </el-tabs>
     </div>
   </AppLayout>
 </template>
 
 <style scoped>
-.l3-settings {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 20px;
-}
-
-.settings-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.settings-header h1 {
-  margin: 0;
-  font-size: 22px;
-}
-
-.field-label {
-  font-size: 12px;
-  color: #909399;
-  margin-bottom: 4px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 </style>

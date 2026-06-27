@@ -142,7 +142,7 @@ const ingestStatusType = (statusValue: string) => {
           <el-card shadow="never" class="qc-card filter-card">
             <template #header>扫描 MinIO</template>
             <div class="filter-grid">
-              <el-input v-model="scanForm.bucket" placeholder="输入 MinIO bucket 名称" clearable />
+              <el-input v-model="scanForm.bucket" placeholder="输入 MinIO bucket 名称" class="qc-input" clearable />
               <el-select v-model="scanForm.scope" class="qc-select" placeholder="扫描范围">
                 <el-option label="全量扫描" value="full" />
               </el-select>
@@ -178,7 +178,7 @@ const ingestStatusType = (statusValue: string) => {
 
       <el-card shadow="never" class="qc-card filter-card">
         <div class="filter-grid">
-          <el-input v-model="keyword" placeholder="搜索 episode / batch / reason / reviewer" clearable />
+          <el-input v-model="keyword" placeholder="搜索 episode / batch / reason / reviewer" class="qc-input" clearable />
           <el-select v-model="batch" placeholder="批次" class="qc-select" clearable filterable>
             <el-option v-for="item in batches" :key="item.id" :label="item.name" :value="item.id" />
           </el-select>
