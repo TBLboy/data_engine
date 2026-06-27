@@ -48,14 +48,17 @@ const durationSec = computed(() => payload.value?.episode.durationSec ?? 0)
 const maxFrame = computed(() => Math.max(totalFrames.value - 1, 0))
 const progress = computed(() => (maxFrame.value ? Math.round((currentFrame.value / maxFrame.value) * 100) : 0))
 const currentTimeSec = computed(() => currentFrame.value / fps.value)
-const metricCards = computed(() => payload.value?.metrics ?? [])
-const sortedMetricCards = computed(() => {
-  const order: Record<string, number> = { bad: 0, warn: 1, good: 2 }
-  return [...metricCards.value].sort((a, b) => (order[a.level] ?? 3) - (order[b.level] ?? 3))
+const l3V2Report = computed(() => payload.value?.l3V2 ?? null)
+const qualityDimensions = computed(() => l3V2Report.value?.qualityDimensions ?? [])
+const diagnosticMetrics = computed(() => l3V2Report.value?.diagnosticMetrics ?? [])
+const trainingQualityScore = computed(() => l3V2Report.value?.trainingQualityScore ?? null)
+const trainingQualityLevel = computed(() => l3V2Report.value?.trainingQualityLevel ?? 'good')
+const scoreRingPercent = computed(() => {
+  const s = trainingQualityScore.value
+  if (s == null) return 0
+  return Math.round(Math.max(0, Math.min(10, s)) / 10 * 100)
 })
-// 评分环固定展示综合质量分 Q_motion，而非随严重度排序变化的首个指标
-const scoreMetric = computed(() => metricCards.value.find((metric) => metric.key === 'q_motion') ?? sortedMetricCards.value[0] ?? null)
-const timelineSegments = computed(() => payload.value?.timelineSegments ?? [])
+const timelineSegments = computed(() => l3V2Report.value?.timelineSegments ?? [])
 const qcRevisions = computed(() => payload.value?.revisions ?? [])
 const episode = computed(() => payload.value?.episode)
 const episodeNumber = computed(() => {
@@ -76,6 +79,25 @@ const lockLabel = computed(() => {
   if (reviewLock.value?.isLocked) return '当前被他人锁定'
   return '当前无人认领'
 })
+
+const severityTagType = (level?: string) => {
+  if (level === 'bad') return 'danger'
+  if (level === 'warn') return 'warning'
+  return 'success'
+}
+
+const segmentStartSec = (segment: any) => Number(segment.startSec ?? segment.start ?? 0)
+const segmentEndSec = (segment: any) => Number(segment.endSec ?? segment.end ?? 0)
+const segmentSource = (segment: any) => segment.sourceMetricId ? `${segment.sourceMetricId} · ${segment.sourceEvidenceId || ''}` : 'L3 v1'
+const segmentHasSource = (segment: any) => Boolean(segment.sourceMetricId)
+const segmentKey = (segment: any) => `${segment.label}-${segmentStartSec(segment)}-${segmentEndSec(segment)}-${segment.sourceMetricId || ''}`
+
+const jumpToSegment = async (segment: any) => {
+  pauseAll()
+  const targetSec = Math.max(0, Math.min(durationSec.value || segmentStartSec(segment), segmentStartSec(segment)))
+  currentFrame.value = Math.max(0, Math.min(maxFrame.value, Math.round(targetSec * fps.value)))
+  await syncVideosToFrame()
+}
 
 const stopPlaybackLoop = () => {
   if (playbackLoopId !== null) {
@@ -499,8 +521,14 @@ const submit = async () => {
             }"
           />
           <div class="segment-row">
-            <div v-for="segment in timelineSegments" :key="segment.label" class="segment-chip" :class="segment.level">
-              {{ segment.start }}-{{ segment.end }}s · {{ segment.label }}
+            <div
+              v-for="segment in timelineSegments"
+              :key="segmentKey(segment)"
+              class="segment-chip clickable"
+              :class="segment.level"
+              @click="jumpToSegment(segment)"
+            >
+              {{ segmentStartSec(segment).toFixed(1) }}-{{ segmentEndSec(segment).toFixed(1) }}s · {{ segment.label }}
             </div>
           </div>
         </el-card>
@@ -533,8 +561,15 @@ const submit = async () => {
           <el-col :span="24">
             <el-card shadow="never" class="qc-card">
               <template #header>异常段核查清单</template>
-              <el-check-tag v-for="segment in timelineSegments" :key="segment.label" :checked="segment.level === 'warn'" :type="segment.level === 'bad' ? 'danger' : 'warning'">
-                {{ segment.start }}-{{ segment.end }}s {{ segment.label }}
+              <el-check-tag
+                v-for="segment in timelineSegments"
+                :key="segmentKey(segment)"
+                :checked="segment.level !== 'good'"
+                :type="severityTagType(segment.level)"
+                @click="jumpToSegment(segment)"
+              >
+                {{ segmentStartSec(segment).toFixed(1) }}-{{ segmentEndSec(segment).toFixed(1) }}s {{ segment.label }}
+                <small v-if="segmentHasSource(segment)"> · {{ segmentSource(segment) }}</small>
               </el-check-tag>
             </el-card>
           </el-col>
@@ -543,22 +578,68 @@ const submit = async () => {
 
       <aside class="manual-side sticky-side">
         <el-card shadow="never" class="qc-card score-card">
-          <template #header>Episode 质量评分</template>
-          <div class="score-ring"><strong>{{ scoreMetric?.value || '--' }}</strong><span>{{ scoreMetric?.label || 'Q_motion' }}</span></div>
-          <div class="metric-scroll">
-            <div class="metric-list compact-list">
-              <div v-for="metric in sortedMetricCards" :key="metric.key" class="metric-item" :class="metric.level">
-              <div class="metric-copy">
-                <div class="metric-label-row">
-                  <strong>{{ metric.label }}</strong>
-                  <el-tooltip :content="metric.description" placement="top" effect="light">
-                    <el-icon class="metric-help-icon"><QuestionFilled /></el-icon>
-                  </el-tooltip>
+          <template #header>{{ l3V2Report ? 'RDDQF 训练质量评分' : 'Episode 质量评分' }}</template>
+
+          <div v-if="l3V2Report" class="l3v2-panel">
+            <div class="score-ring" :class="trainingQualityLevel">
+              <svg viewBox="0 0 120 120" class="score-ring-svg">
+                <circle cx="60" cy="60" r="52" fill="none" stroke="#e2e8f0" stroke-width="10" />
+                <circle cx="60" cy="60" r="52" fill="none" stroke="currentColor" stroke-width="10"
+                  stroke-linecap="round" transform="rotate(-90 60 60)"
+                  :stroke-dasharray="2 * Math.PI * 52"
+                  :stroke-dashoffset="2 * Math.PI * 52 * (1 - scoreRingPercent / 100)" />
+              </svg>
+              <div class="score-ring-text">
+                <strong>{{ trainingQualityScore?.toFixed(1) || '--' }}</strong>
+                <span>{{ l3V2Report.scoreLabel }}</span>
+              </div>
+            </div>
+            <p class="l3v2-summary">{{ l3V2Report.summary }}</p>
+            <div class="telemetry-profile">
+              <span>{{ l3V2Report.version }}</span>
+              <span>{{ l3V2Report.telemetryProfile.armDims }} arm DOF</span>
+              <span>{{ l3V2Report.telemetryProfile.handDims }} hand DOF</span>
+            </div>
+
+            <div class="quality-scroll">
+              <div v-for="dimension in qualityDimensions" :key="dimension.dimensionId" class="quality-dimension" :class="dimension.level">
+                <div class="quality-header">
+                  <div>
+                    <strong>{{ dimension.labelZh }}</strong>
+                    <small>{{ dimension.label }}</small>
+                  </div>
+                  <el-tag :type="severityTagType(dimension.level)" effect="dark">{{ dimension.score.toFixed(1) }}</el-tag>
+                </div>
+                <p>{{ dimension.summary }}</p>
+                <div class="evidence-list">
+                  <div v-for="evidence in dimension.evidenceGroups" :key="evidence.evidenceId" class="evidence-item" :class="evidence.level">
+                    <div class="evidence-header">
+                      <span>{{ evidence.label }}</span>
+                      <b>{{ evidence.score.toFixed(1) }}</b>
+                    </div>
+                    <div v-for="metric in evidence.metrics" :key="metric.metricId" class="metric-mini">
+                      <span>{{ metric.metricId }} · {{ metric.name }}</span>
+                      <el-tooltip :content="metric.description" placement="top" effect="light">
+                        <el-icon class="metric-help-icon inline"><QuestionFilled /></el-icon>
+                      </el-tooltip>
+                      <b>{{ metric.valueText }}</b>
+                    </div>
+                  </div>
                 </div>
               </div>
-              <b>{{ metric.value }}</b>
+
+              <div v-if="diagnosticMetrics.length" class="diagnostic-block">
+                <div class="diagnostic-title">Execution Diagnostics（不进入训练质量总分）</div>
+                <div v-for="metric in diagnosticMetrics" :key="metric.metricId" class="metric-mini diagnostic">
+                  <span>{{ metric.metricId }} · {{ metric.name }}</span>
+                  <b>{{ metric.valueText }}</b>
+                </div>
+              </div>
             </div>
           </div>
+
+          <div v-else>
+            <el-empty description="L3 quality data unavailable" />
           </div>
         </el-card>
 
@@ -674,4 +755,155 @@ const submit = async () => {
   position: relative;
   z-index: 2;
 }
+
+.segment-chip.clickable {
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.segment-chip.clickable:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12);
+}
+
+.l3v2-panel .score-ring.good {
+  color: #16a34a;
+}
+
+.l3v2-panel .score-ring.warn {
+  color: #f59e0b;
+}
+
+.l3v2-panel .score-ring.bad {
+  color: #ef4444;
+}
+
+.l3v2-summary {
+  margin: 10px 0 12px;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.telemetry-profile {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.telemetry-profile span {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 11px;
+}
+
+.quality-scroll {
+  max-height: 560px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.quality-dimension {
+  border: 1px solid #e5e7eb;
+  border-left-width: 4px;
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: #fff;
+}
+
+.quality-dimension.good { border-left-color: #67c23a; }
+.quality-dimension.warn { border-left-color: #e6a23c; }
+.quality-dimension.bad { border-left-color: #f56c6c; }
+
+.quality-header, .evidence-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.quality-header small {
+  display: block;
+  color: #94a3b8;
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.quality-dimension p {
+  margin: 8px 0 10px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.evidence-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.evidence-item {
+  padding: 9px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.evidence-item.warn { background: #fffbeb; border-color: #fde68a; }
+.evidence-item.bad { background: #fef2f2; border-color: #fecaca; }
+
+.evidence-header span {
+  font-weight: 700;
+  font-size: 12px;
+  color: #334155;
+}
+
+.evidence-header b {
+  color: #0f172a;
+  font-size: 12px;
+}
+
+.metric-mini {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+  font-size: 11px;
+  color: #64748b;
+}
+
+.metric-mini b {
+  color: #0f172a;
+  font-size: 12px;
+}
+
+.metric-help-icon.inline {
+  position: static !important;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.diagnostic-block {
+  margin-top: 14px;
+  padding: 10px;
+  border-radius: 12px;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+}
+
+.diagnostic-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: #475569;
+}
+
+.metric-mini.diagnostic {
+  grid-template-columns: 1fr auto;
+}
+
 </style>

@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-- 2026-06-25 (L2 质检指南 + 原因码汉化 + 视频安全加固，准备进入 L3)
+- 2026-06-27 (RDDQF L3 v2 MVP 迁移：新四层架构替换旧 L3 v1 指标引擎，前端质量画像 UI，死代码清理)
 - 2026-06-27 (修复 settings 页面未部署、遥操作曲线切换、历史审计分页)
 - 2026-06-25 (L3 指标计算引擎落地：新建 l3_metrics.py 含 8 项 P0+P1 指标、arm/hand 自动检测、timeline 段生成，替换 payloads.py 手写 6 项指标为 L3MetricsEngine 统一入口)
 - 2026-06-25 (L2/L3 质检指标补全启动：L2 视觉指南 + L3 指标计算重构)
@@ -13,9 +13,12 @@
 ## Current Objective
 
 - 以公司内网可直接投入使用为标准推进 Robot QC V1
-- 推进存储架构从“本地 processed 目录 + PostgreSQL”升级为“MinIO 原始对象存储 + PostgreSQL 元数据/QC 湖仓协同”
+- 完成 RDDQF L3 v2 MVP 迁移，将 L3 从单层指标引擎升级为四层训练数据质量评估引擎
 
 ## Current Status
+
+- 2026-06-27: 完成 RDDQF L3 v2 MVP 迁移，新引擎（Feature→Evidence→Metric→Quality）替换旧 L3 v1 指标系统，L3V2Engine 合成数据验证通过（Score 6.94），Tracking Error 降级为 Execution Diagnostics
+- 2026-06-27: 修复评分环从静态 CSS border 改为 SVG stroke-dasharray 动态进度环，分数 0-10 正确映射到 0-100% 填充
 
 - 前端页面已从 mock 迁移到后端 API
 - 手动 QC 页面已接入真实上下文和提交接口

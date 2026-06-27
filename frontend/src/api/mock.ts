@@ -4,13 +4,11 @@ import type {
   DispatchPreview,
   EpisodeRow,
   IngestJob,
-  MetricCard,
   QcRevision,
   QcTask,
   ReasonStat,
   ReviewerWorkload,
   TaskType,
-  TimelineSegment,
   UserProfile
 } from '../types/qc'
 
@@ -250,20 +248,7 @@ export const dispatchPreviews: DispatchPreview[] = [
   }
 ]
 
-export const metricCards: MetricCard[] = [
-  { key: 'q_motion', label: 'Q_motion', value: '8.6', level: 'good', description: '轨迹质量综合分' },
-  { key: 'smoothness', label: '平滑度 LDLJ', value: '7.9', level: 'good', description: '动作连续性良好' },
-  { key: 'sync', label: '同步异常率', value: '1.8%', level: 'good', description: '低于 5% 阈值' },
-  { key: 'tracking', label: '跟踪误差', value: '0.21', level: 'warn', description: '右手末段略高' },
-  { key: 'chatter', label: '手指颤振', value: '0.08', level: 'good', description: '未发现明显抖动' },
-  { key: 'saturation', label: '动作饱和率', value: '3.2%', level: 'good', description: '遥操指令正常' }
-]
 
-export const timelineSegments: TimelineSegment[] = [
-  { start: 18, end: 26, level: 'warn', label: 'tracking_error' },
-  { start: 63, end: 71, level: 'bad', label: 'occlusion_object' },
-  { start: 82, end: 88, level: 'warn', label: 'sync_bad' }
-]
 
 export const auditRecords: AuditRecord[] = [
   { id: 'audit_001', operator: '张审核', action: '提交人工质检', target: 'episode_000127', time: '2026-06-21 18:08', detail: 'fail / occlusion_object / 已写入 revision #2' },

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pydantic import BaseModel
 
 
@@ -161,33 +163,88 @@ class DispatchPreviewSchema(BaseModel):
     activeDispatchGeneration: int
 
 
-class MetricCardSchema(BaseModel):
-    key: str
-    label: str
-    value: str
+class L3V2MetricResultSchema(BaseModel):
+    metricId: str
+    name: str
+    qualityDimension: str
+    evidenceId: str
+    value: float
+    valueText: str
+    unit: str
+    score: float
     level: str
     description: str
+    confidence: float = 1.0
+    weight: float = 1.0
 
 
-class ManualQcMediaSchema(BaseModel):
-    objectId: str
-    role: str
+class L3V2EvidenceGroupSchema(BaseModel):
+    evidenceId: str
     label: str
-    variant: str
-    slot: str
-    mimeType: str
-    previewUrl: str
-    previewExpiresAt: str | None
-    refreshable: bool
-    downloadable: bool
-    sortOrder: int
+    qualityDimension: str
+    score: float
+    level: str
+    confidence: float
+    summary: str
+    metrics: list[L3V2MetricResultSchema]
+    weight: float = 1.0
 
 
-class TimelineSegmentSchema(BaseModel):
-    start: int
-    end: int
+class L3V2QualityDimensionSchema(BaseModel):
+    dimensionId: str
+    label: str
+    labelZh: str
+    score: float
+    level: str
+    weight: float
+    summary: str
+    evidenceGroups: list[L3V2EvidenceGroupSchema]
+
+
+class L3V2TimelineSegmentSchema(BaseModel):
+    start: float
+    end: float
+    startSec: float
+    endSec: float
     level: str
     label: str
+    sourceMetricId: str
+    sourceEvidenceId: str
+    qualityDimension: str
+    rawValue: float | None = None
+    threshold: float | None = None
+    confidence: float = 1.0
+
+
+class L3V2TelemetryProfileSchema(BaseModel):
+    frameCount: int
+    durationSec: float
+    fps: float
+    armDims: int
+    handDims: int
+    armDimIndices: list[int]
+    handDimIndices: list[int]
+
+
+class L3V2ReportSchema(BaseModel):
+    version: str
+    trainingQualityScore: float
+    trainingQualityLevel: str
+    scoreLabel: str
+    qualityDimensions: list[L3V2QualityDimensionSchema]
+    metricResults: list[L3V2MetricResultSchema]
+    diagnosticMetrics: list[L3V2MetricResultSchema]
+    timelineSegments: list[L3V2TimelineSegmentSchema]
+    telemetryProfile: L3V2TelemetryProfileSchema
+    summary: str
+
+
+class ManualQcContextSchema(BaseModel):
+    episode: EpisodeRowSchema
+    l3V2: L3V2ReportSchema | None = None
+    revisions: list[QcRevisionSchema]
+    reviewLock: ReviewLockSchema
+    media: list[ManualQcMediaSchema]
 
 
 class AuditRecordSchema(BaseModel):
@@ -307,13 +364,18 @@ class HistoryExportPayloadSchema(BaseModel):
     auditRecords: list[AuditRecordSchema]
 
 
-class ManualQcContextSchema(BaseModel):
-    episode: EpisodeRowSchema
-    metrics: list[MetricCardSchema]
-    timelineSegments: list[TimelineSegmentSchema]
-    revisions: list[QcRevisionSchema]
-    reviewLock: ReviewLockSchema
-    media: list[ManualQcMediaSchema]
+class ManualQcMediaSchema(BaseModel):
+    objectId: str
+    role: str
+    label: str
+    variant: str
+    slot: str
+    mimeType: str
+    previewUrl: str
+    previewExpiresAt: str | None
+    refreshable: bool
+    downloadable: bool
+    sortOrder: int
 
 
 class ManualQcMediaRefreshRequestSchema(BaseModel):

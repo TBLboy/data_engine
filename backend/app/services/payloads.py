@@ -412,21 +412,15 @@ def _build_real_manual_qc_context(db: Session, episode_id: str) -> dict | None:
     metadata = _read_minio_json(bucket, metadata_key)
 
     with _read_minio_npz(bucket, telemetry_key) as telemetry:
-        from app.services.l3_metrics import L3MetricsEngine, L3HyperParams
-        from app.models.l3_config import L3Config
-        db_params = L3Config.get_params(db)
-        params = L3HyperParams(**{k: v for k, v in db_params.items() if k in L3HyperParams.__dataclass_fields__}) if db_params else None
-        engine = L3MetricsEngine(telemetry, params)
-        result = engine.compute_all()
-        metrics = result['metrics']
-        timeline_segments = result['timelineSegments']
+        telemetry_dict = {key: telemetry[key] for key in telemetry.files}
+        from app.services.l3_v2 import L3V2Engine
+        l3_v2 = L3V2Engine(telemetry_dict).compute()
 
     return {
         'durationSec': float(manifest.get('duration', 0.0)),
         'frameCount': int(manifest.get('frame_count', 0)),
         'fps': float(manifest.get('fps', 0.0)),
-        'metrics': metrics,
-        'timelineSegments': timeline_segments,
+        'l3V2': l3_v2,
         'syncDescription': metadata.get('alignment', {}).get('method', ''),
     }
 
@@ -873,8 +867,7 @@ def manual_qc_context_payload(db: Session, episode_id: str, current_user: User |
                 'frameCount': real_context['frameCount'],
                 'fps': real_context['fps'],
             },
-            'metrics': real_context['metrics'],
-            'timelineSegments': real_context['timelineSegments'],
+            'l3V2': real_context.get('l3V2'),
             'revisions': [serialize_revision(item) for item in revisions],
             'reviewLock': review_lock,
             'media': _manual_qc_media(db, episode_id, current_user),
@@ -885,8 +878,7 @@ def manual_qc_context_payload(db: Session, episode_id: str, current_user: User |
             **serialize_episode(episode),
             'fps': 30.0,
         },
-        'metrics': [],
-        'timelineSegments': [],
+        'l3V2': None,
         'revisions': [serialize_revision(item) for item in revisions],
         'reviewLock': review_lock,
         'media': _manual_qc_media(db, episode_id, current_user),

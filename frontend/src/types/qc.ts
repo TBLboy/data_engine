@@ -112,12 +112,80 @@ export interface DispatchPreview {
   activeDispatchGeneration: number
 }
 
-export interface MetricCard {
-  key: string
-  label: string
-  value: string
+export interface L3V2MetricResult {
+  metricId: string
+  name: string
+  qualityDimension: string
+  evidenceId: string
+  value: number
+  valueText: string
+  unit: string
+  score: number
   level: 'good' | 'warn' | 'bad'
   description: string
+  confidence: number
+  weight: number
+}
+
+export interface L3V2EvidenceGroup {
+  evidenceId: string
+  label: string
+  qualityDimension: string
+  score: number
+  level: 'good' | 'warn' | 'bad'
+  confidence: number
+  summary: string
+  metrics: L3V2MetricResult[]
+  weight: number
+}
+
+export interface L3V2QualityDimension {
+  dimensionId: string
+  label: string
+  labelZh: string
+  score: number
+  level: 'good' | 'warn' | 'bad'
+  weight: number
+  summary: string
+  evidenceGroups: L3V2EvidenceGroup[]
+}
+
+export interface L3V2TimelineSegment {
+  start: number
+  end: number
+  startSec: number
+  endSec: number
+  level: 'good' | 'warn' | 'bad'
+  label: string
+  sourceMetricId: string
+  sourceEvidenceId: string
+  qualityDimension: string
+  rawValue: number | null
+  threshold: number | null
+  confidence: number
+}
+
+export interface L3V2TelemetryProfile {
+  frameCount: number
+  durationSec: number
+  fps: number
+  armDims: number
+  handDims: number
+  armDimIndices: number[]
+  handDimIndices: number[]
+}
+
+export interface L3V2Report {
+  version: string
+  trainingQualityScore: number
+  trainingQualityLevel: 'good' | 'warn' | 'bad'
+  scoreLabel: string
+  qualityDimensions: L3V2QualityDimension[]
+  metricResults: L3V2MetricResult[]
+  diagnosticMetrics: L3V2MetricResult[]
+  timelineSegments: L3V2TimelineSegment[]
+  telemetryProfile: L3V2TelemetryProfile
+  summary: string
 }
 
 export interface ManualQcMedia {
@@ -132,13 +200,6 @@ export interface ManualQcMedia {
   refreshable: boolean
   downloadable: boolean
   sortOrder: number
-}
-
-export interface TimelineSegment {
-  start: number
-  end: number
-  level: 'warn' | 'bad'
-  label: string
 }
 
 export interface AuditRecord {

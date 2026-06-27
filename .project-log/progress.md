@@ -1,3 +1,79 @@
+## 2026-06-27 (RDDQF L3 v2 MVP migration: new four-layer engine replaces old L3 v1)
+
+- Type: implementation
+- Status: backend compile passed, frontend build passed, containers deployed healthy, pending in-network API verification
+- Importance: critical
+- Reusable: yes
+- Objective: 将 L3 从单层 Metric Engine v1（8 个孤立指标 + Q_motion 综合分）升级为 RDDQF 四层训练数据质量评估引擎（Feature → Evidence → Metric → Quality），并用新架构完全替换旧 v1 指标系统
+- Work completed:
+  - 深入阅读 GPT 产出的 RDDQF v1.0 完整设计文档体系（Standard、Ontology、Evidence、Metric Library、L3MetricsEngine v2 Architecture、Overall Architecture v2）
+  - 阅读 GPT 产出的 L3 v2 MVP 代码实现（backend/app/services/l3_v2/ 七文件 + 前后端 patch）
+  - 后端新增 `backend/app/services/l3_v2/` 模块（7 文件）：
+    - `telemetry_parser.py` — 解析 telemetry.npz，arm/hand 维度自动检测，手部 0-255 归一化，EE pose 可选提取
+    - `feature_extractor.py` — 14 维可复用特征（jerk、delta、reversal、chatter、tracking、low_change_mask、sync_bad_mask 等）
+    - `metric_engine.py` — 9 个指标：MQ-01/02/03（Motion Quality）、LQ-01/02/03（Learnability）、DI-01/02（Data Integrity）、DX-01（Execution Diagnostics）
+    - `quality_engine.py` — 三层聚合：Metric → Evidence → Quality Dimension → Training Quality Score，含中英文元信息
+    - `engine.py` — 顶层入口，串联全链路
+    - `utils.py` — score_inverse/score_ratio 评分映射、mask_to_segments timeline 转换、加权平均
+  - 后端 schemas/qc.py 新增 7 个 Pydantic schema（L3V2Report 系列），ManualQcContextSchema 改为 `l3V2: L3V2ReportSchema | None`
+  - 后端 payloads.py 切换为 L3V2Engine，移除旧 L3MetricsEngine 调用
+  - 后端 routes/qc.py 移除旧 L3 超参数 API（GET/PUT /admin/l3-params）
+  - 移除旧代码：`l3_metrics.py`（~500行）、`l3_config.py` 模型、models/__init__.py 中的 L3Config 引用
+  - 前端 types/qc.ts 新增 L3V2 系列 TypeScript 类型，替换旧 MetricCard/TimelineSegment
+  - 前端 api/client.ts 更新 ManualQcContext 接口，移除 L3Params API 函数
+  - 前端 manual-qc.vue 重写：Training Quality 评分环、质量维度树、Evidence Group、Metric 明细、Execution Diagnostics 诊断面板、Timeline 段点击跳转
+  - 前端 settings.vue 精简为占位页（L3 v2 阈值当前为内置默认值）
+  - 前端 mock.ts 清理旧 metricCards/timelineSegments 常量
+  - 修复 score-ring 评分环：从静态 border 装饰改为 SVG stroke-dasharray 动态进度环，根据分数 0-10 映射到 0-100% 填充
+- Business logic impact: L3 从现在起正式从 "Motion QC" 升级为 "Training Data Quality Assessment"。新系统不再围绕"能算什么指标"组织，而是围绕"这条 demonstration 对下游策略学习有多大价值"来设计。Tracking Error 降级为 Execution Diagnostics（不进训练质量总分），Dead/Static/Saturation 等旧指标语义被 Evidence 层重新解释。
+- Problems encountered:
+  - 测试从 Docker 容器访问 MinIO 时超时（用户确认当前不在内网，属于网络问题而非代码问题）
+  - schemas/qc.py 缺少 `from __future__ import annotations` 导致 Pydantic 前向引用 NameError，已修复
+  - 旧 ManualQcMediaSchema 在替换 MetricCardSchema/TimelineSegmentSchema 时被误删，已恢复
+  - 前端 mock.ts 仍引用已删除的 MetricCard/TimelineSegment 类型，已清理
+  - GPT 产出的 manual-qc.vue 保留了旧的 metricCards fallback 路径（v-else），已移除
+- Resolution:
+  - L3V2Engine 用合成数据验证通过：Training Quality Score=6.94, 3 dimensions, 7 timeline segments
+  - 所有代码编译/构建通过，Docker 容器重启后健康运行
+  - 真正的端到端验证（真实 episode 的 qc-context API + 浏览器 manual QC 页面）需在内网环境下进行
+- Verification:
+  - `python3 -m compileall -q backend/app/services/l3_v2/ backend/app/schemas/qc.py backend/app/services/payloads.py backend/app/api/routes/qc.py backend/app/models/__init__.py` → 通过
+  - `python3 -c "from app.services.l3_v2 import L3V2Engine; print('OK')"` → OK
+  - `docker exec robot-qc-backend python3 -c "..." ` 合成数据测试 → Score: 6.94, Level: warn, 3 dims, 7 timeline, OK
+  - `npm run build --prefix frontend` → built in 316ms
+  - `docker compose build backend frontend && docker compose up -d` → 容器全部 Healthy
+- Unverified items:
+  - 内网环境下真实 episode 的 `/api/episodes/{id}/qc-context` 返回 l3V2 字段验证
+  - 浏览器端 manual QC 页面 RDDQF 训练质量评分完整交互验证
+  - L3 v2 阈值标定（当前为 metric_engine.py 硬编码，后续需按任务类型建立阈值组）
+- Files changed:
+  - `software/backend/app/services/l3_v2/__init__.py` (new)
+  - `software/backend/app/services/l3_v2/engine.py` (new)
+  - `software/backend/app/services/l3_v2/telemetry_parser.py` (new)
+  - `software/backend/app/services/l3_v2/feature_extractor.py` (new)
+  - `software/backend/app/services/l3_v2/metric_engine.py` (new)
+  - `software/backend/app/services/l3_v2/quality_engine.py` (new)
+  - `software/backend/app/services/l3_v2/utils.py` (new)
+  - `software/backend/app/schemas/qc.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/backend/app/api/routes/qc.py`
+  - `software/backend/app/models/__init__.py`
+  - `software/backend/app/services/l3_metrics.py` (deleted)
+  - `software/backend/app/models/l3_config.py` (deleted)
+  - `software/frontend/src/types/qc.ts`
+  - `software/frontend/src/api/client.ts`
+  - `software/frontend/src/pages/manual-qc.vue`
+  - `software/frontend/src/pages/settings.vue`
+  - `software/frontend/src/api/mock.ts`
+  - `software/frontend/src/style.css`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 在内网环境复验 manual QC 完整链路
+  - 根据真实 episode 的 L3 v2 分数分布标定阈值
+  - 后续按任务类型建立阈值组（Milestone 4）
+  - 继续推进后端质量结果持久化与批次报告（Milestone 3）
+
 ## 2026-06-25 (QcTask updated_at + pipeline auto-advance fix + reviewer dashboard bugfix)
 
 - Type: bugfix

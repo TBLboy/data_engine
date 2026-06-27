@@ -1,0 +1,39 @@
+from __future__ import annotations
+
+from typing import Any
+
+from .feature_extractor import FeatureExtractor
+from .metric_engine import MetricEngine
+from .quality_engine import QualityEngine
+from .telemetry_parser import TelemetryParser
+
+
+class L3V2Engine:
+    """RDDQF-oriented L3 v2 MVP engine.
+
+    The engine is intentionally side-effect free. It receives telemetry arrays and
+    returns an API-ready dictionary. Result caching can be added above this layer
+    without changing the computation contract.
+    """
+
+    def __init__(self, telemetry: dict[str, Any]):
+        self.telemetry = telemetry
+
+    def compute(self) -> dict:
+        parsed = TelemetryParser(self.telemetry).parse()
+        features = FeatureExtractor(parsed).extract()
+        metrics, timeline, diagnostics = MetricEngine(features).compute()
+        report = QualityEngine(metrics, diagnostics).build_report()
+        report.update({
+            'telemetryProfile': {
+                'frameCount': parsed.n,
+                'durationSec': round(parsed.duration, 3),
+                'fps': round(parsed.fps, 3),
+                'armDims': len(parsed.arm_dims),
+                'handDims': len(parsed.hand_dims),
+                'armDimIndices': parsed.arm_dims,
+                'handDimIndices': parsed.hand_dims,
+            },
+            'timelineSegments': timeline,
+        })
+        return report
