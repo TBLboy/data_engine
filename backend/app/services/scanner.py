@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from minio.error import S3Error
 from sqlalchemy.orm import Session
@@ -24,6 +25,39 @@ STATE_RANK = {
 
 def _utcnow() -> datetime:
     return datetime.utcnow()
+
+
+def _retry_minio(fn, max_retries: int = 2, base_delay: float = 3.0):
+    """MinIO 调用加重试，网络抖动时自动恢复."""
+    last_exc = None
+    for attempt in range(max_retries + 1):
+        try:
+            return fn()
+        except S3Error as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                delay = base_delay * (attempt + 1)
+                time.sleep(delay)
+    raise last_exc  # type: ignore[misc]
+
+
+STALE_TIMEOUT_MINUTES = 30
+
+
+def _cleanup_stale_jobs(db: Session, current_bucket: str) -> None:
+    """清理超过 STALE_TIMEOUT_MINUTES 仍未完成的僵尸任务."""
+    cutoff = _utcnow() - timedelta(minutes=STALE_TIMEOUT_MINUTES)
+    stale = db.query(ScanJob).filter(
+        ScanJob.bucket == current_bucket,
+        ScanJob.status.in_(['scanning', 'classifying', 'queued']),
+        ScanJob.started_at < cutoff,
+    ).all()
+    for job in stale:
+        job.status = 'failed'
+        job.error_detail = f'stale: timeout after {STALE_TIMEOUT_MINUTES}min (was {job.status})'
+        job.finished_at = _utcnow()
+    if stale:
+        db.commit()
 
 
 def _prefix_depth(prefix: str) -> int:
@@ -255,6 +289,8 @@ def _execute_minio_scan(
 ) -> ScanJob:
     normalized_bucket = scan_job.bucket.strip()
     try:
+        _cleanup_stale_jobs(db, normalized_bucket)
+
         prefix_info: dict[str, dict[str, object]] = defaultdict(lambda: {
             'children': set(),
             'raw_episodes': set(),
@@ -262,7 +298,7 @@ def _execute_minio_scan(
         })
         object_rows_by_prefix: dict[str, list[dict[str, object]]] = defaultdict(list)
 
-        for item in service.list_objects(normalized_bucket, recursive=True):
+        for item in _retry_minio(lambda: list(service.list_objects(normalized_bucket, recursive=True))):
             object_key = getattr(item, 'object_name', '').strip()
             if not object_key or object_key.endswith('/'):
                 continue
@@ -405,7 +441,10 @@ def _execute_minio_scan(
                     batch.task_type_id = task_type.id
                 batch.name = canonical_batch_name
 
+            ep_counter = 0
+            total_eps = len(raw_episode_names | processed_episode_names)
             for episode_name in sorted(raw_episode_names | processed_episode_names):
+                ep_counter += 1
                 episode_inventory_id = _episode_inventory_id(normalized_bucket, list_prefix, episode_name)
                 current_episode_inventory_ids.add(episode_inventory_id)
                 raw_prefix = f'{list_prefix}raw/{episode_name}/' if episode_name in raw_episode_names else ''
@@ -525,6 +564,10 @@ def _execute_minio_scan(
                     episode.task_name = task_type.name
                     episode.updated_at = now
                 inventory.ingested_episode_id = episode.id
+
+                if ep_counter % 50 == 0 and total_eps > 0:
+                    scan_job.error_detail = f'classifying {ep_counter}/{total_eps}'
+                    db.commit()
 
             if list_prefix != _canonical_list_prefix(list_prefix):
                 legacy_batch_id = _batch_id(_list_id(normalized_bucket, list_prefix))
