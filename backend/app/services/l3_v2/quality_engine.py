@@ -1,29 +1,22 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections import defaultdict
 
 from .metric_engine import MetricResult
-from .utils import level_from_score, weighted_average
+from .utils import level_from_score, weighted_average, clamp
 
 
 DIMENSION_META = {
     'motion_quality': {
-        'label': 'Motion Quality',
-        'labelZh': '动作示范质量',
-        'weight': 0.45,
+        'label': 'Motion Quality', 'labelZh': '动作示范质量', 'weight': 0.40,
         'summary': '评估示范轨迹是否平滑、连续、稳定，关注模型会不会学到抖动、跳变和反复修正。',
     },
     'learnability': {
-        'label': 'Learnability',
-        'labelZh': '可学习性',
-        'weight': 0.35,
+        'label': 'Learnability', 'labelZh': '可学习性', 'weight': 0.40,
         'summary': '评估该 episode 是否包含足够有效的 observation-action 学习信号。',
     },
     'data_integrity': {
-        'label': 'Data Integrity',
-        'labelZh': '数据完整性',
-        'weight': 0.20,
+        'label': 'Data Integrity', 'labelZh': '数据完整性', 'weight': 0.20,
         'summary': '评估时间轴和多模态同步是否可靠，决定样本是否适合进入训练集。',
     },
 }
@@ -41,7 +34,7 @@ EVIDENCE_META = {
 
 
 class QualityEngine:
-    """Quality fusion layer: metric -> evidence -> quality dimension -> total score."""
+    """Quality fusion layer with soft-min penalties and Data Integrity cap."""
 
     def __init__(self, metrics: list[MetricResult], diagnostics: list[MetricResult]):
         self.metrics = metrics
@@ -56,19 +49,49 @@ class QualityEngine:
         for dim_id, meta in DIMENSION_META.items():
             dim_metrics = dimension_groups.get(dim_id, [])
             evidence_groups = self._build_evidence_groups(dim_id, dim_metrics)
-            score = weighted_average((item['score'], item.get('weight', 1.0)) for item in evidence_groups)
+            dim_score = self._dimension_score(dim_id, dim_metrics, evidence_groups)
             dimensions.append({
                 'dimensionId': dim_id,
                 'label': meta['label'],
                 'labelZh': meta['labelZh'],
-                'score': round(score, 2),
-                'level': level_from_score(score),
+                'score': round(dim_score, 2),
+                'level': level_from_score(dim_score),
                 'weight': meta['weight'],
                 'summary': meta['summary'],
                 'evidenceGroups': evidence_groups,
             })
 
-        total = weighted_average((d['score'], d['weight']) for d in dimensions)
+        dim_map = {d['dimensionId']: d['score'] for d in dimensions}
+        s_motion = dim_map.get('motion_quality', 5.0)
+        s_learn = dim_map.get('learnability', 5.0)
+        s_data = dim_map.get('data_integrity', 5.0)
+
+        weighted = 0.40 * s_motion + 0.40 * s_learn + 0.20 * s_data
+
+        # Data Integrity cap: degraded time sync caps overall quality
+        if s_data < 3.0:
+            total = min(weighted, 4.5)
+        elif s_data < 5.0:
+            total = min(weighted, 6.0)
+        else:
+            total = weighted
+
+        reliability_warnings = []
+        di_vals = {m.metricId: m for m in self.metrics if m.qualityDimension == 'data_integrity'}
+        if di_vals.get('DI-02') and di_vals['DI-02'].level == 'bad':
+            reliability_warnings.append('严重同步异常，运动与学习价值指标可信度下降')
+        if di_vals.get('DI-01') and di_vals['DI-01'].level == 'bad':
+            reliability_warnings.append('时间戳严重异常，时序指标可信度下降')
+        if s_data < 5.0:
+            reliability_warnings.append('Data Integrity 评分低于 5.0，Training Quality Score 已触发上限封顶')
+        if s_data < 3.0:
+            reliability_warnings.append('Data Integrity 评分低于 3.0，Training Quality Score 已触发严格上限封顶')
+
+        diag_warnings = []
+        diag_map = {m.metricId: m for m in self.diagnostics}
+        if diag_map.get('DX-01') and diag_map['DX-01'].score < 5.0:
+            diag_warnings.append('执行跟踪偏差较大，建议检查控制器或遥操作链路')
+
         return {
             'version': 'RDDQF-L3-v2-MVP',
             'trainingQualityScore': round(total, 2),
@@ -77,8 +100,20 @@ class QualityEngine:
             'qualityDimensions': dimensions,
             'metricResults': [m.to_dict() for m in self.metrics],
             'diagnosticMetrics': [m.to_dict() for m in self.diagnostics],
-            'summary': self._summary(total, dimensions),
+            'reliabilityWarnings': reliability_warnings,
+            'diagnosticWarnings': diag_warnings,
+            'summary': self._summary(total, dimensions, reliability_warnings),
         }
+
+    def _dimension_score(self, dim_id: str, metrics: list[MetricResult], evidence_groups: list[dict]) -> float:
+        if not metrics:
+            return 5.0
+        scores = [m.score for m in metrics]
+        mean_score = sum(scores) / len(scores)
+        if dim_id == 'data_integrity':
+            # Stronger soft-min for data integrity
+            return 0.6 * mean_score + 0.4 * min(scores)
+        return 0.8 * mean_score + 0.2 * min(scores)
 
     def _build_evidence_groups(self, dim_id: str, metrics: list[MetricResult]) -> list[dict]:
         by_evidence: dict[str, list[MetricResult]] = defaultdict(list)
@@ -102,12 +137,17 @@ class QualityEngine:
         return sorted(out, key=lambda x: x['score'])
 
     @staticmethod
-    def _summary(total: float, dimensions: list[dict]) -> str:
+    def _summary(total: float, dimensions: list[dict], warnings: list[str]) -> str:
         weakest = min(dimensions, key=lambda x: x['score'], default=None)
+        base = ''
         if weakest is None:
-            return '未获得足够数据计算 L3 v2 训练质量。'
-        if total >= 7.5:
-            return f'该 episode 的训练数据质量较好，当前主要短板为：{weakest["labelZh"]}。'
-        if total >= 5.0:
-            return f'该 episode 可作为候选训练数据，但建议重点核查：{weakest["labelZh"]}。'
-        return f'该 episode 训练数据质量风险较高，优先核查：{weakest["labelZh"]}。'
+            base = '未获得足够数据计算 L3 v2 训练质量。'
+        elif total >= 7.5:
+            base = f'该 episode 的训练数据质量较好，当前主要短板为：{weakest["labelZh"]}。'
+        elif total >= 5.0:
+            base = f'该 episode 可作为候选训练数据，但建议重点核查：{weakest["labelZh"]}。'
+        else:
+            base = f'该 episode 训练数据质量风险较高，优先核查：{weakest["labelZh"]}。'
+        if warnings:
+            base += ' ' + '；'.join(warnings[:2])
+        return base

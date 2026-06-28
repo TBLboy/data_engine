@@ -147,9 +147,13 @@ const downloadExport = async (scope: 'report' | 'episodes' | 'audits') => {
 }
 
 const reasonTagType = (category: string) => {
-  if (category === 'L4') return 'danger'
-  if (category === 'L3') return 'warning'
-  if (category === 'L2') return 'primary'
+  if (category === 'L4 任务') return 'danger'
+  if (category === 'L2 视觉') return 'primary'
+  if (category === '动作示范质量') return 'warning'
+  if (category === '可学习性') return 'warning'
+  if (category === '数据完整性') return 'danger'
+  if (category === '执行诊断') return 'info'
+  if (category === '系统') return 'info'
   return 'info'
 }
 </script>

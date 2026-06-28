@@ -1,3 +1,300 @@
+## 2026-06-28 (原因码体系重构：按 RDDQF 维度重组，淘汰旧 L2/L3/L4 分类)
+
+- Type: refactoring
+- Status: frontend build + backend compile passed, deployed to production
+- Importance: medium
+- Reusable: yes
+- Objective: 将原因码从旧 L2/L3/L4 三级分类重构为 RDDQF 六维分类（L2 视觉/动作示范质量/可学习性/数据完整性/执行诊断/L4 任务/系统），与 L3 v2 质量维度对齐
+- Work completed:
+  - QcReasonPicker.vue 原因码重组：
+    - 删除旧 "L3 轨迹类" 分组，拆为三个新分组（动作示范质量、可学习性、数据完整性）
+    - 删除 `motion_abnormal`、`joint_limit_risk`、`stall`
+    - 新增 `trajectory_unsmooth`(MQ-01)、`action_discontinuity`(MQ-02)、`oscillation`(MQ-03)
+    - 新增 `low_effective_action`(LQ-01)、`low_information_density`(LQ-02)、`prolonged_idle`(LQ-03)
+    - 新增 `timestamp_irregular`(DI-01)
+    - `tracking_error` 从 L3 移入"执行诊断"分组
+  - payloads.py reason_stats_payload() 完整重构：覆盖所有 26 个原因码到 7 个分类的映射，保留旧码兼容
+  - types/qc.ts ReasonStat.category 改为 string（不再限制为固定枚举）
+  - qc-history.vue reasonTagType 更新为新分类的 tag 颜色映射
+- Business logic impact:
+  - 质检员选择 Fail 原因时，分类直接对应 L3 v2 的质量维度和指标 ID（如 MQ-01）
+  - 历史审计页的 Top 原因统计按新维度分组
+  - 旧数据中的 `motion_abnormal`/`stall`/`joint_limit_risk` 自动映射到对应新分类保证兼容
+- Verification:
+  - `python3 -m compileall -q app/services/payloads.py` → 通过
+  - `npm run build --prefix frontend` → built in 329ms
+  - Docker deploy → backend/frontend Healthy
+- Files changed:
+  - `software/frontend/src/components/QcReasonPicker.vue`
+  - `software/backend/app/services/payloads.py`
+  - `software/frontend/src/types/qc.ts`
+  - `software/frontend/src/pages/qc-history.vue`
+  - `software/.project-log/progress.md`
+
+## 2026-06-28 (DX-01 + Score Fusion 重构：lag alignment + soft-min + DI cap，9 指标全部完成)
+
+- Type: refactoring
+- Status: all 9 metrics refactored, all tests passed, pending production deploy
+- Importance: critical
+- Reusable: yes
+- Objective: 完成 DX-01 lag alignment 诊断重构和 Training Quality Score 总分融合逻辑（soft-min + DI cap），L3 v2 9 指标重构全部完成
+- Work completed:
+  - DX-01 重构：lag alignment (搜索 k∈[0,min(5,N//10)] 最小化 P50)，severity = 0.5×E_p95/τ_bad + 0.3×E_mean/τ_warn + 0.2×R_persist，score = 10×(1-severity)
+  - DX-01 Timeline 分两层：Execution Tracking Error (τ=0.20) + Severe Tracking Error (τ=0.35)，min_dur=0.5s
+  - QualityEngine 完全重写：
+    - Motion Quality: 0.35/0.35/0.30 权重 + soft-min (0.8×mean + 0.2×min)
+    - Learnability: 0.25/0.35/0.40 权重 + soft-min (0.8×mean + 0.2×min)
+    - Data Integrity: 0.4/0.6 权重 + 强 soft-min (0.6×mean + 0.4×min)
+    - Total = 0.4×Motion + 0.4×Learn + 0.2×Data
+    - DI cap: S_data < 3 → cap 4.5, S_data < 5 → cap 6.0
+    - 新增 reliabilityWarnings 和 diagnosticWarnings
+  - 前端 manual-qc.vue 评分环已使用 trainingQualityScore（来自质量融合总分）
+  - 前端已显示 DX-01 在 Execution Diagnostics 折叠面板（标注"不进入训练质量总分"）
+- Business logic impact:
+  - L3 v2 正式从 Motion QC 升级为 Training Data Quality Assessment
+  - DX-01 不再影响训练质量总分，仅作为诊断参考
+  - Data Integrity 异常会触发 Training Quality Score 封顶
+  - soft-min 确保任一分项极差时不会靠高分项"拉平均"
+- Verification:
+  - 合成数据完整测试：Training Quality=7.8(good), DX-01=9.8(good)
+  - `python3 -m compileall -q app/services/l3_v2/` → 通过
+- Files changed:
+  - `software/backend/app/services/l3_v2/metric_engine.py`
+  - `software/backend/app/services/l3_v2/quality_engine.py`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - Build & deploy to production containers
+  - 在内网环境用真实 episode 验证 9 指标完整输出
+
+## 2026-06-28 (DI-01 + DI-02 重构：鲁棒时间戳规则性 + 自适应同步阈值)
+
+- Type: refactoring
+- Status: backend compile passed, synthetic data tests passed (perfect 10.0 vs degraded 0.0)
+- Importance: high
+- Reusable: yes
+- Objective: 将 DI-01 从单一 CV 改为 J_95+R_gap+R_invalid 鲁棒度量，将 DI-02 从固定 700ms 阈值改为 dt_median 自适应阈值
+- Work completed:
+  - feature_extractor: `sync_bad_mask`/`timestamp_jitter_cv` 替换为 `sync_valid`/`sync_diff_sec`/`dt_jitter_cv`
+  - DI-01 重构：J_95(Robust Jitter) + R_gap(长间隔比例) + R_invalid(非单调比例)，阈值 good=0.05/warn=0.15/bad=0.35
+  - DI-01 Timeline: Invalid Timestamp + Timestamp Gap 两类异常段
+  - DI-02 重构：自适应 τ_warn=max(0.05,2*dt_med)、τ_bad=max(0.20,6*dt_med)，替代 700ms
+  - DI-02 raw = 0.30*R_flag + 0.25*R_hard + 0.20*R_soft + 0.15*M_sync + 0.10*R_seg
+  - DI-02 Timeline: Sensor Sync Warning + Severe Desync 两类（min_dur=0.5s）
+  - sync_diff 统一为 seconds
+- Business logic impact:
+  - DI-01 不再只看 CV，还能检测非单调/重复时间戳和丢帧
+  - DI-02 自适应阈值适配不同采样率的 episode（15Hz/30Hz/50Hz 都会有不同的合理阈>
+- Verification:
+  - perfect: DI-01=10.0, DI-02=10.0
+  - degraded (jitter+invalid+sync loss): DI-01=0.0, DI-02=0.0
+  - `python3 -m compileall -q app/services/l3_v2/` → 通过
+- Files changed:
+  - `software/backend/app/services/l3_v2/feature_extractor.py`
+  - `software/backend/app/services/l3_v2/metric_engine.py`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 继续审查 DX-01，之后所有 9 个指标重构完成
+
+## 2026-06-28 (LQ-03 重构：segment-level 长持续时间低价值片段检测)
+
+- Type: refactoring
+- Status: backend compile passed, ordinal ranking verified (active < pause < idle)
+- Importance: high
+- Reusable: yes
+- Objective: 将 LQ-03 从帧级低变化比例改为 segment-level 持续性低学习价值片段占比，复用 LQ-01 有效动作判定，惩罚长时间无监督区间而非短暂停顿
+- Work completed:
+  - LQ-03 重构：复用 LQ-01 的 Effective Action Mask (E_t)，不再独立定义低变化阈值
+  - State low-change：Q_t = max(arm_qpos_delta, hand_qpos_delta)，τ_Q = max(5e-4, P20(Q))
+  - Low-value candidate：L_t = (~E_t) AND (Q_t <= τ_Q)
+  - Segment-level：连续 L_t=1 帧合并为 segment，仅统计 duration ≥ 1.0s 的片段
+  - Ratio = T_low(≥1s) / T_episode，保持原评分阈值 good=0.18/warn=0.38/bad=0.65
+  - Timeline：min_dur=1.0s 的低价值片段
+  - 清理死代码：移除 FeatureExtractor 中的 low_change_mask（不再使用）
+- Business logic impact:
+  - 与 LQ-01/LQ-02 形成 Coverage + Intensity + Low-value Duration 三者互补
+  - 短暂的停顿（<1s）不再被惩罚，只有持续缺乏学习信号的区间才会影响 LQ-03
+- Verification:
+  - active (continuous): 0.0%, score=10.0
+  - pause (3s dead zone): 19.4%, score=9.7
+  - idle (mostly static): 24.1%, score=8.5
+  - Ordinal: 0.00 < 0.194 < 0.241 → PASS
+  - `python3 -m compileall -q app/services/l3_v2/` → 通过
+- Files changed:
+  - `software/backend/app/services/l3_v2/feature_extractor.py`
+  - `software/backend/app/services/l3_v2/metric_engine.py`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 继续审查 DI-01/DI-02/DX-01
+
+## 2026-06-28 (LQ-02 重构：Coverage × Intensity 模型 + arm/hand 分离)
+
+- Type: refactoring
+- Status: backend compile passed, ordinal ranking verified (rich > sparse > static)
+- Importance: high
+- Reusable: yes
+- Objective: 将 LQ-02 从 `0.6*P75(Δa) + 0.4*P75(Δq)` 的全维度运动强度改为 Coverage × Intensity 模型，与 LQ-01 形成互补
+- Work completed:
+  - feature_extractor: 新增 `state_delta_arm_norm` / `state_delta_hand_norm`（arm/hand qpos 一阶差分 RMS）
+  - metric_engine LQ-02 重构:
+    - Effective Coverage R_eff：复用 LQ-01 的 OR 融合逻辑（arm P20+0.004 / hand P20+3/255）
+    - Action Intensity I_a：P75 of max(arm_delta, hand_delta)，仅统计有效帧（E_t=1）
+    - State Intensity I_q：P75 of max(state_arm, state_hand)
+    - 新公式：0.7 × (R_eff × I_a) + 0.3 × I_q
+    - 新阈值：good=0.030, warn=0.012, bad=0.003（临时值）
+  - LQ-02 不生成 Timeline（LQ-01 和 LQ-03 已覆盖）
+- Business logic impact:
+  - Coverage × Intensity：少量剧烈动作不会让 Information Density 虚高（R_eff 低会拉低总分）
+  - max 融合：arm 或 hand 任一活跃即可贡献 Action Intensity，避免静态控制器拉低估计
+  - 与 LQ-01 形成 Coverage + Intensity 互补关系
+- Verification:
+  - rich continuous: raw=1.909, score=10.0
+  - sparse burst: raw=0.196, score=10.0
+  - nearly static: raw=0.002, score=0.0
+  - Ordinal: 1.909 > 0.196 > 0.002 → PASS
+  - `python3 -m compileall -q app/services/l3_v2/` → 通过
+- Files changed:
+  - `software/backend/app/services/l3_v2/feature_extractor.py`
+  - `software/backend/app/services/l3_v2/metric_engine.py`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 所有阈值需用真实 episode 分布重新标定
+  - 继续审查 LQ-03/DI-01/DI-02
+
+## 2026-06-28 (LQ-01 重构：arm/hand 分离 + 绝对阈值门控 + OR 融合)
+
+- Type: refactoring
+- Status: backend compile passed, synthetic data tests passed (3 scenarios)
+- Importance: high
+- Reusable: yes
+- Objective: 将 LQ-01 从全维度统一 P35 动态阈值改为 arm/hand 分离计算 + 绝对最小值门控 + OR 融合，避免微小噪声被判为有效动作
+- Work completed:
+  - feature_extractor: 新增 `action_delta_arm_norm` / `action_delta_hand_norm`（arm/hand 分别计算 RMS），L3V2Features 新增对应字段
+  - metric_engine LQ-01 重构:
+    - Arm: τ_arm = max(P20(arm_delta), 0.004 rad)
+    - Hand: τ_hand = max(P20(hand_delta), 3/255)
+    - Effective = arm_delta > τ_arm OR hand_delta > τ_hand（OR 融合）
+    - 保留原评分区间 good=0.50 / warn=0.25 / bad=0.08
+  - Timeline: 新增 Low Effective Action 段（min_dur=1.0s），标记长时间无监督信号的区间
+- Business logic impact:
+  - 机械臂静止但灵巧手抓取 → OR 融合正确判定为有效帧
+  - 整体微小动作（<0.004 rad）→ 绝对阈值过滤，不被 P20 撑起
+  - P20 比 P35 更严格地定义"有效"，只让 top 80% 的动作幅度通过
+- Verification:
+  - Test A (rich movement, arm+hand): 93.7%, score=10.0 → PASS
+  - Test B (nearly static): 0.0%, score=0.0 → PASS (absolute gate works)
+  - Test C (arm static, hand active): 70.0%, score=10.0 → PASS (OR fusion works)
+  - `python3 -m compileall -q app/services/l3_v2/` → 通过
+- Files changed:
+  - `software/backend/app/services/l3_v2/feature_extractor.py`
+  - `software/backend/app/services/l3_v2/metric_engine.py`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 继续审查 LQ-02/LQ-03/DI-01/DI-02
+
+## 2026-06-28 (MQ-03 重构：幅度门控振荡检测 + 持续占比替代 P95)
+
+- Type: refactoring
+- Status: backend compile passed, synthetic data tests passed
+- Importance: high
+- Reusable: yes
+- Objective: 将 MQ-03 从简单的方向反转 P95 + 手部颤振 P95 重构为幅度门控的持续振荡检测，区分正常精细调整与控制震荡
+- Work completed:
+  - 重写 `_oscillation_strength_arm()`：对 arm actions 做幅度门控方向反转检测
+    - ε_i = max(P10(|\Δa_i|), 1e-4)：每个维度的最小有效动作阈值
+    - 仅当连续两帧的 |Δa| 都超过 ε_i 且方向翻转时，才算有效反转
+    - 每个反转按振幅加权：(|Δa_t| + |Δa_{t-1}|) / 2
+  - 重写 `_chatter_strength_hand()`：同样用幅度门控 + 方向反转，替代旧的单帧阈值判断
+    - 不再用固定阈值 2/255，改用 per-dimension P10 动态门控
+  - MQ-03 聚合从 P95 改为持续异常占比：
+    - R_osc = mean(oscillation > τ_osc(0.03))
+    - R_chat = mean(chatter > τ_chat(0.08))
+    - raw = 0.6 × R_osc + 0.4 × R_chat
+  - 评分改为 score_inverse(raw, good=0.05, warn=0.15, bad=0.35)
+  - Timeline 分为两类：Motion Oscillation 和 Hand Chatter（独立的 mask_to_segments）
+  - `L3V2Features` 字段重命名：`reversal_rate_per_frame` → `oscillation_strength`，`hand_chatter_strength` → `chatter_strength`
+- Business logic impact:
+  - 正常正弦轨迹（平滑但持续变化）→ oscillation 0.0% → 10分，不再被误判
+  - 随机游走（高频来回修正）→ oscillation 40.7% → 0分，正确捕获
+  - 微小精细调整不会被判为振荡（幅度门控过滤了低于 P10 的小动作）
+  - 持续占比比 P95 更能反映"长期处于震荡状态"的语义
+- Verification:
+  - 合成测试：平滑正弦 score=10.0(good) vs 随机游走 score=0.0(bad) → PASS
+  - Timeline：平滑轨迹无 oscillation/chatter 段；抖动轨迹出现 Hand Chatter(0.1-14.9s)
+  - `python3 -m compileall -q app/services/l3_v2/` → 通过
+- Files changed:
+  - `software/backend/app/services/l3_v2/feature_extractor.py`
+  - `software/backend/app/services/l3_v2/metric_engine.py`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 阈值 tau_osc(0.03), tau_chat(0.08) 和评分阈值需真实数据标定
+  - 继续审查 LQ-01/LQ-02/LQ-03/DI-01/DI-02
+
+## 2026-06-28 (MQ-01 + MQ-02 算法修正：差分阶数物理学错误)
+
+- Type: bugfix
+- Status: backend compile passed, synthetic data tests passed for both metrics
+- Importance: high
+- Reusable: yes
+- Objective: 修复 MQ-01 用二阶差分（加速度）误判稳定加速为不平滑，以及 MQ-02 用一阶差分的 self-referential 归一化未能区分"快速但连续"和"忽快忽慢"两个 bug
+- Work completed:
+  - MQ-01：`np.diff(n=2)` → `np.diff(n=3)` 改为真正的三阶 jerk，稳定加速时 jerk≈0 不再误报
+  - MQ-01：新增 `joint_acc_norm`（保留二阶差分备用），阈值改为临时值 `good=0.006/warn=0.018/bad=0.045`
+  - MQ-02：从 self-referential `action_discontinuity_strength`（一阶差分的 episode 内归一化）改为 `action_delta2_norm`（arm actions 的二阶差分 P95）
+  - MQ-02：新阈值 `good=0.010/warn=0.030/bad=0.080`，timeline 阈值 0.06
+  - MQ-02：限制为 arm 维度（`actions_arm`），避免 hand 0-255 量级污染 RMS
+  - 清理死代码：移除 `action_discontinuity_strength` feature，`L3V2Features` 新增 `action_delta2_norm`
+- Business logic impact:
+  - MQ-01：稳定加速（恒定加速度）→ jerk=0 → 10分，不再被判为不平滑
+  - MQ-02：匀速快速动作（Δa 恒定）→ Δ²a=0 → 10分，而忽快忽慢的抖动 → Δ²a 大 → 低分
+  - 两个指标现在都正确衡量"变化的变化"而非"变化本身"
+- Problems encountered:
+  - MQ-02 初版用全部 actions 维度导致 hand 0-255 的噪声主导 P95（值>10），改为只取 arm dims 后正常
+- Verification:
+  - MQ-01 合成测试：稳定加速 score=10.0(good) vs 抖动 score=0.0(bad) → PASS
+  - MQ-02 合成测试：匀速快速 score=10.0(good) vs 忽快忽慢 score=0.0(bad) → PASS
+  - `python3 -m compileall -q app/services/l3_v2/` → 通过
+- Files changed:
+  - `software/backend/app/services/l3_v2/feature_extractor.py`
+  - `software/backend/app/services/l3_v2/metric_engine.py`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 阈值需用真实 episode 分布标定（MQ-01 和 MQ-02 的阈值均为临时值）
+  - 继续审查 MQ-03/LQ-01/LQ-02/LQ-03 的算法正确性
+
+## 2026-06-28 (MQ-01 fix: switch from 2nd-order acceleration to 3rd-order jerk)
+
+- Type: bugfix
+- Status: backend compile passed, synthetic data test passed
+- Importance: high
+- Reusable: yes
+- Objective: 修复 MQ-01 轨迹平滑度使用二阶差分（加速度）误判稳定加速为不平滑的 bug，改为三阶差分（jerk）
+- Work completed:
+  - 与用户深入讨论了 MQ-01 到 MQ-03 的数学原理和物理含义
+  - 识别到 MQ-01 的 bug：`np.diff(n=2)` 是加速度，不是 jerk。稳定加速（恒定加速度）被判为抖动
+  - feature_extractor.py：`np.diff(n=2)` → `np.diff(n=3)`，新增 `joint_acc_norm`（保留二阶差分备用），`L3V2Features` 新增 `joint_acc_norm` 字段
+  - metric_engine.py：MQ-01 改用 `joint_jerk_norm`，阈值从 `good=0.015/warn=0.04/bad=0.08` 改为临时保守值 `good=0.006/warn=0.018/bad=0.045`，timeline 阈值从 0.06 改为 0.035
+  - 更新 description：从"基于关节轨迹二阶差分的 P95"改为"机械臂关节位置三阶差分 P95，衡量加速度变化是否突兀"
+  - 分析 DROID 数据集结构（TFRecord 格式，100 episodes，31 shards，Franka Panda 单臂+夹爪，无灵巧手/无时间戳/无 effort/无 sync）
+  - 对比 DROID vs TeleDex 数据维度差异，明确 L3 v2 跨数据集适配需要适配层
+- Business logic impact: 稳定加速的示范不再被误判为不平滑。MQ-01 现在正确衡量"加速度的变化率"而非"加速度本身"，更符合训练数据平滑度的语义
+- Problems encountered:
+  - 初版合成测试数据 arm 值域超出 3.5 导致 dim detection 将其误判为 hand，修正后测试通过
+- Resolution:
+  - 合成数据验证：稳定加速（恒定加速度）→ jerk≈0, score=10.0 (good)；抖动随机游走 → jerk=0.111, score=0.0 (bad)
+- Verification:
+  - `python3 -m compileall -q backend/app/services/l3_v2/` → 通过
+  - `PYTHONPATH=. python3` 合成数据测试 → PASS: steady > jittery
+- Files changed:
+  - `software/backend/app/services/l3_v2/feature_extractor.py`
+  - `software/backend/app/services/l3_v2/metric_engine.py`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 阈值需用真实 episode 分布标定（当前为临时值）
+  - 继续审查其他指标的算法正确性
+
 ## 2026-06-27 (RDDQF L3 v2 MVP migration: new four-layer engine replaces old L3 v1)
 
 - Type: implementation

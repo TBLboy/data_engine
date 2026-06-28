@@ -2,6 +2,8 @@
 
 ## Last Updated
 
+- 2026-06-28 (L3 v2 全部 9 指标 + Score Fusion 重构完成：MQ-01/02/03 + LQ-01/02/03 + DI-01/02 + DX-01，生产部署就绪)
+- 2026-06-28 (MQ-01 + MQ-02 算法修正：二阶差分→三阶 jerk；action 一阶→二阶差分；消除稳定加速/匀速快速误报；DROID 数据集结构分析)
 - 2026-06-27 (RDDQF L3 v2 MVP 迁移：新四层架构替换旧 L3 v1 指标引擎，前端质量画像 UI，死代码清理)
 - 2026-06-27 (修复 settings 页面未部署、遥操作曲线切换、历史审计分页)
 - 2026-06-25 (L3 指标计算引擎落地：新建 l3_metrics.py 含 8 项 P0+P1 指标、arm/hand 自动检测、timeline 段生成，替换 payloads.py 手写 6 项指标为 L3MetricsEngine 统一入口)

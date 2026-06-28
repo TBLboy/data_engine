@@ -14,13 +14,23 @@ const reasonGroups = [
     { value: 'object_not_visible', label: '目标不可见' },
     { value: 'depth_invalid', label: '深度图异常' },
   ]},
-  { label: 'L3 轨迹类', options: [
-    { value: 'motion_abnormal', label: '运动异常' },
-    { value: 'chatter', label: '手指颤振' },
-    { value: 'stall', label: '运动停滞' },
-    { value: 'tracking_error', label: '跟踪误差大' },
-    { value: 'joint_limit_risk', label: '关节限位风险' },
-    { value: 'sync_bad', label: '同步异常' },
+  { label: '动作示范质量', options: [
+    { value: 'trajectory_unsmooth', label: '轨迹不平滑 (MQ-01)' },
+    { value: 'action_discontinuity', label: '动作指令突变 (MQ-02)' },
+    { value: 'oscillation', label: '控制震荡 (MQ-03)' },
+    { value: 'chatter', label: '手指颤振 (MQ-03)' },
+  ]},
+  { label: '可学习性', options: [
+    { value: 'low_effective_action', label: '有效动作不足 (LQ-01)' },
+    { value: 'low_information_density', label: '信息密度低 (LQ-02)' },
+    { value: 'prolonged_idle', label: '长时间停滞 (LQ-03)' },
+  ]},
+  { label: '数据完整性', options: [
+    { value: 'sync_bad', label: '同步异常 (DI-02)' },
+    { value: 'timestamp_irregular', label: '时间戳不规则 (DI-01)' },
+  ]},
+  { label: '执行诊断', options: [
+    { value: 'tracking_error', label: '跟踪偏差大 (DX-01)' },
   ]},
   { label: 'L4 任务类', options: [
     { value: 'task_incomplete', label: '动作流程不完整' },

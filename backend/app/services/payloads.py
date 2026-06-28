@@ -533,12 +533,41 @@ def reviewer_workload_payload(db: Session) -> list[dict]:
 
 def reason_stats_payload() -> list[dict]:
     return [
-        {'reason': 'occlusion_object', 'category': 'L2'},
-        {'reason': 'tracking_error', 'category': 'L3'},
-        {'reason': 'placement_failed', 'category': 'L4'},
-        {'reason': 'task_incomplete', 'category': 'L4'},
-        {'reason': 'sync_bad', 'category': 'L3'},
-        {'reason': 'metadata_missing', 'category': 'System'},
+        # L2 视觉类
+        {'reason': 'blur', 'category': 'L2 视觉'},
+        {'reason': 'exposure_over', 'category': 'L2 视觉'},
+        {'reason': 'occlusion_hand', 'category': 'L2 视觉'},
+        {'reason': 'occlusion_object', 'category': 'L2 视觉'},
+        {'reason': 'object_not_visible', 'category': 'L2 视觉'},
+        {'reason': 'depth_invalid', 'category': 'L2 视觉'},
+        # 动作示范质量
+        {'reason': 'trajectory_unsmooth', 'category': '动作示范质量'},
+        {'reason': 'action_discontinuity', 'category': '动作示范质量'},
+        {'reason': 'oscillation', 'category': '动作示范质量'},
+        {'reason': 'chatter', 'category': '动作示范质量'},
+        # 可学习性
+        {'reason': 'low_effective_action', 'category': '可学习性'},
+        {'reason': 'low_information_density', 'category': '可学习性'},
+        {'reason': 'prolonged_idle', 'category': '可学习性'},
+        # 数据完整性
+        {'reason': 'sync_bad', 'category': '数据完整性'},
+        {'reason': 'timestamp_irregular', 'category': '数据完整性'},
+        # 执行诊断
+        {'reason': 'tracking_error', 'category': '执行诊断'},
+        # L4 任务类
+        {'reason': 'task_incomplete', 'category': 'L4 任务'},
+        {'reason': 'wrong_final_state', 'category': 'L4 任务'},
+        {'reason': 'grasp_failed', 'category': 'L4 任务'},
+        {'reason': 'placement_failed', 'category': 'L4 任务'},
+        # 系统类
+        {'reason': 'conversion_issue', 'category': '系统'},
+        {'reason': 'metadata_missing', 'category': '系统'},
+        {'reason': 'modality_missing', 'category': '系统'},
+        {'reason': 'file_corrupted', 'category': '系统'},
+        # 旧版兼容（历史数据可能有这些值）
+        {'reason': 'motion_abnormal', 'category': '动作示范质量'},
+        {'reason': 'stall', 'category': '可学习性'},
+        {'reason': 'joint_limit_risk', 'category': '执行诊断'},
     ]
 
 

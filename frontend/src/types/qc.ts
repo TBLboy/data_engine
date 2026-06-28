@@ -215,7 +215,7 @@ export interface ReasonStat {
   reason: string
   count: number
   ratio: number
-  category: 'L2' | 'L3' | 'L4' | 'System'
+  category: string
 }
 
 export interface ReviewerWorkload {
