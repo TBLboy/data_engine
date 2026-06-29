@@ -1,3 +1,30 @@
+## 2026-06-29 (L3 v2 参数配置页面重建：86 项 RDDQF 参数可配置化)
+
+- Type: feature
+- Status: backend compile + frontend build passed, Docker production deployed + migration executed
+- Importance: high
+- Reusable: yes
+- Objective: 将 L3 v2 四层引擎中所有硬编码参数（阈值/权重/融合系数）改为可通过设置页面配置，替代旧 L3 v1 时代的占位设置页
+- Work completed:
+  - 新 DB 模型 `L3V2Config`（单行 JSON 存储 86 项参数），含 `default_l3_v2_params()` 完整默认值函数
+  - migration `20260629_0010` 创建 `l3_v2_config` 表
+  - 后端 `GET/PUT /api/admin/l3-v2-params` 端点（仅限 admin）
+  - `L3V2Engine` / `FeatureExtractor` / `MetricEngine` / `QualityEngine` 全部接受 `params` 参数链，每个硬编码值改为 `self.p.get('key', default)`
+  - `utils.py` `level_from_score` 接受可配置 good/warn 边界
+  - `payloads.py` 在构建 manual QC context 时从 DB 读取参数传入引擎
+  - 前端 `client.ts` 新增 `L3V2Params` 类型 + `fetchL3V2Params` / `updateL3V2Params` API 函数
+  - `settings.vue` 完全重建为 12 个参数分组页：
+    - 动作示范质量：MQ-01(5) / MQ-02(5) / MQ-03(8)
+    - 可学习性：LQ-01(8) / LQ-02(8) / LQ-03(8)
+    - 数据完整性：DI-01(8) / DI-02(13)
+    - 执行诊断：DX-01(9)
+    - 特征提取(2) / 质量融合(10) / 评分等级(2)
+  - synthetic 测试验证：默认参数与无参数结果一致，修改参数影响评分计算
+- Business logic impact:
+  - 管理员可通过 /settings 页面实时调整所有 L3 v2 指标阈值、权重和融合策略
+  - 修改后下一次加载 manual QC 立即生效，无需重启服务
+  - 参数为空时回退到系统默认值，保证向后兼容
+
 ## 2026-06-28 (原因码体系重构：按 RDDQF 维度重组，淘汰旧 L2/L3/L4 分类)
 
 - Type: refactoring

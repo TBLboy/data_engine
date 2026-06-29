@@ -414,7 +414,9 @@ def _build_real_manual_qc_context(db: Session, episode_id: str) -> dict | None:
     with _read_minio_npz(bucket, telemetry_key) as telemetry:
         telemetry_dict = {key: telemetry[key] for key in telemetry.files}
         from app.services.l3_v2 import L3V2Engine
-        l3_v2 = L3V2Engine(telemetry_dict).compute()
+        from app.models.l3_v2_config import L3V2Config
+        l3_params = L3V2Config.get_params(db)
+        l3_v2 = L3V2Engine(telemetry_dict, l3_params).compute()
 
     return {
         'durationSec': float(manifest.get('duration', 0.0)),

@@ -16,14 +16,15 @@ class L3V2Engine:
     without changing the computation contract.
     """
 
-    def __init__(self, telemetry: dict[str, Any]):
+    def __init__(self, telemetry: dict[str, Any], params: dict[str, Any] | None = None):
         self.telemetry = telemetry
+        self.params = params or {}
 
     def compute(self) -> dict:
         parsed = TelemetryParser(self.telemetry).parse()
-        features = FeatureExtractor(parsed).extract()
-        metrics, timeline, diagnostics = MetricEngine(features).compute()
-        report = QualityEngine(metrics, diagnostics).build_report()
+        features = FeatureExtractor(parsed, self.params).extract()
+        metrics, timeline, diagnostics = MetricEngine(features, self.params).compute()
+        report = QualityEngine(metrics, diagnostics, self.params).build_report()
         report.update({
             'telemetryProfile': {
                 'frameCount': parsed.n,

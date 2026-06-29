@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.security import create_session_token, hash_password, verify_password, verify_session_token
-from app.models import AuditEvent, Batch, Episode, EpisodeInventory, EpisodeObject, ListRecord, QcReviewRevision, QcTask, ScanJob, TaskType, User
+from app.models import AuditEvent, Batch, Episode, EpisodeInventory, EpisodeObject, L3V2Config, ListRecord, QcReviewRevision, QcTask, ScanJob, TaskType, User
 from app.schemas.qc import (
     AccountListPayloadSchema,
     AccountSchema,
@@ -1248,3 +1248,24 @@ def submit_manual_qc(
         'nextEpisodeId': next_episode_id,
     }
 
+
+# ── L3 v2 参数配置 ──
+
+@router.get('/admin/l3-v2-params')
+def get_l3_v2_params(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin')
+    return L3V2Config.get_params(db)
+
+
+@router.put('/admin/l3-v2-params')
+def update_l3_v2_params(
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin')
+    L3V2Config.save_params(db, payload, updated_by=current_user.name)
+    return {'success': True, 'message': 'L3 v2 参数已保存'}

@@ -54,10 +54,10 @@ def clamp(value: float, low: float = 0.0, high: float = 10.0) -> float:
     return max(low, min(high, float(value)))
 
 
-def level_from_score(score: float) -> str:
-    if score >= 7.5:
+def level_from_score(score: float, good: float = 7.5, warn: float = 5.0) -> str:
+    if score >= good:
         return 'good'
-    if score >= 5.0:
+    if score >= warn:
         return 'warn'
     return 'bad'
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from typing import Any
 
 from .metric_engine import MetricResult
 from .utils import level_from_score, weighted_average, clamp
@@ -36,9 +37,13 @@ EVIDENCE_META = {
 class QualityEngine:
     """Quality fusion layer with soft-min penalties and Data Integrity cap."""
 
-    def __init__(self, metrics: list[MetricResult], diagnostics: list[MetricResult]):
+    def __init__(self, metrics: list[MetricResult], diagnostics: list[MetricResult], params: dict[str, Any] | None = None):
         self.metrics = metrics
         self.diagnostics = diagnostics
+        self.p = params or {}
+
+    def _level(self, score: float) -> str:
+        return level_from_score(score, good=self.p.get('sl_level_good', 7.5), warn=self.p.get('sl_level_warn', 5.0))
 
     def build_report(self) -> dict:
         dimension_groups: dict[str, list[MetricResult]] = defaultdict(list)
@@ -55,7 +60,7 @@ class QualityEngine:
                 'label': meta['label'],
                 'labelZh': meta['labelZh'],
                 'score': round(dim_score, 2),
-                'level': level_from_score(dim_score),
+                'level': self._level(dim_score),
                 'weight': meta['weight'],
                 'summary': meta['summary'],
                 'evidenceGroups': evidence_groups,
@@ -66,13 +71,15 @@ class QualityEngine:
         s_learn = dim_map.get('learnability', 5.0)
         s_data = dim_map.get('data_integrity', 5.0)
 
-        weighted = 0.40 * s_motion + 0.40 * s_learn + 0.20 * s_data
+        w_motion = self.p.get('qf_motion_weight', 0.40)
+        w_learn = self.p.get('qf_learn_weight', 0.40)
+        w_data = self.p.get('qf_data_weight', 0.20)
+        weighted = w_motion * s_motion + w_learn * s_learn + w_data * s_data
 
-        # Data Integrity cap: degraded time sync caps overall quality
-        if s_data < 3.0:
-            total = min(weighted, 4.5)
-        elif s_data < 5.0:
-            total = min(weighted, 6.0)
+        if s_data < self.p.get('qf_data_cap_strict_threshold', 3.0):
+            total = min(weighted, self.p.get('qf_data_cap_strict', 4.5))
+        elif s_data < self.p.get('qf_data_cap_moderate_threshold', 5.0):
+            total = min(weighted, self.p.get('qf_data_cap_moderate', 6.0))
         else:
             total = weighted
 
@@ -95,7 +102,7 @@ class QualityEngine:
         return {
             'version': 'RDDQF-L3-v2-MVP',
             'trainingQualityScore': round(total, 2),
-            'trainingQualityLevel': level_from_score(total),
+            'trainingQualityLevel': self._level(total),
             'scoreLabel': 'Training Quality',
             'qualityDimensions': dimensions,
             'metricResults': [m.to_dict() for m in self.metrics],
@@ -111,9 +118,12 @@ class QualityEngine:
         scores = [m.score for m in metrics]
         mean_score = sum(scores) / len(scores)
         if dim_id == 'data_integrity':
-            # Stronger soft-min for data integrity
-            return 0.6 * mean_score + 0.4 * min(scores)
-        return 0.8 * mean_score + 0.2 * min(scores)
+            return self.p.get('qf_data_softmin_ratio', 0.4) * min(scores) + (1.0 - self.p.get('qf_data_softmin_ratio', 0.4)) * mean_score
+        if dim_id == 'motion_quality':
+            r = self.p.get('qf_motion_softmin_ratio', 0.2)
+        else:
+            r = self.p.get('qf_learn_softmin_ratio', 0.2)
+        return (1.0 - r) * mean_score + r * min(scores)
 
     def _build_evidence_groups(self, dim_id: str, metrics: list[MetricResult]) -> list[dict]:
         by_evidence: dict[str, list[MetricResult]] = defaultdict(list)
@@ -128,7 +138,7 @@ class QualityEngine:
                 'label': label,
                 'qualityDimension': dim_id,
                 'score': round(score, 2),
-                'level': level_from_score(score),
+                'level': self._level(score),
                 'confidence': round(min((m.confidence for m in items), default=1.0), 3),
                 'summary': summary,
                 'metrics': [m.to_dict() for m in items],

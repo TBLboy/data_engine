@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -34,8 +35,9 @@ class L3V2Features:
 class FeatureExtractor:
     """Feature layer: derive reusable numeric features from parsed telemetry."""
 
-    def __init__(self, telemetry: ParsedTelemetry):
+    def __init__(self, telemetry: ParsedTelemetry, params: dict[str, Any] | None = None):
         self.t = telemetry
+        self.p = params or {}
 
     def extract(self) -> L3V2Features:
         t_rel = self.t.t_rel
@@ -115,7 +117,8 @@ class FeatureExtractor:
             return out
         delta = np.diff(aa, axis=0)
         abs_delta = np.abs(delta)
-        eps = np.maximum(np.nanpercentile(abs_delta, 10, axis=0), 1e-4)
+        pct = self.p.get('fe_osc_pct', 10)
+        eps = np.maximum(np.nanpercentile(abs_delta, pct, axis=0), 1e-4)
         valid = (abs_delta[1:] > eps) & (abs_delta[:-1] > eps)
         signs = np.sign(delta)
         reversals = (signs[1:] * signs[:-1]) < 0
@@ -132,7 +135,8 @@ class FeatureExtractor:
             return out
         delta = np.diff(ah, axis=0)
         abs_delta = np.abs(delta)
-        eps = np.maximum(np.nanpercentile(abs_delta, 10, axis=0), 1e-4)
+        pct = self.p.get('fe_chat_pct', 10)
+        eps = np.maximum(np.nanpercentile(abs_delta, pct, axis=0), 1e-4)
         valid = (abs_delta[1:] > eps) & (abs_delta[:-1] > eps)
         signs = np.sign(delta)
         reversals = (signs[1:] * signs[:-1]) < 0
@@ -148,8 +152,10 @@ class FeatureExtractor:
             arm_err = np.nanmean(np.abs(self.t.actions_arm - self.t.qpos_arm), axis=1)
         if self.t.actions_hand.shape[1] and self.t.qpos_hand.shape[1]:
             hand_err = np.nanmean(np.abs(self.t.actions_hand - self.t.qpos_hand), axis=1)
+        w_arm = self.p.get('dx01_arm_weight', 0.7)
+        w_hand = self.p.get('dx01_hand_weight', 0.3)
         if self.t.actions_arm.shape[1] and self.t.actions_hand.shape[1]:
-            out = 0.7 * arm_err + 0.3 * hand_err
+            out = w_arm * arm_err + w_hand * hand_err
         elif self.t.actions_arm.shape[1]:
             out = arm_err
         elif self.t.actions_hand.shape[1]:

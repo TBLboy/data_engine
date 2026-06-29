@@ -442,3 +442,17 @@ export interface TelemetryCurve {
 export async function fetchTelemetryCurve(episodeId: string) {
   return request<TelemetryCurve>(`/episodes/${episodeId}/telemetry-curve`)
 }
+
+// L3 v2 parameters
+export type L3V2Params = Record<string, number>
+
+export async function fetchL3V2Params() {
+  return request<L3V2Params>('/admin/l3-v2-params')
+}
+
+export async function updateL3V2Params(params: L3V2Params) {
+  return request<{ success: boolean; message: string }>('/admin/l3-v2-params', {
+    method: 'PUT',
+    body: JSON.stringify(params)
+  })
+}
