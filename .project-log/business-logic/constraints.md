@@ -62,3 +62,18 @@
 
 - 调研报告需使用Markdown格式
 - 交付文档需适合领导阅读（简洁、有结构、有明确建议）
+
+## Batch Adjudication Constraints
+
+- 失败率公式：\(R_{fail} = N_{fail}^{manual} / N_{sampled}\)（分母固定为抽检数，不是批次总数）
+- 驳回判定条件：\(R_{fail} > \theta\)（等于阈值不驳回）
+- 默认阈值 \(\theta = 0.10\)，可通过设置页"通用"tab 调整
+- 判定前置条件：`sampled_episode_count > 0 AND reviewed_episode_count >= sampled_episode_count`（抽检未完成不触发判定）
+- 批次驳回时所有 episode 最终状态为 UNQUALIFIED，批次通过时仅人工失败的 episode 为 UNQUALIFIED
+- 判定必须幂等：同一批次重复执行不产生不一致的 episode 最终状态
+- 每次判定每次都应基于当前数据库事实重新计算统计值，不依赖旧缓存
+- QC 结果提交后自动触发所属批次判定检查
+- 已判定完成的批次不应再新增 episode（第一版策略；若必须允许则新增后重置批次为 PENDING）
+- 管理员可手动触发重新判定（`POST /api/batches/{batch_id}/recompute-decision`）
+- 所有判定应记录到 `batch_decision_log` 审计表
+- 设置页参数变更（如调整驳回阈值）不自动触发重判，需管理员手动重算

@@ -3,7 +3,7 @@
 ## Status
 
 - Research phase: Complete（公开数据集调研 + TeleDex 格式分析 + MinIO 数据湖实查均已完成）
-- Current phase: Node F 业务规则已闭环，进入 Node D 实现准备阶段
+- Current phase: 训练数据消费与批次驳回模块进入业务逻辑设计阶段（LaTeX 设计文档已产出，关键业务规则：失败率分母=抽检数 已确认）
 
 ## Main Path
 
@@ -31,7 +31,9 @@ A → B1 + B2 + B3 → C → F → D → E
 | `doc/reports/03_data_curation_frameworks.md` | B3 | 未开始 |
 | `doc/reports/04_teledex_qc_summary.md` | E | 基线章节完成（v0.1）；§6–§9 待补充 |
 | `control-plane-schema-v1.md` | F | 已产出（schema v0.2 + 扫描/分类/对象访问规则） |
+| `dataset_consumption_batch_rejection_agent_guide.tex` | D2 | 已产出（批次驳回 + 数据集管理 + 导出，v1.0） |
 | MinIO → PostgreSQL ingestion / manual QC 改造方案 | D | 待实现 |
+| 训练数据消费与批次驳回模块 | D2 | 待实现（代码未开始，业务规则已确认） |
 
 ## Transition Phase — F Closed, D Ready
 
@@ -68,6 +70,71 @@ A → B1 + B2 + B3 → C → F → D → E
 - 批次与任务类型关系是可人工改挂的业务关系，而不是扫描器不可变的自动归类结果
 - 删除任务类型默认执行“回收到 `待分类`”语义，不直接破坏已有 batch/episode/QC 历史数据
 - MinIO 凭据通过环境变量注入，不写入仓库代码
+
+## 训练数据消费与批次驳回 — 业务规则
+
+### 目标
+
+将平台从"只记录质检结果的 QC 系统"升级为"能够按任务统计训练可用数据、执行批次驳回策略、生成可溯源最终状态并导出合格 episode 清单的数据资产供给系统"。
+
+### 失败率计算公式（关键修正）
+
+失败率 = 人工失败数 / 抽检数（NOT 批次总数）
+
+\[
+R_{fail} = \frac{N_{fail}^{manual}}{N_{sampled}}
+\]
+
+修正理由：以批次总数做分母会严重稀释失败率信号。例如抽检 25 条发现 12 条不合格，按批次总数 100 算只有 12%，但实际上抽检的 25 条中近一半不合格，说明这批数据质量很差。改用抽检数做分母后 12/25=48%，能更敏感地触发驳回。
+
+### 批次判定规则
+
+设驳回阈值 \(\theta\)（默认 0.10，可在设置页"通用"tab 中调整）：
+
+\[
+BatchDecision =
+\begin{cases}
+Rejected, & R_{fail} > \theta \\
+Accepted, & R_{fail} \le \theta
+\end{cases}
+\]
+
+注意：\(R_{fail} = \theta\) 时不驳回（"超过阈值"才驳回）。
+
+### 三层状态模型
+
+- **ManualQcStatus**: NOT_REVIEWED / MANUAL_PASS / MANUAL_FAIL
+- **BatchDecision**: PENDING / ACCEPTED / REJECTED  
+- **FinalDatasetStatus**: PENDING / QUALIFIED / UNQUALIFIED
+
+批次驳回时所有 episode 最终不可用；批次通过时人工失败的不可用，未抽检和人工通过的可用。
+
+### Episode 最终判定表
+
+| 批次判定 | 人工状态 | 最终状态 | 来源 |
+|---------|---------|---------|------|
+| REJECTED | MANUAL_FAIL | UNQUALIFIED | MANUAL_FAIL |
+| REJECTED | MANUAL_PASS | UNQUALIFIED | BATCH_REJECT_OVERRIDE_MANUAL_PASS |
+| REJECTED | NOT_REVIEWED | UNQUALIFIED | BATCH_REJECT_PROPAGATED_FAIL |
+| ACCEPTED | MANUAL_FAIL | UNQUALIFIED | MANUAL_FAIL |
+| ACCEPTED | MANUAL_PASS | QUALIFIED | MANUAL_PASS |
+| ACCEPTED | NOT_REVIEWED | QUALIFIED | BATCH_ACCEPT_INFERRED_PASS |
+
+### 判定触发时机
+
+- 质检员提交 QC 结果后自动触发所属批次的判定检查
+- 管理员可手动触发重新判定
+- 判定条件：`sampled_episode_count > 0 AND reviewed_episode_count >= sampled_episode_count`
+- 判定幂等：重复执行不产生不一致状态
+
+### 设置页新增"通用"标签
+
+在现有 `settings.vue` 的 tab 结构中新增"通用"tab，包含：
+- 批次驳回阈值 \(\theta\)（默认 0.10，即抽检失败率 > 10% 触发驳回）
+
+### 相关文档
+
+- 完整设计文档：`software/dataset_consumption_batch_rejection_agent_guide.tex`
 
 ## Verification Status
 

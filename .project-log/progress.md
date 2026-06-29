@@ -1,3 +1,13 @@
+## 2026-06-29 (抽检随机化：百分比抽检改为随机抽取)
+
+- Type: fix
+- Status: backend compiled + deployed to production
+- Importance: high
+- Objective: 修复百分比抽检使用 episodes[:N] 按 ID 排序取前 N 条的缺陷，改为 random.sample 随机抽取，确保每次生成抽检集均匀覆盖整个批次
+- Change: `routes/qc.py` `apply_dispatch_plan` — 将 `episodes[:target_count]` 替换为 `random.sample(episodes, min(target_count, len(episodes)))`；full 模式保持全量
+- No frontend change required (API contract unchanged)
+- Verified: sample 30% returns different episode sets on repeated calls; full mode still covers all
+
 ## 2026-06-29 (L3 v2 参数配置页面重建：86 项 RDDQF 参数可配置化)
 
 - Type: feature

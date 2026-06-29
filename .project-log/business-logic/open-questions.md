@@ -2,6 +2,24 @@
 
 ## Active Questions
 
+### Q-20260629-017
+
+- Related node: D2
+- Related edge: D→D2
+- Question: 批次驳回阈值 \(\theta\) 的默认值应该设为多少？当前暂定 0.10（抽检失败率 > 10% 触发驳回），但这是基于"分母=批次总数"时代的经验值。分母改为抽检数后，同一批次的失败率会显著放大（例如从 12% → 48%），阈值可能需要相应调高（例如 0.30 或 0.40）
+- Why it matters: 阈值直接影响整批数据的可用性判定，过高则劣质数据漏进训练集，过低则频繁驳回增加采集成本
+- Current status: Open
+- Answer: Pending。建议先用默认 0.10 上线，积累真实 QC 数据后根据实际失败率分布做校准
+
+### Q-20260629-018
+
+- Related node: D2
+- Related edge: D→D2
+- Question: 设置页"通用"tab 除了批次驳回阈值外，还需要哪些全局参数？是否需要任务目标数量（targetEpisodeCount）也放在这里？
+- Why it matters: 决定设置页的 tab 结构和参数范围
+- Current status: Open
+- Answer: Pending。首版先放驳回阈值一个参数，后续按需扩展
+
 ### Q-20260623-004
 
 - Related node: C

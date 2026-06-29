@@ -174,6 +174,42 @@ notes:
   - 角色视图分离是 D 节点的前端体验子任务，不改变后端 QC 数据模型
 ```
 
+## Node D2: 训练数据消费与批次驳回模块
+
+```yaml
+id: D2
+name: 训练数据消费与批次驳回模块
+status: design（业务规则已确认，代码未开始）
+state:
+  - LaTeX 设计文档已产出 (dataset_consumption_batch_rejection_agent_guide.tex)
+  - 关键修正：失败率分母由"批次总数"改为"抽检数"
+  - 三层状态模型已定义：ManualQcStatus → BatchDecision → FinalDatasetStatus
+  - 设置页将新增"通用"tab，承载驳回阈值参数
+  - 前端新增"训练数据集管理"页面 (/dataset-management)
+  - 支持导出合格 episode 元数据清单 (CSV/JSON)
+inputs:
+  - 现有 Batch/Episode/QcTask 模型
+  - QC 结果提交流程 (qc.py submit endpoint)
+  - 设计文档 LaTeX 文件
+outputs:
+  - Batch 表新增字段 (batch_decision, reject_threshold, failure_rate, etc.)
+  - Episode 表新增字段 (manual_qc_status, final_dataset_status, final_decision_source, is_exportable)
+  - BatchDecisionLog 审计日志表
+  - BatchAdjudicationService（幂等判定逻辑）
+  - DatasetSummaryService / DatasetExportService
+  - 后端 API：/api/dataset/* 路由组
+  - 前端页面：训练数据集管理 (/dataset-management)
+  - 设置页"通用"tab + 驳回阈值参数
+data_format:
+  - 文档（LaTeX + Markdown）
+  - 代码（Python/Vue）
+notes:
+  - 失败率公式（核心修正）：R_fail = N_fail_manual / N_sampled（NOT N_batch）
+  - 驳回阈值默认 0.10，首版上线后需根据真实数据校准
+  - 判定幂等，可重复执行不产生不一致
+  - 导出只含 QUALIFIED episode 的元数据，不直接导出 MinIO 大文件
+```
+
 ## Node E: 完整项目交付
 
 ```yaml
