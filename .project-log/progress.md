@@ -80,6 +80,18 @@
   - 后续 BatchAdjudicationService 将从 GeneralConfig 读取此阈值
   - 失败率分母已明确为"抽检数"（非批次总数），与设计文档一致
 
+## 2026-06-29 (并发登录保护：同账号多人登录互踢)
+
+- Type: feature
+- Status: backend compiled + deployed, tested — new login kicks out old session (A=200, B=200, A_after=401)
+- Objective: 防止同一账号被多人在不同设备同时使用。后登录的人会把前面登录的人踢掉
+- Change:
+  - migration 0014: users 表新增 session_token 字段
+  - security.py: create_session_token 加入随机 nonce 确保每次登录生成不同 token
+  - set_session_cookie: 登录时将 token 写入 user.session_token 并 commit
+  - get_current_user: 验证时检查 cookie token 是否与 user.session_token 一致，不一致返回 401
+- Verified: 设备A登录→正常访问；设备B登录→正常访问；设备A再次访问→401
+
 ## 2026-06-29 (RDDQF v1.2 平台增强完整落地)
 
 - Type: feature (major)

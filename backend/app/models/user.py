@@ -15,3 +15,4 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[int] = mapped_column(default=1, nullable=False)
     password_changed_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    session_token: Mapped[str | None] = mapped_column(String(255), nullable=True)

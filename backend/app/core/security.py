@@ -45,15 +45,16 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 def create_session_token(user_id: str) -> str:
     expires_at = int(time.time()) + settings.session_max_age_seconds
-    payload = f'{user_id}:{expires_at}'
+    nonce = secrets.token_hex(8)
+    payload = f'{user_id}:{expires_at}:{nonce}'
     signature = hmac.new(settings.secret_key.encode('utf-8'), payload.encode('utf-8'), hashlib.sha256).hexdigest()
     return f'{payload}:{signature}'
 
 
 def verify_session_token(token: str) -> str | None:
     try:
-        user_id, expires_at_text, signature = token.rsplit(':', 2)
-        payload = f'{user_id}:{expires_at_text}'
+        user_id, expires_at_text, nonce, signature = token.rsplit(':', 3)
+        payload = f'{user_id}:{expires_at_text}:{nonce}'
         expected_signature = hmac.new(
             settings.secret_key.encode('utf-8'),
             payload.encode('utf-8'),

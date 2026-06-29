@@ -153,10 +153,12 @@ def _claim_task(task: QcTask, episode: Episode, current_user: User) -> None:
     episode.updated_at = now
 
 
-def set_session_cookie(response: Response, user_id: str) -> None:
+def set_session_cookie(response: Response, user: User) -> None:
+    token = create_session_token(user.id)
+    user.session_token = token
     response.set_cookie(
         key=settings.session_cookie_name,
-        value=create_session_token(user_id),
+        value=token,
         httponly=True,
         samesite='lax',
         secure=settings.session_cookie_secure,
@@ -187,6 +189,8 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='User not found')
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='账号已停用')
+    if user.session_token and user.session_token != token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Session expired — account logged in from another device')
     return user
 
 
@@ -602,7 +606,8 @@ def login(payload: AuthLoginRequest, response: Response, db: Session = Depends(g
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='账号已停用')
 
-    set_session_cookie(response, user.id)
+    set_session_cookie(response, user)
+    db.commit()
     session_payload = {'user': serialize_user(user)}
     return {
         'user': session_payload['user'],
@@ -1452,13 +1457,14 @@ def dataset_export_history(
 @router.get('/admin/reviewers/{reviewer_id}/tasks')
 def admin_get_reviewer_tasks(
     reviewer_id: str,
+    name: str = Query(None),
     status: str = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     require_roles(current_user, 'admin', 'qc_manager')
     from app.services.reviewer_task_manager import ReviewerTaskManager
-    return ReviewerTaskManager.get_reviewer_tasks(db, reviewer_id, status)
+    return ReviewerTaskManager.get_reviewer_tasks(db, name or reviewer_id, status)
 
 
 @router.post('/admin/qc-tasks/{task_id}/revoke')
