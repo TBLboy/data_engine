@@ -456,3 +456,17 @@ export async function updateL3V2Params(params: L3V2Params) {
     body: JSON.stringify(params)
   })
 }
+
+// General configuration
+export type GeneralConfig = Record<string, number>
+
+export async function fetchGeneralConfig() {
+  return request<GeneralConfig>('/admin/general-config')
+}
+
+export async function updateGeneralConfig(params: GeneralConfig) {
+  return request<{ success: boolean; message: string }>('/admin/general-config', {
+    method: 'PUT',
+    body: JSON.stringify(params)
+  })
+}

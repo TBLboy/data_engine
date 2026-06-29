@@ -2,11 +2,21 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
-import { fetchL3V2Params, updateL3V2Params, type L3V2Params } from '../api/client'
+import {
+  fetchL3V2Params,
+  updateL3V2Params,
+  fetchGeneralConfig,
+  updateGeneralConfig,
+  type L3V2Params,
+  type GeneralConfig
+} from '../api/client'
 
+const activeTab = ref('general')
 const loading = ref(true)
-const saving = ref(false)
+const savingL3 = ref(false)
+const savingGeneral = ref(false)
 const params = ref<L3V2Params>({})
+const generalConfig = ref<GeneralConfig>({})
 
 const groups = [
   {
@@ -172,23 +182,40 @@ const groups = [
 async function load() {
   loading.value = true
   try {
-    params.value = await fetchL3V2Params()
+    const [l3, general] = await Promise.all([
+      fetchL3V2Params(),
+      fetchGeneralConfig(),
+    ])
+    params.value = l3
+    generalConfig.value = general
   } catch {
-    ElMessage.error('加载 L3 v2 参数失败')
+    ElMessage.error('加载配置失败')
   } finally {
     loading.value = false
   }
 }
 
-async function save() {
-  saving.value = true
+async function saveL3() {
+  savingL3.value = true
   try {
     await updateL3V2Params(params.value)
     ElMessage.success('L3 v2 参数已保存')
   } catch {
     ElMessage.error('保存失败')
   } finally {
-    saving.value = false
+    savingL3.value = false
+  }
+}
+
+async function saveGeneral() {
+  savingGeneral.value = true
+  try {
+    await updateGeneralConfig(generalConfig.value)
+    ElMessage.success('通用配置已保存')
+  } catch {
+    ElMessage.error('保存失败')
+  } finally {
+    savingGeneral.value = false
   }
 }
 
@@ -200,37 +227,76 @@ onMounted(load)
     <div class="l3-settings" v-loading="loading">
       <div class="settings-header">
         <div>
-          <h1>L3 v2 指标参数配置</h1>
-          <p class="settings-subtitle">RDDQF 四层训练数据质量评估引擎 — 所有阈值和权重均可调，修改后立即生效</p>
+          <h1>设置</h1>
         </div>
-        <el-button type="primary" size="large" :loading="saving" @click="save">保存全部</el-button>
       </div>
-      <el-alert type="info" :closable="false" style="margin-bottom: 20px">
-        修改后立即生效，下次加载 manual QC 时自动使用新参数。参数为空值将回退到系统默认值。
-      </el-alert>
 
-      <el-card v-for="group in groups" :key="group.title" shadow="never" class="qc-card" style="margin-bottom: 16px">
-        <template #header>
-          <div>
-            <strong>{{ group.title }}</strong>
-            <div class="group-desc">{{ group.desc }}</div>
+      <el-tabs v-model="activeTab">
+        <el-tab-pane label="通用" name="general">
+          <div class="tab-toolbar">
+            <el-button type="primary" :loading="savingGeneral" @click="saveGeneral">保存通用配置</el-button>
           </div>
-        </template>
-        <el-row :gutter="20">
-          <el-col :span="8" v-for="field in group.fields" :key="field.key" style="margin-bottom: 12px">
-            <div class="field-label">{{ field.label }}</div>
-            <el-input-number
-              v-model="(params as any)[field.key]"
-              :step="field.step"
-              :min="field.min"
-              :max="field.max"
-              :precision="field.step < 0.001 ? 6 : field.step < 0.01 ? 4 : field.step < 0.1 ? 3 : field.step < 1 ? 2 : 0"
-              controls-position="right"
-              style="width: 100%"
-            />
-          </el-col>
-        </el-row>
-      </el-card>
+
+          <el-card shadow="never" class="qc-card">
+            <template #header>
+              <div>
+                <strong>批次驳回策略</strong>
+                <div class="group-desc">根据抽检结果自动判定批次是否可用于训练</div>
+              </div>
+            </template>
+            <el-alert type="info" :closable="false" style="margin-bottom: 16px">
+              失败率 = 人工不合格数 / 抽检数。当失败率超过阈值时，整批数据被驳回，所有 episode 最终不可用于训练。
+            </el-alert>
+            <el-row :gutter="20">
+              <el-col :span="8">
+                <div class="field-label">驳回阈值 θ（失败率 > θ 触发驳回）</div>
+                <el-input-number
+                  v-model="generalConfig.batch_reject_threshold"
+                  :step="0.01"
+                  :min="0"
+                  :max="1"
+                  :precision="2"
+                  controls-position="right"
+                  style="width: 100%"
+                />
+                <div class="field-hint">默认 0.10，即抽检失败率超过 10% 时驳回整批</div>
+              </el-col>
+            </el-row>
+          </el-card>
+        </el-tab-pane>
+
+        <el-tab-pane label="L3 v2 指标参数" name="l3v2">
+          <div class="tab-toolbar">
+            <el-button type="primary" size="large" :loading="savingL3" @click="saveL3">保存全部</el-button>
+          </div>
+          <el-alert type="info" :closable="false" style="margin-bottom: 20px">
+            修改后立即生效，下次加载 manual QC 时自动使用新参数。参数为空值将回退到系统默认值。
+          </el-alert>
+
+          <el-card v-for="group in groups" :key="group.title" shadow="never" class="qc-card" style="margin-bottom: 16px">
+            <template #header>
+              <div>
+                <strong>{{ group.title }}</strong>
+                <div class="group-desc">{{ group.desc }}</div>
+              </div>
+            </template>
+            <el-row :gutter="20">
+              <el-col :span="8" v-for="field in group.fields" :key="field.key" style="margin-bottom: 12px">
+                <div class="field-label">{{ field.label }}</div>
+                <el-input-number
+                  v-model="(params as any)[field.key]"
+                  :step="field.step"
+                  :min="field.min"
+                  :max="field.max"
+                  :precision="field.step < 0.001 ? 6 : field.step < 0.01 ? 4 : field.step < 0.1 ? 3 : field.step < 1 ? 2 : 0"
+                  controls-position="right"
+                  style="width: 100%"
+                />
+              </el-col>
+            </el-row>
+          </el-card>
+        </el-tab-pane>
+      </el-tabs>
     </div>
   </AppLayout>
 </template>
@@ -254,10 +320,10 @@ onMounted(load)
   font-size: 22px;
 }
 
-.settings-subtitle {
-  margin: 4px 0 0;
-  font-size: 13px;
-  color: #909399;
+.tab-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 16px;
 }
 
 .group-desc {
@@ -274,5 +340,11 @@ onMounted(load)
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.field-hint {
+  font-size: 11px;
+  color: #909399;
+  margin-top: 4px;
 }
 </style>

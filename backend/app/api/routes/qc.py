@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from datetime import datetime, timedelta
 from urllib.parse import quote
 
@@ -10,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.security import create_session_token, hash_password, verify_password, verify_session_token
-from app.models import AuditEvent, Batch, Episode, EpisodeInventory, EpisodeObject, L3V2Config, ListRecord, QcReviewRevision, QcTask, ScanJob, TaskType, User
+from app.models import AuditEvent, Batch, Episode, EpisodeInventory, EpisodeObject, GeneralConfig, L3V2Config, ListRecord, QcReviewRevision, QcTask, ScanJob, TaskType, User
 from app.schemas.qc import (
     AccountListPayloadSchema,
     AccountSchema,
@@ -934,7 +935,10 @@ def apply_dispatch_plan(
 
     episodes = db.query(Episode).filter(Episode.batch_id == batch_id).order_by(Episode.id).all()
     target_count = batch.episode_count if payload.dispatchMode == 'full' else max(1, round(batch.episode_count * batch.sampling_ratio / 100))
-    target_episode_ids = {episode.id for episode in episodes[:target_count]}
+    if payload.dispatchMode == 'full':
+        target_episode_ids = {episode.id for episode in episodes}
+    else:
+        target_episode_ids = {episode.id for episode in random.sample(episodes, min(target_count, len(episodes)))}
 
     _supersede_pending_batch_tasks(db, batch_id, next_generation=next_generation)
 
@@ -1269,3 +1273,25 @@ def update_l3_v2_params(
     require_roles(current_user, 'admin')
     L3V2Config.save_params(db, payload, updated_by=current_user.name)
     return {'success': True, 'message': 'L3 v2 参数已保存'}
+
+
+# ── 通用配置 ──
+
+@router.get('/admin/general-config')
+def get_general_config(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin')
+    return GeneralConfig.get_params(db)
+
+
+@router.put('/admin/general-config')
+def update_general_config(
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin')
+    GeneralConfig.save_params(db, payload, updated_by=current_user.name)
+    return {'success': True, 'message': '通用配置已保存'}

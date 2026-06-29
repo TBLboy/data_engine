@@ -1,3 +1,23 @@
+## 2026-06-29 (设置页"通用"tab + 批次驳回阈值参数)
+
+- Type: feature
+- Status: backend compile + frontend build passed, Docker deployed + migration executed
+- Importance: high
+- Reusable: yes
+- Objective: 在设置页新增"通用"标签页，承载批次驳回阈值参数 (batch_reject_threshold)；新增 GeneralConfig 存储模型与 API
+- Work completed:
+  - 新 DB 模型 `GeneralConfig`（单行 JSON 存储通用配置）+ migration `20260629_0011`
+  - `GET/PUT /api/admin/general-config` 端点（仅限 admin）
+  - 前端 `settings.vue` 改为双 tab 结构：`el-tabs` → "通用" + "L3 v2 指标参数"
+  - "通用"tab 包含：批次驳回阈值 θ（el-input-number，默认 0.10，step 0.01）
+  - 解释文案：失败率 = 人工不合格数 / 抽检数，超过阈值触发整批驳回
+  - 前端 API client 新增 `GeneralConfig` 类型 + `fetchGeneralConfig` / `updateGeneralConfig`
+  - API 验证：GET 返回默认值 0.1，PUT 成功持久化，GET 后确认
+- Business logic impact:
+  - 批次驳回阈值现在是可配置的系统参数，管理员可在设置页实时调整
+  - 后续 BatchAdjudicationService 将从 GeneralConfig 读取此阈值
+  - 失败率分母已明确为"抽检数"（非批次总数），与设计文档一致
+
 ## 2026-06-29 (抽检随机化：百分比抽检改为随机抽取)
 
 - Type: fix
