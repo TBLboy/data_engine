@@ -77,3 +77,21 @@
 - 管理员可手动触发重新判定（`POST /api/batches/{batch_id}/recompute-decision`）
 - 所有判定应记录到 `batch_decision_log` 审计表
 - 设置页参数变更（如调整驳回阈值）不自动触发重判，需管理员手动重算
+
+## Reviewer Task Management Constraints
+
+- 管理员可查看和管理任意审核员的任务池（`GET /api/admin/reviewers/{reviewer_id}/tasks`）
+- pending 任务支持：撤回 (revoke)、转派 (reassign)、释放回公共池 (release)
+- in_progress 任务默认不可操作；如需强制释放必须记录操作原因
+- completed 任务不可撤销/转派，仅可查看
+- 支持批量撤回和批量转派
+- 所有任务管理操作写入 TaskOperationLog（含操作类型、原审核员、目标审核员、操作人、原因、时间）
+- 撤回/释放的任务状态恢复为 'new'，assignee 清空为 '未派发'
+- 转派任务 assignee 更新为新审核员，状态保持为 'assigned'
+
+## Export Enhancement Constraints
+
+- 导出仅包含 final_dataset_status = QUALIFIED 的 episode
+- 导出字段必须包含 MinIO 原始/处理后路径、L3 v2 各维度分数
+- 每次导出记录到 DatasetExportJob 表
+- 导出格式支持 CSV 和 JSON

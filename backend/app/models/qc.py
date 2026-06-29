@@ -67,3 +67,29 @@ class BatchDecisionLog(Base):
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), server_default=func.now())
 
     batch = relationship('Batch', back_populates='decision_logs')
+
+
+class DatasetExportJob(Base):
+    __tablename__ = 'dataset_export_jobs'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_type_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    export_format: Mapped[str] = mapped_column(String(16), nullable=False)
+    episode_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    filters_json: Mapped[str] = mapped_column(Text, default='{}', nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), server_default=func.now())
+
+
+class TaskOperationLog(Base):
+    __tablename__ = 'task_operation_log'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    episode_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    operation: Mapped[str] = mapped_column(String(32), nullable=False)
+    from_reviewer: Mapped[str] = mapped_column(String(64), default='', nullable=False)
+    to_reviewer: Mapped[str] = mapped_column(String(64), default='', nullable=False)
+    operator_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, default='', nullable=False)
+    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), server_default=func.now())

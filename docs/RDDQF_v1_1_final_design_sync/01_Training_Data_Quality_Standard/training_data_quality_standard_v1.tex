@@ -1,0 +1,998 @@
+\documentclass[UTF8,zihao=-4]{ctexart}
+
+\usepackage[a4paper,top=2.4cm,bottom=2.4cm,left=2.4cm,right=2.4cm]{geometry}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setmainfont{DejaVu Sans}
+\setsansfont{DejaVu Sans}
+\setmonofont{Noto Sans Mono}
+\setCJKmainfont{Noto Sans CJK SC}
+\setCJKsansfont{Noto Sans CJK SC}
+\setCJKmonofont{Noto Sans CJK SC}
+
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{lastpage}
+\usepackage{pifont}
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  urlcolor=blue,
+  citecolor=black,
+  pdftitle={机器人训练数据质量评价标准 v1.0},
+  pdfauthor={ChatGPT, for 灵机启物机器人数采质检平台}
+}
+
+\definecolor{RuleBlue}{RGB}{25,74,135}
+\definecolor{LightBlue}{RGB}{236,243,252}
+\definecolor{LightGray}{RGB}{245,245,245}
+\definecolor{DarkGray}{RGB}{80,80,80}
+\definecolor{WarnOrange}{RGB}{172,103,0}
+\definecolor{RejectRed}{RGB}{150,35,35}
+\definecolor{PassGreen}{RGB}{38,118,82}
+
+\titleformat{\section}{\Large\bfseries\color{RuleBlue}}{\thesection}{0.8em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.8em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{0.8em}{}
+\setlist[itemize]{topsep=3pt,itemsep=2pt,parsep=0pt,leftmargin=1.8em}
+\setlist[enumerate]{topsep=3pt,itemsep=2pt,parsep=0pt,leftmargin=2.1em}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{机器人训练数据质量评价标准 v1.0}
+\rhead{Training Data Quality Standard}
+\cfoot{第 \thepage\ 页 / 共 \pageref{LastPage} 页}
+
+\newcommand{\docversion}{v1.0}
+\newcommand{\mission}{L3 的目标不是评价机器人执行得有多好，而是评价这条 Demonstration 对下游策略学习有多大的训练价值。}
+\newcommand{\Pass}{\textcolor{PassGreen}{\ding{51}}}
+\newcommand{\Warn}{\textcolor{WarnOrange}{\ding{115}}}
+\newcommand{\Reject}{\textcolor{RejectRed}{\ding{55}}}
+
+\newenvironment{principlebox}[1]{%
+  \vspace{0.5em}\noindent\colorbox{LightBlue}{\parbox{0.97\linewidth}{\textbf{#1}\par\vspace{0.25em}}
+  }\par\vspace{-0.8em}\noindent\begin{quote}\small
+}{\end{quote}\vspace{0.4em}}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+\vspace*{2.8cm}
+{\Huge\bfseries 机器人训练数据质量评价标准\par}
+\vspace{0.4cm}
+{\Large Training Data Quality Standard for Robot Demonstrations\par}
+\vspace{0.8cm}
+{\LARGE \docversion\par}
+\vspace{1.5cm}
+\begin{tabular}{rl}
+文档定位： & L3 质检指标体系重构的上层标准文档 \\
+适用系统： & 灵机启物机器人数采质检平台 \\
+上游数据： & Linker Open TeleDex processed 数据集 \\
+核心输入： & \texttt{telemetry.npz}, videos, manifest, metadata \\
+评价目标： & 面向具身智能模型训练的数据质量评价 \\
+\end{tabular}
+\vfill
+\begin{minipage}{0.86\linewidth}
+\centering
+\large\bfseries
+\mission
+\end{minipage}
+\vfill
+{\large 2026 年 6 月\par}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section*{版本说明}
+\addcontentsline{toc}{section}{版本说明}
+
+本文档是面向 L3 阶段重构的标准文档，而不是具体算法实现文档。它的作用是先定义“什么样的机器人遥操作数据值得进入训练集”，再由该标准反推 L3 v2 的指标设计、前端展示和人工复核规则。
+
+本文档基于以下项目事实：
+\begin{itemize}
+  \item 当前平台采用 L1 至 L4 多层质检体系，其中 L3 原本定位为程序自动计算的轨迹质量评分。
+  \item 当前 L3 已实现 LDLJ 平滑度、无效动作占比、动作饱和率、停滞占比、时间戳抖动、跟踪误差、手指颤振、执行力度和综合分 \texttt{Q\_motion}。
+  \item 上游 TeleDex 系统将 raw ROS2 MCAP 转换为 processed 数据，L3 主要使用 processed 目录下的 \texttt{telemetry.npz}。
+  \item 在 \texttt{telemetry.npz} 中，\texttt{qpos} 表示机器人实际关节状态反馈，\texttt{actions} 表示遥操作设备发送的目标关节位置命令；机械臂通常为弧度，灵巧手通常为 0 至 255 范围值。
+  \item 未来数据将被转换为机器人策略学习、模仿学习或 VLA 类模型可使用的训练格式，因此 L3 的核心目标应从“机器人执行质量”转向“训练数据质量”。
+\end{itemize}
+
+本文档不追求一次性确定所有阈值和公式。相反，它定义 L3 v2 的评价对象、边界、原则、质量维度和指标准入规则。后续所有 L3 指标都应能追溯到本文档中的某一条质量原则或质量维度。
+
+\newpage
+
+\section{背景与问题定义}
+
+\subsection{从运动质检到训练数据质检}
+
+在机器人数据采集平台中，质量检查通常容易从机器人控制视角出发：轨迹是否平滑、关节是否跟踪目标、执行力矩是否过大、时间戳是否稳定。这些指标对机器人系统调试非常有价值，但它们不一定等价于训练数据质量。
+
+对于下游策略学习而言，一条 episode 的价值不主要取决于机器人控制器是否完美执行每个目标关节位置，而取决于这条 demonstration 是否向模型提供了清晰、稳定、可学习的“观测到动作”的映射。模型最终学习的是在给定任务语义、视觉观测和机器人状态的条件下，应该输出什么动作。因此，L3 需要回答的问题应从：
+
+\begin{quote}
+机器人这次执行得好不好？
+\end{quote}
+
+转变为：
+
+\begin{quote}
+这条 demonstration 是否值得作为训练样本进入数据集？
+\end{quote}
+
+这两个问题看似接近，但会导致完全不同的指标体系。例如，\texttt{actions} 与 \texttt{qpos} 的差值能够反映控制器命令跟踪情况，却不必然反映该 demonstration 是否可用于训练；而动作抖动、无意义停顿、关键动作缺失、任务失败、观测不可用等问题，反而会直接影响模型学习。
+
+\subsection{当前 L3 v1 的主要错位}
+
+当前 L3 v1 具有工程上合理的一面：它基于 \texttt{telemetry.npz} 中的时序数据自动计算，能够在人工 QC 页面展示综合分、子指标和异常时间段。但从训练数据筛选的角度看，存在如下目标错位：
+
+\begin{enumerate}
+  \item \textbf{评价对象偏向机器人执行，而非 demonstration。} 例如 Tracking Error 更多评价控制器是否忠实执行目标命令，而不是数据本身是否对模型有学习价值。
+  \item \textbf{指标聚合偏向运动学异常，而非训练有效性。} 平滑度、饱和、停滞等指标被直接合成为 \texttt{Q\_motion}，但缺乏“是否影响模型学习”的中间解释。
+  \item \textbf{缺少任务语义。} 同样的动作停顿、手部 0 或 255、末端轨迹绕行，在不同任务中可能含义完全不同。
+  \item \textbf{缺少数据集视角。} 单条 episode 的指标无法回答它在同类任务中的相对质量、重复性、覆盖度和多样性。
+  \item \textbf{缺少训练格式意识。} 未来训练样本通常以 observation-state-action-task 的形式组织，而现有 L3 没有明确区分 observation 质量、action 标签质量和 state-action 一致性。
+\end{enumerate}
+
+因此，L3 v2 不应只是对 L3 v1 的局部阈值调整，而应以“训练数据质量”为目标重新定义标准。
+
+\subsection{本文档的目标}
+
+本文档定义 L3 v2 的上层质量标准，具体目标包括：
+
+\begin{itemize}
+  \item 明确 L3 v2 的评价对象是 robot demonstration，而非机器人控制器。
+  \item 明确训练数据质量的核心标准是 learnability，即样本是否能为下游策略学习提供有效学习信号。
+  \item 将 episode 级质量拆解为若干一级维度，为后续指标设计提供稳定框架。
+  \item 明确哪些指标应作为核心训练质量指标，哪些只能作为辅助诊断指标。
+  \item 明确 L3 与 L2、L4、批次报告和未来数据资产平台之间的关系。
+\end{itemize}
+
+\section{适用范围与非目标}
+
+\subsection{适用范围}
+
+本文档适用于以下数据与流程：
+
+\begin{itemize}
+  \item 由 TeleDex 系统采集并转换得到的 processed episode。
+  \item 包含多路 RGB/Depth 视频、时间戳、机器人关节状态、遥操作目标动作、力信息、同步校验、末端位姿、IMU 或触觉等字段的数据。
+  \item 用于具身智能模型、机器人模仿学习模型、VLA 模型或行为克隆模型训练的数据筛选流程。
+  \item L3 自动质检、人工 QC 工作台、批次报告、数据集构建和数据资产分层。
+\end{itemize}
+
+\subsection{非目标}
+
+本文档明确不解决以下问题：
+
+\begin{itemize}
+  \item 不评价机器人硬件是否健康。
+  \item 不评价底层控制器是否达到最佳跟踪性能。
+  \item 不替代 L4 对任务完成度的人工判断。
+  \item 不替代 L2 对视觉质量的人工或自动判断。
+  \item 不直接规定所有指标的最终公式和阈值。
+  \item 不判断某个具体模型架构应该如何使用数据。
+\end{itemize}
+
+这些内容可以在后续的《L3 v2 指标设计规范》《批次级数据集质量报告规范》和《模型训练数据导出规范》中进一步展开。
+
+\section{核心定义}
+
+\subsection{Episode}
+
+Episode 指一次完整的机器人遥操作采集片段。它通常对应 processed 目录下的一个 \texttt{episode\_XXXXXX}，包含统一时间轴上的视频、机器人状态、遥操作动作、同步信息和元数据。Episode 是 L3 自动质检的基本单位。
+
+\subsection{Demonstration}
+
+Demonstration 指在特定任务提示、场景状态和机器人初始状态下，由操作者通过遥操作设备产生的一段可供模型模仿学习的行为示范。它不仅包括动作序列，还包括动作发生时的视觉观测、机器人状态、任务语义和最终任务结果。
+
+本文档中的 demonstration 不是“机器人机械运动轨迹”的同义词。它是一个训练样本级对象，包含以下组成部分：
+
+\begin{itemize}
+  \item 任务语义：如抓取、放置、倾倒、移动、整理等。
+  \item 观测输入：RGB、Depth、机器人状态、可能的触觉或 IMU。
+  \item 动作标签：遥操作设备发出的目标关节位置，通常对应 \texttt{actions}。
+  \item 状态反馈：机器人实际关节位置、速度、力等，通常对应 \texttt{qpos}, \texttt{qvel}, \texttt{effort}。
+  \item 结果信息：任务是否完成，是否碰撞，是否失败，是否需要人工复核。
+\end{itemize}
+
+\subsection{Observation}
+
+Observation 指模型在某个时刻可见的输入信息，包括多路相机图像、深度图、机器人当前状态、任务提示以及可选传感器信息。Observation 的质量决定模型是否能从场景中理解任务状态。
+
+\subsection{Action}
+
+Action 指模型需要学习预测的动作标签。在当前 TeleDex 数据语义下，\texttt{actions} 来自遥操作设备发送的控制命令，通常是目标关节位置。机械臂动作以弧度表示，灵巧手动作为 0 至 255 范围值。
+
+因此，\texttt{actions} 在训练数据中更接近“人类操作者意图的标签”，而不是机器人实际执行结果。
+
+\subsection{State}
+
+State 指机器人当前实际状态，主要包括 \texttt{qpos}, \texttt{qvel}, \texttt{effort} 和可能的末端位姿。State 可以作为训练输入的一部分，也可以用于检查动作标签和环境变化之间是否存在明显矛盾。
+
+\subsection{Training Data Quality}
+
+Training Data Quality 指一条 demonstration 对下游策略学习的有效性、清晰性、稳定性和可复用价值。它不是控制精度的同义词，也不是任务成功的单一标签，而是一个综合属性。
+
+本文档采用如下定义：
+
+\begin{quote}
+一条高质量机器人训练数据，是指在任务语义明确、观测可用、动作标签有效、状态演化合理、任务过程完整且无严重噪声污染的条件下，能够为下游策略模型提供稳定、清晰、可学习行为信号的 demonstration。
+\end{quote}
+
+\section{L3 v2 的 Mission Statement}
+
+\begin{principlebox}{Mission Statement}
+L3 的目标不是评价机器人执行得有多好，而是评价这条 demonstration 对下游策略学习有多大的训练价值。
+\end{principlebox}
+
+该 mission statement 是后续所有指标取舍的最高原则。任何拟进入 L3 v2 的指标，都必须回答至少一个问题：
+
+\begin{itemize}
+  \item 它是否影响 observation 到 action 的学习？
+  \item 它是否影响动作标签的可靠性？
+  \item 它是否影响任务语义与行为之间的一致性？
+  \item 它是否影响数据导出后的训练稳定性？
+  \item 它是否能帮助人工快速判断该样本是否应进入训练集？
+\end{itemize}
+
+如果一个指标只能评价机器人硬件或控制器，而不能解释它如何影响训练数据质量，则该指标不应作为核心 L3 训练质量指标。它可以保留为辅助诊断信息，但不应主导总分。
+
+\section{质量哲学与设计原则}
+
+\subsection{原则一：质量由可学习性定义，而非执行精度定义}
+
+\begin{principlebox}{Principle 1: Learnability over execution accuracy}
+训练数据质量的核心是模型是否能从样本中学习到清晰、稳定、可泛化的行为模式，而不是机器人是否以最小误差跟踪了每个目标关节命令。
+\end{principlebox}
+
+这意味着 Tracking Error 不应天然成为核心质量指标。若一条 demonstration 的动作标签清晰、过程流畅、任务成功、观测完整，即使存在一定控制跟踪误差，它仍可能是高价值训练数据。相反，如果机器人跟踪误差很小，但操作者动作混乱、重复修正、任务失败、视频遮挡严重，这条数据也不应被认为高质量。
+
+\subsection{原则二：评价对象是 demonstration，而不是机器人}
+
+\begin{principlebox}{Principle 2: Demonstration-centric evaluation}
+L3 v2 评价的是一次示范是否适合被模型模仿，而不是机器人平台、控制器、伺服系统或硬件状态是否优秀。
+\end{principlebox}
+
+这一区分对指标设计非常关键。控制器诊断类信息可以帮助定位采集现场问题，但不应与训练质量混为一谈。L3 v2 应优先关注动作标签、观测、状态演化和任务过程是否构成一条可学习 demonstration。
+
+\subsection{原则三：评价信息价值，而不是单纯物理量}
+
+\begin{principlebox}{Principle 3: Information value over raw physical magnitude}
+对训练数据而言，关键不是某个物理量大不大，而是它是否改变了样本的信息含量、标签可靠性或学习信号质量。
+\end{principlebox}
+
+例如，长时间静止不一定是坏的。如果静止发生在任务开始前或完成后，它可以被裁剪；如果静止发生在等待物体稳定的任务阶段，它可能是合理的；如果静止发生在关键操作过程中并伴随动作缺失，则会降低训练价值。因此，指标必须结合时间阶段和任务语义解释。
+
+\subsection{原则四：动作标签是训练核心，不是附属诊断量}
+
+\begin{principlebox}{Principle 4: Action labels are first-class training signals}
+\texttt{actions} 是模型未来需要学习预测的标签，应被视为训练数据的核心组成部分，而不是仅用于与 \texttt{qpos} 做差的诊断变量。
+\end{principlebox}
+
+这意味着 L3 v2 应重点评价 \texttt{actions} 是否可学习：是否连续、是否稳定、是否存在高频抖动、是否长时间无信息、是否出现非人类操作模式、是否与任务阶段相匹配。
+
+\subsection{原则五：任务上下文优先于统一阈值}
+
+\begin{principlebox}{Principle 5: Task-aware quality interpretation}
+同一数值异常在不同任务中可能有不同含义。L3 v2 应逐步从全局阈值转向任务类型感知和同类任务分布对比。
+\end{principlebox}
+
+例如，灵巧手动作接近 0 或 255，在某些任务中可能代表合法的完全张开或完全闭合；在另一些任务中，快速反复接近两端则可能代表标签抖动。L3 v2 不应简单把边界值判为饱和异常，而应判断其是否构成不合理的动作模式。
+
+\subsection{原则六：单条质量与批次价值分离}
+
+\begin{principlebox}{Principle 6: Episode quality and dataset value are related but not identical}
+单条 episode 的训练质量与整个数据集的覆盖度、多样性和均衡性不同。L3 主要评价单条 demonstration，批次报告应进一步评价数据集层面的价值。
+\end{principlebox}
+
+一条动作标准但非常重复的 episode 可能单条质量合格，但对扩展数据集覆盖度的边际价值较低。这类判断不适合完全放入 L3 单条总分，应进入批次级数据资产报告。
+
+\section{高质量训练数据的标准定义}
+
+\subsection{一句话定义}
+
+高质量机器人训练数据应满足：任务语义明确、观测可用、动作标签有效、状态变化合理、过程连贯、关键动作充分、任务结果可信，并能够为模型提供清晰稳定的 observation-state-action 学习信号。
+
+\subsection{必要条件}
+
+一条 demonstration 至少应满足以下必要条件，才可进入训练候选集：
+
+\begin{enumerate}
+  \item \textbf{数据结构完整。} 必需文件存在，关键字段可读取，时间轴长度一致或可对齐。
+  \item \textbf{观测可用。} 至少主视角视频可用，关键操作阶段无遮挡、不过曝、不严重模糊。
+  \item \textbf{动作标签存在且有效。} \texttt{actions} 不应为空、不应全零、不应大面积无效。
+  \item \textbf{时间顺序正确。} 时间戳应单调，帧率和同步误差应在训练可接受范围内。
+  \item \textbf{任务过程可解释。} 数据应包含与任务提示一致的操作过程，而不是无关动作或错误任务。
+  \item \textbf{任务结果可信。} 至少应能通过 L4 或后续结果标签判断任务是否完成。
+\end{enumerate}
+
+\subsection{优秀条件}
+
+在满足必要条件后，一条优秀 demonstration 应进一步具备：
+
+\begin{itemize}
+  \item 动作自然、连续、平滑，没有大量犹豫和重复修正。
+  \item 关键动作阶段清晰，例如接近、接触、抓取、移动、释放等阶段可被视觉和状态共同解释。
+  \item 动作标签具有足够信息密度，不是长时间无意义静止或重复无效小动作。
+  \item 轨迹相对高效，不存在明显绕远、反复试探或无关操作。
+  \item 同类任务中具有代表性，既不过于异常，也能补充数据集覆盖。
+\end{itemize}
+
+\subsection{不合格条件}
+
+出现以下情况时，该 demonstration 应被拒绝进入训练集，或至少进入人工复核：
+
+\begin{itemize}
+  \item 任务明显失败，且失败原因不作为专门失败数据集使用。
+  \item 关键观察视角不可用，无法看清关键物体或机器人交互。
+  \item 动作标签严重抖动、跳变、缺失或与任务无关。
+  \item 时间戳错乱、同步严重异常、视频与遥测明显错位。
+  \item 采集开始或结束裁剪错误，导致缺少关键任务阶段。
+  \item 数据字段语义不一致，例如 \texttt{actions} 维度错位、手臂和手部单位混淆。
+\end{itemize}
+
+\section{质量维度体系}
+
+L3 v2 应将训练数据质量拆解为九个维度。每个维度都回答一个不同的问题。
+
+\begin{longtable}{p{0.18\linewidth}p{0.32\linewidth}p{0.38\linewidth}}
+\toprule
+\textbf{质量维度} & \textbf{核心问题} & \textbf{主要关注对象} \\
+\midrule
+D1 数据完整性 & 数据能否被稳定读取和导出？ & 文件、字段、维度、帧数、元数据 \\
+D2 时间一致性 & 时序是否可信？ & timestamps、fps、同步误差、缺帧 \\
+D3 观测可用性 & 模型能否看清任务状态？ & RGB、Depth、多视角、L2 结果 \\
+D4 动作标签质量 & action 是否适合作为训练标签？ & actions 连续性、抖动、有效性 \\
+D5 状态动作一致性 & 动作与状态变化是否相互解释？ & qpos、qvel、actions、ee pose \\
+D6 示范过程质量 & 操作者示范是否自然高效？ & 停顿、犹豫、重复修正、轨迹效率 \\
+D7 任务语义一致性 & 行为是否符合 task prompt？ & 任务类型、动作阶段、结果标签 \\
+D8 任务结果质量 & 任务是否完成且结果可信？ & L4 pass/fail、人工备注、终态 \\
+D9 数据集价值 & 该样本对整体数据集是否有贡献？ & 同类分布、代表性、多样性、稀缺性 \\
+\bottomrule
+\end{longtable}
+
+这九个维度并不都适合由 L3 完全自动判定。其中 D1、D2、D4、D5、D6 更适合 L3 自动计算；D3 与 L2 强相关；D8 与 L4 强相关；D7 需要任务类型与人工标签逐步增强；D9 更适合批次级或数据集级报告。
+
+\section{维度 D1：数据完整性}
+
+\subsection{定义}
+
+数据完整性评价 episode 是否具备进入训练流水线的基本结构条件。它回答的问题是：数据是否能被稳定读取、解析、对齐和导出。
+
+\subsection{基本要求}
+
+\begin{itemize}
+  \item processed 目录存在，且包含 \texttt{telemetry.npz}, \texttt{manifest.json}, \texttt{metadata.json}, \texttt{camera\_info.json} 等核心文件。
+  \item 至少一条可用于训练的 RGB 视频存在，且与时间戳文件长度一致。
+  \item \texttt{telemetry.npz} 至少包含 \texttt{timestamps}, \texttt{qpos}, \texttt{actions}。
+  \item 关键数组的第一维长度一致，或可以明确映射到统一时间轴。
+  \item 机器人自由度维度可解释，不存在无法识别的维度错位。
+\end{itemize}
+
+\subsection{质量解释}
+
+数据完整性是硬性前置条件。若数据结构无法稳定读取，则后续再好的动作或任务表现都无法进入训练流水线。D1 的结果应更多表现为 gate，而不是连续分数。
+
+\section{维度 D2：时间一致性}
+
+\subsection{定义}
+
+时间一致性评价视频、状态、动作和传感器数据是否在统一时间轴上可信。它是训练数据可用性的底层保障。
+
+\subsection{与训练的关系}
+
+策略学习依赖 observation 与 action 的正确配对。如果视频帧对应的是 $t$ 时刻，而 action 实际来自 $t+\Delta t$，模型将学习到错误的因果关系。同步错误的危害通常比轻微轨迹不平滑更大，因为它直接污染监督信号。
+
+\subsection{应关注的问题}
+
+\begin{itemize}
+  \item 时间戳是否单调递增。
+  \item 帧间隔是否稳定，是否存在异常跳变。
+  \item \texttt{sync\_validation\_is\_valid} 是否大面积失败。
+  \item \texttt{sync\_validation\_max\_diff} 是否在关键动作阶段过大。
+  \item metadata 中记录的对齐方式、裁剪范围和最大时间差是否合理。
+\end{itemize}
+
+\subsection{对现有指标的影响}
+
+当前 Timestamp Jitter 和同步异常 timeline 应保留，并从“运动质量指标”改归为“时间一致性指标”。它们应具备较高优先级，因为时序错位会直接影响 observation-action 训练配对。
+
+\section{维度 D3：观测可用性}
+
+\subsection{定义}
+
+观测可用性评价模型输入是否能支持任务理解。它包括视觉清晰度、视角覆盖、关键物体可见性、深度可用性和多模态一致性。
+
+\subsection{与 L2 的关系}
+
+当前体系中 L2 已经负责视觉质量人工判断，包括模糊、过曝、遮挡、深度异常等问题。因此，L3 v2 不应重复实现完整视觉质检，但应接入 L2 结果作为训练质量的一部分。
+
+\subsection{L3 应如何使用 D3}
+
+L3 v2 可在以下层面使用观测信息：
+
+\begin{itemize}
+  \item 将 L2 视觉质量结论作为训练质量总判断的强约束。
+  \item 在 timeline 中将关键动作阶段与视觉异常段对齐展示。
+  \item 在未来引入“关键交互阶段可见性”指标，例如抓取瞬间手和物体是否可见。
+  \item 对 RGB、Depth、状态曲线和动作曲线进行联合复核，而不是孤立展示运动指标。
+\end{itemize}
+
+\section{维度 D4：动作标签质量}
+
+\subsection{定义}
+
+动作标签质量是 L3 v2 的核心维度之一。它评价 \texttt{actions} 是否适合作为模型训练标签。
+
+\subsection{为什么 action 质量比 tracking error 更关键}
+
+在模仿学习或 VLA 训练中，模型通常学习从 observation 和 state 到 action 的映射。因此，\texttt{actions} 是监督标签。如果标签本身抖动、跳变、失真或长时间无意义，模型会直接学习到这些缺陷。
+
+相比之下，\texttt{qpos} 与 \texttt{actions} 的差值更多反映控制器执行和机器人动态响应。它可以辅助判断状态动作一致性，但不应替代对 action 标签自身质量的评价。
+
+\subsection{高质量 action 的特征}
+
+\begin{itemize}
+  \item 连续：相邻动作之间变化合理，不出现非物理跳变。
+  \item 稳定：不存在高频抖动或方向频繁翻转。
+  \item 有效：在关键任务阶段包含足够动作信息，而非长期静止或全零。
+  \item 可解释：动作变化能与视觉和状态变化对应。
+  \item 单位一致：机械臂与灵巧手维度单位正确，归一化方式明确。
+\end{itemize}
+
+\subsection{对现有指标的影响}
+
+\begin{itemize}
+  \item Dead Actions 应从“无效动作占比”重命名为“动作信息缺失”或“动作低信息段”。它不应简单惩罚所有静止，而应结合任务阶段和裁剪边界解释。
+  \item Saturation 不应简单认为手部 0 或 255 是坏数据。更合理的判断是：是否存在长期卡边界且无状态变化，或高频在边界之间跳变。
+  \item Chatter 应提升为核心动作标签质量指标，尤其对灵巧手训练非常重要。
+  \item LDLJ 若继续使用，应更多关注 action 的平滑性和末端动作平滑性，而不是只评价 arm 的 qpos。
+\end{itemize}
+
+\section{维度 D5：状态动作一致性}
+
+\subsection{定义}
+
+状态动作一致性评价动作标签、机器人状态和场景变化之间是否存在明显矛盾。它不是要求 \texttt{qpos} 精确等于 \texttt{actions}，而是要求它们在训练意义上相互可解释。
+
+\subsection{Tracking Error 的重新定位}
+
+当前 Tracking Error 计算 \texttt{|actions - qpos|} 的 P95，并按 arm 和 hand 加权。该指标的物理意义明确，但它更接近命令执行误差或控制器跟踪误差。
+
+在 L3 v2 中，Tracking Error 应降级为辅助诊断指标，原因如下：
+
+\begin{enumerate}
+  \item 它主要衡量控制器执行目标关节位置的效果，而非 action 标签是否可学习。
+  \item 适度的动态滞后并不必然降低 demonstration 价值。
+  \item 某些任务中，action 与 qpos 存在正常延迟或柔顺控制差异，直接求差可能误报。
+  \item 若模型训练时使用 \texttt{qpos} 作为当前状态、\texttt{actions} 作为标签，两者不完全相等并不构成监督信号错误。
+\end{enumerate}
+
+\subsection{推荐替代思路}
+
+L3 v2 不应简单删除 state-action 关系，而应从“精确跟踪”改为“可解释一致性”：
+
+\begin{itemize}
+  \item 动作变化后，状态是否在合理时间内出现同向响应。
+  \item 关键动作阶段，末端位姿是否产生与动作相符的变化。
+  \item 是否存在 action 剧烈变化但 state 完全不响应的长段。
+  \item 是否存在 state 大幅变化但 action 无明显变化的异常段。
+\end{itemize}
+
+这类指标比单点 \texttt{|actions - qpos|} 更接近训练数据质量，因为它评价的是 observation-state-action 是否构成可学习因果关系。
+
+\section{维度 D6：示范过程质量}
+
+\subsection{定义}
+
+示范过程质量评价操作者完成任务的过程是否自然、简洁、稳定和具有可模仿性。它是 demonstration-level 的核心维度。
+
+\subsection{高质量示范的过程特征}
+
+\begin{itemize}
+  \item 操作路径清晰，关键动作阶段明显。
+  \item 少量必要修正可以接受，但不应有大量反复试探。
+  \item 不应在关键阶段长时间无动作、犹豫或停顿。
+  \item 不应存在与任务无关的绕行、误抓、碰撞或重复操作。
+  \item 末端轨迹和手部动作应具有足够连续性。
+\end{itemize}
+
+\subsection{对现有 Static 指标的影响}
+
+当前 Static 指标检测速度和动作同时低于阈值的滑动窗口。该指标有价值，但应改变解释方式：
+
+\begin{itemize}
+  \item 发生在 episode 开头或结尾的静止，应优先作为裁剪问题处理。
+  \item 发生在任务等待阶段的静止，不应直接惩罚。
+  \item 发生在关键交互阶段且伴随任务无进展的静止，才应视为训练价值下降。
+\end{itemize}
+
+因此，Static 不应再简单表示“机器人不动”，而应表示“低学习信号时间段”。
+
+\section{维度 D7：任务语义一致性}
+
+\subsection{定义}
+
+任务语义一致性评价 episode 中的行为是否与 task prompt 和任务类型匹配。它回答的问题是：这条数据是否在做它声称要做的事情。
+
+\subsection{为什么任务语义重要}
+
+同样的运动轨迹在不同任务下含义不同。比如手部完全闭合在抓取任务中可能是正确动作，在放置前长时间完全闭合可能也合理，但在不涉及抓取的移动任务中可能是无关动作。没有任务语义，动作质量无法被准确解释。
+
+\subsection{L3 v2 的阶段性目标}
+
+在短期内，如果任务类型标签仍不完整，L3 v2 可以先支持粗粒度任务族：
+
+\begin{itemize}
+  \item 抓取类：接近、闭合、提起、保持。
+  \item 放置类：移动、下降、释放、撤离。
+  \item 倾倒类：抓取、抬起、旋转、复位。
+  \item 推拉类：接触、沿面移动、停止。
+  \item 整理类：多阶段组合动作。
+\end{itemize}
+
+中长期应建立 task profile，使每类任务拥有自己的合理停顿、手部边界、轨迹效率和动作节奏基线。
+
+\section{维度 D8：任务结果质量}
+
+\subsection{定义}
+
+任务结果质量评价任务是否成功完成，以及成功或失败标签是否可信。它与 L4 人工判断强相关。
+
+\subsection{与 L3 的关系}
+
+L3 自动指标不应取代 L4。任务完成度通常需要视觉理解和语义判断，尤其是在复杂操作中，单纯依赖轨迹很难判定是否成功。
+
+但 L3 应与 L4 建立明确关系：
+
+\begin{itemize}
+  \item L3 可提示可疑失败，例如长时间无动作、末端未接近目标、关键阶段缺失。
+  \item L4 结果应作为训练数据最终准入的重要标签。
+  \item L3 v2 的训练质量总判断应区分“动作质量好但任务失败”和“动作质量一般但任务成功”。
+\end{itemize}
+
+\subsection{失败数据的特殊处理}
+
+失败数据不一定永远无价值。它可能用于失败检测、偏好学习、对比学习或恢复策略训练。但这需要明确数据集用途。默认训练成功策略时，失败数据应被隔离，不应混入成功 demonstration 数据集。
+
+\section{维度 D9：数据集价值}
+
+\subsection{定义}
+
+数据集价值评价单条 episode 对整体训练集覆盖度、多样性和均衡性的贡献。它不是单条质量的直接替代。
+
+\subsection{例子}
+
+一条 demonstration 可能动作流畅、任务成功、观测清晰，因此单条质量很高。但如果同一任务、同一物体、同一初始位置已经采集了大量几乎相同的样本，它的边际价值可能较低。相反，一条稍微不完美但覆盖稀有场景或罕见物体姿态的样本，可能具有较高数据资产价值。
+
+\subsection{推荐处理方式}
+
+D9 应主要在批次报告和数据资产平台中体现，而不是直接主导 L3 单条评分。L3 可以输出可供 D9 使用的特征，例如任务类型、轨迹长度、动作分布、初末状态、质量标签等。
+
+\section{L3 与 L1、L2、L4 的边界}
+
+\subsection{L1：硬性门控}
+
+L1 负责上游硬性门控，例如原始采集是否满足基本条件。L3 不应重复 L1 的职责，但如果 processed 数据中出现明显结构异常，应在 D1 数据完整性中直接标记为不可训练。
+
+\subsection{L2：观测质量}
+
+L2 负责视觉质量判断。L3 v2 应消费 L2 的结果，将视觉质量作为训练质量的重要约束，但不应把 L2 完整重做一遍。
+
+\subsection{L3：训练数据质量自动评估}
+
+L3 v2 的核心职责是自动评价 demonstration 是否具备训练价值，尤其是动作标签、时序一致性、状态动作一致性、过程自然性和低学习信号段。
+
+\subsection{L4：任务完成度}
+
+L4 负责人工判断任务是否完成。L4 是训练数据准入的关键标签。L3 可以辅助 L4 定位异常段，但不应替代 L4 的最终语义判断。
+
+\section{现有 L3 指标的去留建议}
+
+\begin{longtable}{p{0.16\linewidth}p{0.18\linewidth}p{0.25\linewidth}p{0.29\linewidth}}
+\toprule
+\textbf{现有指标} & \textbf{建议定位} & \textbf{原因} & \textbf{L3 v2 处理建议} \\
+\midrule
+LDLJ 平滑度 & 保留但改造 & 平滑性会影响模型学习，但仅用 arm qpos 不够 & 扩展到 action 平滑度和 EE 轨迹平滑度 \\
+Dead Actions & 保留但重命名 & 长时间无动作会降低学习信号，但静止不一定坏 & 改为动作信息密度或低学习信号段 \\
+Saturation & 降权并任务感知 & 手部 0/255 可能是合法动作 & 从边界值检测改为异常边界模式检测 \\
+Static & 保留但改造 & 停顿可能代表犹豫或低信息段 & 结合阶段、裁剪和任务类型解释 \\
+Timestamp Jitter & 保留且升权 & 时序错位直接污染训练配对 & 归入时间一致性核心指标 \\
+Tracking Error & 降级为诊断 & 主要评价控制器，不直接等价于训练质量 & 不进入核心总分或仅低权重辅助 \\
+Chatter & 保留且升权 & 高频抖动会污染 action 标签 & 作为动作标签质量核心指标 \\
+Effort & 降级为诊断 & 力矩大不必然降低训练价值 & 作为硬件或碰撞辅助线索 \\
+\texttt{Q\_motion} & 废弃或重命名 & Motion 目标与训练质量不完全一致 & 替换为 Training Quality Profile \\
+\bottomrule
+\end{longtable}
+
+\section{L3 v2 的评分与标签策略}
+
+\subsection{不建议单一总分先行}
+
+L3 v1 使用 \texttt{Q\_motion} 将所有指标合成为一个 0 至 10 分。L3 v2 不建议一开始继续采用单一总分主导，因为不同质量维度对训练的影响不同，且部分维度具有 gate 属性。
+
+更推荐的方式是：
+
+\begin{itemize}
+  \item 先输出多维质量画像，再逐步建立总分。
+  \item 区分硬失败、软风险和参考诊断。
+  \item 总分只作为排序辅助，不作为唯一准入条件。
+\end{itemize}
+
+\subsection{三层标签}
+
+建议 L3 v2 输出如下三层结果：
+
+\begin{longtable}{p{0.18\linewidth}p{0.25\linewidth}p{0.45\linewidth}}
+\toprule
+\textbf{标签} & \textbf{含义} & \textbf{典型条件} \\
+\midrule
+\Pass\ Trainable & 可进入训练候选集 & 数据完整、时序可信、动作标签有效、无严重异常 \\
+\Warn\ Review & 需要人工复核 & 存在可疑低信息段、动作抖动、局部同步问题或任务语义不确定 \\
+\Reject\ Reject & 不建议进入训练集 & 关键文件缺失、严重同步错位、动作标签损坏、任务失败或观测不可用 \\
+\bottomrule
+\end{longtable}
+
+\subsection{质量画像}
+
+除了标签外，每条 episode 应输出质量画像，例如：
+
+\begin{itemize}
+  \item Data Integrity: pass / review / reject
+  \item Temporal Integrity: pass / review / reject
+  \item Action Label Quality: pass / review / reject
+  \item Demonstration Process Quality: pass / review / reject
+  \item Observation Quality: linked from L2
+  \item Task Outcome: linked from L4
+  \item Diagnostics: tracking, effort, sync details
+\end{itemize}
+
+这种画像比单一分数更适合人工 QC，也更适合后续数据资产平台检索。
+
+\section{Timeline 异常段的重新定义}
+
+\subsection{从异常段到训练风险段}
+
+当前 timeline 主要展示同步异常、跟踪误差、停滞、动作饱和、动作消失和手指颤振。L3 v2 应将其重新定义为“训练风险时间段”，即该时间段可能降低训练价值或需要人工复核。
+
+\subsection{推荐风险段类型}
+
+\begin{longtable}{p{0.22\linewidth}p{0.33\linewidth}p{0.33\linewidth}}
+\toprule
+\textbf{风险段} & \textbf{训练含义} & \textbf{UI 展示建议} \\
+\midrule
+同步风险段 & observation 与 action 可能错位 & 红色，优先跳转检查 \\
+动作标签抖动段 & 模型可能学习到高频噪声 & 黄色或红色，叠加 action 曲线 \\
+低学习信号段 & 长时间无有效动作或无状态变化 & 黄色，区分开头/中间/结尾 \\
+动作跳变段 & 标签可能有突变或采集异常 & 红色，展示相关维度 \\
+状态动作矛盾段 & action 与状态变化长期不一致 & 黄色，辅助诊断 \\
+任务阶段缺失段 & 关键动作可能未采到或被裁剪 & 需要 L4/L2 辅助判断 \\
+\bottomrule
+\end{longtable}
+
+\subsection{Timeline 与前端交互}
+
+L3 v2 的 timeline 不应只是标签列表。它应支持：
+
+\begin{itemize}
+  \item 点击风险段跳转到视频对应时间。
+  \item 在进度条上显示风险区间。
+  \item 在遥操作曲线图中高亮同一时间段。
+  \item 展示该风险段影响的质量维度，例如 D2、D4 或 D6。
+  \item 支持人工标记“可接受”“应裁剪”“应拒绝”。
+\end{itemize}
+
+\section{面向数据资产平台的字段建议}
+
+L3 v2 的输出不应只服务人工页面，还应服务未来数据资产平台。因此建议每条 episode 生成结构化质量元数据。
+
+\subsection{Episode 级输出}
+
+\begin{itemize}
+  \item \texttt{training\_quality\_label}: trainable / review / reject
+  \item \texttt{quality\_profile}: 九个维度的结果
+  \item \texttt{risk\_segments}: 训练风险时间段
+  \item \texttt{diagnostics}: tracking、effort、sync 等辅助信息
+  \item \texttt{recommended\_action}: accept / trim / review / reject
+  \item \texttt{metric\_version}: L3 v2 指标版本
+  \item \texttt{task\_profile\_version}: 任务类型标准版本
+\end{itemize}
+
+\subsection{批次级输出}
+
+批次报告应进一步统计：
+
+\begin{itemize}
+  \item 各任务类型的 trainable 比例。
+  \item 主要拒绝原因分布。
+  \item action label 质量分布。
+  \item 同类任务 trajectory 分布。
+  \item 数据多样性和重复度。
+  \item 需要返工采集的任务类型。
+\end{itemize}
+
+这将使 L3 从单条质检工具升级为机器人数据资产治理工具。
+
+\section{指标设计准入规则}
+
+任何新指标进入 L3 v2 前，必须通过以下审查。
+
+\subsection{准入问题}
+
+\begin{enumerate}
+  \item 该指标评价的是 demonstration、action label、observation 还是 robot controller？
+  \item 该指标能否明确说明如何影响模型学习？
+  \item 该指标是否与已有指标重复？
+  \item 该指标是否需要任务类型解释？
+  \item 该指标是硬 gate、软风险还是辅助诊断？
+  \item 该指标能否定位到 timeline？
+  \item 人工审核员看到该指标后能否采取明确行动？
+  \item 该指标能否在批次级报告中产生数据资产价值？
+\end{enumerate}
+
+\subsection{指标分级}
+
+\begin{longtable}{p{0.2\linewidth}p{0.28\linewidth}p{0.4\linewidth}}
+\toprule
+\textbf{指标级别} & \textbf{含义} & \textbf{示例} \\
+\midrule
+Core Training Metric & 直接影响训练数据质量 & 时序错位、action 抖动、动作跳变、低学习信号 \\
+Contextual Metric & 需要任务语义解释 & 手部边界、停顿、轨迹效率、阶段完整性 \\
+Diagnostic Metric & 主要用于排查系统问题 & Tracking Error、Effort、IMU 冲击 \\
+Dataset Metric & 主要用于批次级分析 & 同类一致性、多样性、重复度 \\
+\bottomrule
+\end{longtable}
+
+\section{L3 v2 推荐迭代路线}
+
+\subsection{阶段一：重构指标语义}
+
+目标是先不大规模改算法，而是改命名、分类和展示逻辑。
+
+\begin{itemize}
+  \item 将 \texttt{Q\_motion} 替换为 Training Quality Profile。
+  \item 将 Tracking Error 降级为 Diagnostics。
+  \item 将 Dead、Static、Chatter、Jitter 重新归类到训练质量维度。
+  \item UI 从“指标卡片排序”改为“质量维度画像”。
+\end{itemize}
+
+\subsection{阶段二：动作标签质量增强}
+
+重点围绕 \texttt{actions} 设计更贴合训练的指标。
+
+\begin{itemize}
+  \item Action smoothness。
+  \item Action jump rate。
+  \item Action low-information ratio。
+  \item Hand chatter robustness。
+  \item 边界动作模式，而非边界值本身。
+\end{itemize}
+
+\subsection{阶段三：末端空间与任务阶段}
+
+利用 TeleDex 已输出的 \texttt{ee\_poses\_*} 字段，将部分质量判断从关节空间扩展到末端空间。
+
+\begin{itemize}
+  \item EE trajectory smoothness。
+  \item EE path efficiency。
+  \item EE action-state consistency。
+  \item 抓取、移动、释放等粗阶段识别。
+\end{itemize}
+
+\subsection{阶段四：任务类型与统计标定}
+
+积累足够人工通过样本后，按任务类型建立统计基线。
+
+\begin{itemize}
+  \item 每类任务建立指标分布。
+  \item 使用 percentile 设定初始阈值。
+  \item 结合人工审核结果校准 reject / review / trainable。
+  \item 支持同类 episode 对比。
+\end{itemize}
+
+\subsection{阶段五：数据资产闭环}
+
+最终将 L3 v2 输出接入数据集构建、模型训练和采集反馈。
+
+\begin{itemize}
+  \item 高质量数据自动进入训练候选池。
+  \item 低质量数据进入返工或裁剪队列。
+  \item 批次报告反馈采集现场问题。
+  \item 模型训练效果反向校准 L3 指标权重。
+\end{itemize}
+
+\section{人工 QC 工作台改造建议}
+
+\subsection{从分数展示到决策支持}
+
+当前右侧评分环展示 \texttt{Q\_motion}，子指标卡片按严重度排序。L3 v2 建议改为：
+
+\begin{itemize}
+  \item 顶部显示 trainable / review / reject 建议。
+  \item 显示九维质量画像，而不是单一 motion 分。
+  \item 对每个维度显示“为什么影响训练”。
+  \item Timeline 展示训练风险段，并支持跳转视频和曲线。
+\end{itemize}
+
+\subsection{审核员需要回答的问题}
+
+人工 QC 页面应引导审核员回答：
+
+\begin{enumerate}
+  \item 这条 episode 是否完成任务？
+  \item 关键动作阶段是否可见？
+  \item 动作是否自然、连续、可模仿？
+  \item 是否存在需要裁剪的开头或结尾？
+  \item 是否存在局部异常但整体可用？
+  \item 是否建议进入训练集、复核池、裁剪池或拒绝池？
+\end{enumerate}
+
+\subsection{备注体系}
+
+建议新增面向训练的原因码，例如：
+
+\begin{itemize}
+  \item action label noise
+  \item low-information segment
+  \item task phase missing
+  \item observation unavailable
+  \item temporal misalignment
+  \item task failed
+  \item needs trimming
+  \item usable with caution
+\end{itemize}
+
+\section{训练数据准入策略}
+
+\subsection{默认策略}
+
+默认情况下，只有满足以下条件的数据进入训练候选集：
+
+\begin{itemize}
+  \item D1 数据完整性通过。
+  \item D2 时间一致性无严重异常。
+  \item D3 观测质量通过或无关键视觉缺陷。
+  \item D4 动作标签质量无严重污染。
+  \item D8 任务结果通过或被明确标记为可用失败数据。
+\end{itemize}
+
+\subsection{可裁剪数据}
+
+以下数据不应直接拒绝，而应进入裁剪或复核：
+
+\begin{itemize}
+  \item 开头或结尾有长时间静止，但中间任务过程完整。
+  \item 局部动作抖动，但关键阶段质量尚可。
+  \item 单个视角不可用，但其他视角可覆盖关键动作。
+  \item 少量同步异常不在关键阶段。
+\end{itemize}
+
+\subsection{拒绝数据}
+
+以下数据应默认拒绝：
+
+\begin{itemize}
+  \item 关键字段缺失或维度错误。
+  \item 视频与动作严重错位。
+  \item 动作标签大面积损坏。
+  \item 关键任务阶段缺失。
+  \item 任务失败且未作为失败数据集使用。
+  \item 观测无法支持任务理解。
+\end{itemize}
+
+\section{示例判定规则}
+
+\subsection{场景一：Tracking Error 高但任务表现好}
+
+如果视频显示任务顺利完成，动作标签连续自然，状态也在合理时间内响应，则 Tracking Error 高不应直接导致拒绝。该 episode 可标记为 trainable，同时在 diagnostics 中记录 controller tracking risk。
+
+\subsection{场景二：动作平滑但任务失败}
+
+如果任务失败，默认不进入成功策略训练集。即使 LDLJ 或 action smoothness 很好，也只能说明运动过程平滑，不能说明 demonstration 适合成功策略学习。
+
+\subsection{场景三：手部动作长期 0 或 255}
+
+如果该任务阶段需要手完全张开或闭合，则这是正常动作。如果在无关阶段长时间卡边界，或在 0 和 255 之间高频跳变，则应标记为动作标签风险。
+
+\subsection{场景四：中间停顿 3 秒}
+
+若停顿发生在等待物体稳定或任务自然等待阶段，可以接受。若停顿发生在关键抓取前且伴随反复微调，应标记为示范犹豫或低学习信号段。
+
+\subsection{场景五：开头 5 秒无动作}
+
+如果后续任务完整，优先建议裁剪，而不是拒绝。此类问题属于数据整理问题，不是 demonstration 本体不可用。
+
+\section{结论}
+
+本文档将 L3 的核心目标从“机器人运动质量评分”重新定义为“机器人训练数据质量评价”。这一转变带来三个关键变化：
+
+\begin{enumerate}
+  \item \textbf{评价对象改变。} L3 v2 评价 demonstration，而不是机器人控制器。
+  \item \textbf{评价标准改变。} 质量由 learnability 定义，而不是由 execution accuracy 定义。
+  \item \textbf{指标体系改变。} Tracking Error、Effort 等执行诊断指标应降级；Action Label Quality、Temporal Integrity、Demonstration Process Quality 等训练相关维度应成为核心。
+\end{enumerate}
+
+最终，L3 v2 应服务于更大的机器人数据资产平台：它不仅告诉审核员“这条数据哪里异常”，更要告诉系统“这条 demonstration 是否值得训练、是否需要裁剪、是否需要复核、是否能提升数据集价值”。
+
+\newpage
+\appendix
+
+\section{附录 A：L3 v2 质量检查清单}
+
+\begin{longtable}{p{0.08\linewidth}p{0.34\linewidth}p{0.18\linewidth}p{0.28\linewidth}}
+\toprule
+\textbf{编号} & \textbf{检查项} & \textbf{级别} & \textbf{建议动作} \\
+\midrule
+A1 & \texttt{telemetry.npz} 是否存在并可读取 & Gate & 缺失则拒绝 \\
+A2 & \texttt{timestamps}, \texttt{qpos}, \texttt{actions} 是否存在 & Gate & 缺失则拒绝 \\
+A3 & 时间戳是否单调且帧间隔合理 & Core & 异常则复核或拒绝 \\
+A4 & 同步误差是否集中在关键阶段 & Core & 关键阶段异常则拒绝 \\
+A5 & 动作标签是否大面积无效 & Core & 大面积无效则拒绝 \\
+A6 & 动作是否存在高频抖动 & Core & 严重则复核或拒绝 \\
+A7 & 是否存在动作跳变 & Core & 检查对应视频和曲线 \\
+A8 & 长静止是否发生在可裁剪区间 & Contextual & 建议裁剪 \\
+A9 & 手部边界动作是否符合任务语义 & Contextual & 结合任务类型复核 \\
+A10 & 任务是否完成 & L4 & 失败则隔离 \\
+A11 & 关键视角是否可见 & L2 & 不可见则复核或拒绝 \\
+A12 & Tracking Error 是否异常 & Diagnostic & 记录但不直接拒绝 \\
+A13 & Effort 是否异常 & Diagnostic & 作为碰撞或硬件线索 \\
+\bottomrule
+\end{longtable}
+
+\section{附录 B：推荐术语替换}
+
+\begin{longtable}{p{0.3\linewidth}p{0.3\linewidth}p{0.28\linewidth}}
+\toprule
+\textbf{原术语} & \textbf{建议术语} & \textbf{原因} \\
+\midrule
+Motion Quality & Training Data Quality & 更符合训练数据筛选目标 \\
+Q\_motion & Training Quality Profile & 避免单一运动分数误导 \\
+Tracking Error & Command Tracking Diagnostic & 降级为执行诊断 \\
+Dead Actions & Low-information Action Segment & 更贴近训练价值 \\
+Static Ratio & Low-learning-signal Segment & 避免把合理静止误判为坏 \\
+Saturation & Boundary Action Pattern & 区分合法边界和异常模式 \\
+Chatter & Action Label Chatter & 明确它污染训练标签 \\
+Effort & Execution Load Diagnostic & 不作为核心训练质量 \\
+\bottomrule
+\end{longtable}
+
+\section{附录 C：后续文档拆分建议}
+
+本文档之后，建议继续形成以下三份规范：
+
+\begin{enumerate}
+  \item \textbf{L3 v2 Metric Specification}：定义每个指标的输入、计算方法、阈值、timeline 生成规则和输出 schema。
+  \item \textbf{Manual QC UI Specification}：定义前端如何展示 Training Quality Profile、风险段、曲线联动和人工复核动作。
+  \item \textbf{Dataset Asset Report Specification}：定义批次级、任务级、数据集级的数据资产质量报告。
+\end{enumerate}
+
+\section{附录 D：本文档依赖的数据语义}
+
+本文档假设上游数据满足以下语义：
+
+\begin{itemize}
+  \item \texttt{qpos} 表示机器人实际关节位置反馈。
+  \item \texttt{qvel} 表示机器人实际关节速度反馈。
+  \item \texttt{effort} 表示机器人力矩或力反馈。
+  \item \texttt{actions} 表示遥操作控制命令，主要为目标关节位置。
+  \item \texttt{ee\_poses\_qpos\_*} 表示由实际关节状态正运动学计算得到的末端位姿。
+  \item \texttt{ee\_poses\_actions\_*} 表示由目标动作正运动学计算得到的末端位姿。
+  \item \texttt{sync\_validation\_*} 表示转换阶段生成的同步校验结果。
+  \item 机械臂单位通常为 rad，灵巧手位置通常为 0 至 255 范围值。
+\end{itemize}
+
+这些语义是后续 L3 v2 指标设计的基础。如果上游数据格式变化，应同步更新本文档和指标实现。
+
+\end{document}

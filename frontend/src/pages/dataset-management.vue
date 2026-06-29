@@ -6,6 +6,7 @@ import type {
   DatasetTaskSummary,
   DatasetBatchRow,
   DatasetEpisodeRow,
+  DatasetExportJob,
   TaskType
 } from '../types/qc'
 import {
@@ -15,6 +16,7 @@ import {
   fetchDatasetTaskEpisodes,
   exportDatasetEpisodes,
   recomputeBatchDecision,
+  fetchExportHistory,
 } from '../api/client'
 
 const tasks = ref<TaskType[]>([])
@@ -27,6 +29,7 @@ const episodePage = ref(1)
 const episodePageSize = 50
 const loading = ref(true)
 const exportLoading = ref(false)
+const exportHistory = ref<DatasetExportJob[]>([])
 
 const statusFilter = ref('')
 const batchFilter = ref('')
@@ -49,12 +52,14 @@ async function loadData() {
   if (!selectedTaskId.value) return
   loading.value = true
   try {
-    const [s, b] = await Promise.all([
+    const [s, b, h] = await Promise.all([
       fetchDatasetTaskSummary(selectedTaskId.value),
       fetchDatasetTaskBatches(selectedTaskId.value),
+      fetchExportHistory(selectedTaskId.value),
     ])
     summary.value = s
     batches.value = b
+    exportHistory.value = h
   } catch {
     ElMessage.error('加载数据失败')
   } finally {
@@ -273,6 +278,28 @@ onMounted(async () => {
                 <template #default="{ row }">
                   <el-button size="small" text type="primary" @click="doRecompute(row.batchId)">重判</el-button>
                 </template>
+              </el-table-column>
+            </el-table>
+          </el-card>
+        </el-col>
+      </el-row>
+
+      <!-- Export history -->
+      <el-row :gutter="18" v-if="exportHistory.length">
+        <el-col :span="24">
+          <el-card shadow="never" class="qc-card">
+            <template #header><span>导出历史</span></template>
+            <el-table :data="exportHistory" stripe class="qc-table" height="200">
+              <el-table-column prop="id" label="ID" width="70" />
+              <el-table-column prop="exportFormat" label="格式" width="80">
+                <template #default="{ row }">
+                  <el-tag size="small">{{ row.exportFormat.toUpperCase() }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="episodeCount" label="导出数量" width="100" />
+              <el-table-column prop="createdBy" label="导出人" width="120" />
+              <el-table-column label="导出时间" min-width="160">
+                <template #default="{ row }">{{ row.createdAt || '-' }}</template>
               </el-table-column>
             </el-table>
           </el-card>

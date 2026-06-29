@@ -1,3 +1,17 @@
+### 2026-06-29 — RDDQF v1.2 新增：管理员任务池管理、导出增强、状态溯源
+
+- Decision: v1.2 在批次驳回模块基础上新增三大能力：(1) 导出字段从 11 个扩展到 ~25 个（含 L3 分数、MinIO 路径等）；(2) 管理员可管理审核员任务池（撤回/转派/释放 pending 任务，支持批量）；(3) Episode 状态溯源面板
+- Context: v1.0 批次驳回模块已落地。实际使用中发现导出字段不够丰富（缺少 MinIO 路径和 L3 分数）、管理员无法回收卡住的任务（质检员请假等场景）、前端缺少状态判定原因展示
+- Reason: 下游训练团队需要 MinIO 路径信息来定位原始数据；管理员需要任务管理权限来处理异常情况（请假、负载不均、错误派发）；质检员需要看到"为什么这条 episode 不能用于训练"
+- Implementation detail:
+  - 导出新增字段：task_type_id/name, l3_training_quality_score, motion_quality_score, learnability_score, data_integrity_score, execution_diagnostic_score, minio_raw/processed_prefix, telemetry/metadata/manifest_path, video_paths, reviewer_id, qc_result_id, created_at, uploaded_at, qc_completed_at
+  - 新增 DatasetExportJob 表
+  - 新增 TaskOperationLog 表（revoke/reassign/release/force_release）
+  - 新增 API: GET/POST admin 任务管理端点
+  - MQ-02 Hand Action Continuity 和 DX-01 真正 Lag Alignment 标记为技术债，本版本暂不实现
+- Impacted nodes: D2
+- Status: active
+
 ### 2026-06-29 — 批次驳回失败率分母：抽检数 vs 批次总数
 
 - Decision: 批次驳回判定中的失败率分母采用**抽检数**（\(N_{sampled}\)），而非批次总数（\(N_{batch}\)）

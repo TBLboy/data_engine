@@ -3,7 +3,7 @@
 ## Status
 
 - Research phase: Complete（公开数据集调研 + TeleDex 格式分析 + MinIO 数据湖实查均已完成）
-- Current phase: 训练数据消费与批次驳回模块进入业务逻辑设计阶段（LaTeX 设计文档已产出，关键业务规则：失败率分母=抽检数 已确认）
+- Current phase: RDDQF v1.2 平台增强 — 导出字段增强、管理员任务池管理、Episode 状态溯源、任务操作日志 (LaTeX v1.2 设计文档已产出)
 
 ## Main Path
 
@@ -164,3 +164,45 @@ Accepted, & R_{fail} \le \theta
 - 任务派发后续正式形态应采用”批次级生成待派发任务池 + reviewer 批量分配”模式，而不是逐条 `episode` 手工指定审核员；若重新生成派发任务，系统必须切换到新的活跃派发版本并退役旧版本未开始任务，避免旧 full 任务继续污染当前 sampled 视图
 - 角色视图分离后的页面路由规则：登录后 `reviewer` → `/reviewer`（个人看板）、`admin/qc_manager` → `/dashboard`（派发工作台）；`manual-qc` 是共用页面，但 reviewer 在流水线模式下提交后自动跳转下一条，admin 模式下不自动跳转
 - L3 方案已正式收口到 V1 可执行级：L1 继续由 TeleDex 平台负责；L2（视觉质量）与 L4（任务完成度）保持人工审核；L3（遥操作轨迹质量）采用 Forge 主方案 + TeleDex/灵巧手专项自定义指标。V1 首版自动指标分档为 P0 必做 6 项（LDLJ、Dead Actions、Action Saturation、Static Detection、Timestamp Regularity、Qpos-Action Tracking Error）+ P1 增强 2 项（Per-finger Gripper Chatter、Joint Effort）；P2 的 SPARC / Action Entropy / State-Conditioned Variance / 跨-episode consistency 指标暂缓。manual QC 的自动指标区只承载 L3，不承担 L2/L4 自动判定
+
+## RDDQF v1.2 平台增强 — 业务规则
+
+### 目标
+
+在 v1.0 批次驳回模块基础上增强四个方向：导出字段丰富化、管理员任务池管理能力、Episode 状态溯源、任务操作审计。
+
+### 导出字段增强
+
+当前导出仅含 11 个基本字段。v1.2 扩展到 ~25 字段，新增：
+- 任务类型信息 (task_type_id, task_type_name)
+- L3 v2 分数 (training_quality_score + 4 维度分数)
+- MinIO 路径 (raw/processed prefix, telemetry/manifest/metadata path, video paths)
+- 质检员信息 (reviewer_id, qc_result_id)
+- 时间信息 (created_at, uploaded_at, qc_completed_at, final_decided_at)
+
+新增 DatasetExportJob 表记录导出历史。
+
+### 管理员任务池管理 (Reviewer Task Manager)
+
+- 入口：工作台审核员工作量卡片 → "管理任务"按钮 → Drawer/Modal
+- 操作：撤回/转派/释放 pending 任务，支持批量操作
+- 状态限制：pending 可撤回/转派/释放；in_progress 默认不可操作（强制释放需记录原因）；completed 不可操作
+- 所有操作写入 TaskOperationLog 审计表
+
+### Episode 状态溯源面板
+
+在 Episode 列表点击某条记录时展示完整判定链：
+- 最终状态 + 来源
+- 人工质检状态
+- 所在批次状态 + 失败率
+- 策略版本 + 判定时间 + 原因
+
+### MQ-02 / DX-01 优化 (技术债，本版本可暂不实现)
+
+- MQ-02: 当前仅检测 Arm Action 二阶差分，未检测 Hand Action
+- DX-01: 当前 lag alignment 在 error 序列上平移而非 action-qpos 对齐
+- 记入技术债，后续版本处理
+
+### 相关文档
+
+- v1.2 设计文档：`software/rddqf_v1_2_platform_enhancement_agent_guide.tex`

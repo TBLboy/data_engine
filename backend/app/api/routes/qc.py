@@ -1405,6 +1405,7 @@ def dataset_export_episodes(
     from app.services.dataset_service import DatasetExportService
     fmt = payload.get('format', 'csv')
     content, mime_type, count = DatasetExportService.export_episodes(db, task_type_id, fmt)
+    DatasetExportService.record_export(db, task_type_id, fmt, count, created_by=current_user.name)
     return StreamingResponse(
         io.BytesIO(content),
         media_type=mime_type,
@@ -1432,3 +1433,102 @@ def recompute_batch_decision(
         'failureRate': log.failure_rate,
         'reason': log.decision_reason,
     }
+
+
+# ── RDDQF v1.2: 导出历史 ──
+
+@router.get('/dataset/exports')
+def dataset_export_history(
+    task_type_id: str = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.services.dataset_service import DatasetExportService
+    return DatasetExportService.export_history(db, task_type_id)
+
+
+# ── RDDQF v1.2: 管理员任务池管理 ──
+
+@router.get('/admin/reviewers/{reviewer_id}/tasks')
+def admin_get_reviewer_tasks(
+    reviewer_id: str,
+    status: str = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    from app.services.reviewer_task_manager import ReviewerTaskManager
+    return ReviewerTaskManager.get_reviewer_tasks(db, reviewer_id, status)
+
+
+@router.post('/admin/qc-tasks/{task_id}/revoke')
+def admin_revoke_task(
+    task_id: str,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    from app.services.reviewer_task_manager import ReviewerTaskManager
+    try:
+        return ReviewerTaskManager.revoke_task(db, task_id, current_user.id, payload.get('reason', ''))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post('/admin/qc-tasks/{task_id}/reassign')
+def admin_reassign_task(
+    task_id: str,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    from app.services.reviewer_task_manager import ReviewerTaskManager
+    try:
+        return ReviewerTaskManager.reassign_task(
+            db, task_id, payload.get('toReviewerId', ''), current_user.id, payload.get('reason', '')
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post('/admin/qc-tasks/{task_id}/release')
+def admin_release_task(
+    task_id: str,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    from app.services.reviewer_task_manager import ReviewerTaskManager
+    try:
+        return ReviewerTaskManager.release_task(db, task_id, current_user.id, payload.get('reason', ''))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post('/admin/qc-tasks/bulk-revoke')
+def admin_bulk_revoke(
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    from app.services.reviewer_task_manager import ReviewerTaskManager
+    return ReviewerTaskManager.bulk_revoke(
+        db, payload.get('taskIds', []), current_user.id, payload.get('reason', '')
+    )
+
+
+@router.post('/admin/qc-tasks/bulk-reassign')
+def admin_bulk_reassign(
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    from app.services.reviewer_task_manager import ReviewerTaskManager
+    return ReviewerTaskManager.bulk_reassign(
+        db, payload.get('taskIds', []), payload.get('toReviewerId', ''), current_user.id, payload.get('reason', '')
+    )

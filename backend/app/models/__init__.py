@@ -12,7 +12,7 @@ from app.models.l3_v2_config import L3V2Config
 from app.models.audit import AuditEvent
 from app.models.batch import Batch
 from app.models.episode import Episode
-from app.models.qc import BatchDecisionLog, QcReviewRevision, QcTask
+from app.models.qc import BatchDecisionLog, DatasetExportJob, QcReviewRevision, QcTask, TaskOperationLog
 from app.models.task_type import TaskType
 from app.models.user import User
 
@@ -29,8 +29,10 @@ __all__ = [
     'EpisodeObject',
     'ListRecord',
     'BatchDecisionLog',
+    'DatasetExportJob',
     'QcReviewRevision',
     'QcTask',
+    'TaskOperationLog',
     'ScanJob',
     'TaskType',
     'User',

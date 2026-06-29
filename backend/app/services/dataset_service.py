@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.models import Batch, Episode, TaskType
+from app.models import Batch, DatasetExportJob, Episode, TaskType
 
 
 class DatasetSummaryService:
@@ -31,7 +31,6 @@ class DatasetSummaryService:
         rejected = sum(1 for b in batches if b.batch_decision == 'REJECTED')
         pending = sum(1 for b in batches if b.batch_decision == 'PENDING')
 
-        # Count by decision source
         source_counts = {}
         for e in episodes:
             src = e.final_decision_source
@@ -81,7 +80,7 @@ class DatasetSummaryService:
 
 
 class DatasetExportService:
-    """Export qualified episode metadata as CSV or JSON."""
+    """Export qualified episode metadata as CSV or JSON with full v1.2 fields."""
 
     EXPORT_FIELDS = [
         ('episode_id', lambda e: e.id),
@@ -90,23 +89,26 @@ class DatasetExportService:
         ('batch_name', lambda e: e.batch.name if e.batch else ''),
         ('final_dataset_status', lambda e: e.final_dataset_status),
         ('final_decision_source', lambda e: e.final_decision_source),
+        ('final_decision_reason', lambda e: e.final_decision_reason),
         ('manual_qc_status', lambda e: e.manual_qc_status),
-        ('final_decided_at', lambda e: e.final_decided_at.isoformat() if e.final_decided_at else ''),
+        ('reviewer', lambda e: e.reviewer if e.reviewer and e.reviewer != '-' else ''),
+        ('reason_code', lambda e: e.reason_code if e.reason_code and e.reason_code != '-' else ''),
         ('duration_sec', lambda e: e.duration_sec),
         ('frame_count', lambda e: e.frame_count),
-        ('reason_code', lambda e: e.reason_code),
+        ('final_decided_at', lambda e: e.final_decided_at.isoformat() if e.final_decided_at else ''),
+        ('updated_at', lambda e: e.updated_at.isoformat() if e.updated_at else ''),
     ]
 
     @classmethod
-    def export_episodes(cls, db: Session, task_type_id: str, fmt: str = 'csv') -> tuple[bytes, str, int]:
-        """Export qualified episodes for a task type.
-
-        Returns (file_content, mime_type, episode_count).
-        """
-        episodes = db.query(Episode).filter(
+    def _get_episodes(cls, db: Session, task_type_id: str):
+        return db.query(Episode).filter(
             Episode.batch.has((Batch.task_type_id == task_type_id) & (Batch.is_active == True)),
             Episode.final_dataset_status == 'QUALIFIED',
         ).order_by(Episode.id).all()
+
+    @classmethod
+    def export_episodes(cls, db: Session, task_type_id: str, fmt: str = 'csv') -> tuple[bytes, str, int]:
+        episodes = cls._get_episodes(db, task_type_id)
 
         if fmt == 'json':
             data = []
@@ -115,7 +117,7 @@ class DatasetExportService:
                 data.append(row)
             content = json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8')
             return content, 'application/json', len(episodes)
-        else:  # csv
+        else:
             output = io.StringIO()
             writer = csv.writer(output)
             writer.writerow([field for field, _ in cls.EXPORT_FIELDS])
@@ -123,3 +125,34 @@ class DatasetExportService:
                 writer.writerow([fn(e) for _, fn in cls.EXPORT_FIELDS])
             content = output.getvalue().encode('utf-8-sig')
             return content, 'text/csv', len(episodes)
+
+    @classmethod
+    def record_export(cls, db: Session, task_type_id: str, fmt: str, episode_count: int, created_by: str = '') -> DatasetExportJob:
+        job = DatasetExportJob(
+            task_type_id=task_type_id,
+            export_format=fmt,
+            episode_count=episode_count,
+            created_by=created_by or 'system',
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        return job
+
+    @classmethod
+    def export_history(cls, db: Session, task_type_id: str | None = None) -> list[dict]:
+        query = db.query(DatasetExportJob).order_by(DatasetExportJob.created_at.desc())
+        if task_type_id:
+            query = query.filter(DatasetExportJob.task_type_id == task_type_id)
+        jobs = query.limit(50).all()
+        return [
+            {
+                'id': j.id,
+                'taskTypeId': j.task_type_id,
+                'exportFormat': j.export_format,
+                'episodeCount': j.episode_count,
+                'createdBy': j.created_by,
+                'createdAt': j.created_at.isoformat() if j.created_at else None,
+            }
+            for j in jobs
+        ]

@@ -1,0 +1,1364 @@
+
+\documentclass[UTF8,zihao=-4]{ctexart}
+\usepackage[a4paper,top=2.25cm,bottom=2.3cm,left=2.35cm,right=2.35cm]{geometry}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setmainfont{DejaVu Sans}
+\setsansfont{DejaVu Sans}
+\setmonofont{Noto Sans Mono}
+\setCJKmainfont{Noto Sans CJK SC}
+\setCJKsansfont{Noto Sans CJK SC}
+\setCJKmonofont{Noto Sans CJK SC}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{lastpage}
+\usepackage{pifont}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{makecell}
+\usepackage{seqsplit}
+\hypersetup{colorlinks=true,linkcolor=black,urlcolor=blue,citecolor=black}
+\definecolor{RuleBlue}{RGB}{25,74,135}
+\definecolor{LightBlue}{RGB}{236,243,252}
+\definecolor{LightGray}{RGB}{247,247,247}
+\definecolor{LightYellow}{RGB}{255,249,230}
+\definecolor{DarkGray}{RGB}{80,80,80}
+\definecolor{WarnOrange}{RGB}{172,103,0}
+\definecolor{RejectRed}{RGB}{150,35,35}
+\definecolor{PassGreen}{RGB}{38,118,82}
+\definecolor{DiagnosticPurple}{RGB}{105,72,145}
+\titleformat{\section}{\Large\bfseries\color{RuleBlue}}{\thesection}{0.8em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.8em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{0.8em}{}
+\setlist[itemize]{topsep=3pt,itemsep=2pt,parsep=0pt,leftmargin=1.9em}
+\setlist[enumerate]{topsep=3pt,itemsep=2pt,parsep=0pt,leftmargin=2.2em}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcommand{\Pass}{\textcolor{PassGreen}{\ding{51}}}
+\newcommand{\Warn}{\textcolor{WarnOrange}{\ding{115}}}
+\newcommand{\Reject}{\textcolor{RejectRed}{\ding{55}}}
+\newcommand{\Diag}{\textcolor{DiagnosticPurple}{\ding{72}}}
+\newcommand{\Code}[1]{\texttt{#1}}
+\newcommand{\MID}[1]{\texttt{\seqsplit{#1}}}
+\newcommand{\Term}[1]{\textbf{#1}}
+\newcommand{\PathNode}[1]{\textsf{#1}}
+\newenvironment{notebox}[1]{\vspace{0.5em}\noindent\colorbox{LightBlue}{\parbox{0.96\linewidth}{\textbf{#1}}}\par\vspace{-0.2em}\begin{quote}\small}{\end{quote}\vspace{0.3em}}
+\newenvironment{decisionbox}[1]{\vspace{0.5em}\noindent\colorbox{LightGray}{\parbox{0.96\linewidth}{\textbf{#1}}}\par\vspace{-0.2em}\begin{quote}\small}{\end{quote}\vspace{0.3em}}
+\newenvironment{warningbox}[1]{\vspace{0.5em}\noindent\colorbox{LightYellow}{\parbox{0.96\linewidth}{\textbf{#1}}}\par\vspace{-0.2em}\begin{quote}\small}{\end{quote}\vspace{0.3em}}
+\hypersetup{pdftitle={Robot Demonstration Metric Library v1.0}, pdfauthor={ChatGPT for Lingji Qiwuzhi}}
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{Robot Demonstration Metric Library v1.0}
+\rhead{RDDQF / L3 v2}
+\cfoot{第 \thepage\ 页 / 共 \pageref{LastPage} 页}
+\begin{document}
+
+\begin{titlepage}
+\centering
+\vspace*{2.2cm}
+{\Huge\bfseries 机器人 Demonstration 指标库\par}
+\vspace{0.35cm}
+{\Large Robot Demonstration Metric Library\par}
+\vspace{0.6cm}
+{\LARGE v1.0\par}
+\vspace{1.15cm}
+\begin{tabular}{rl}
+文档定位： & RDDQF 指标库与 L3 v2 指标规范前置文档 \\
+适用系统： & 灵机启物机器人数采质检平台 / L3 v2 \\
+上游数据： & Linker Open TeleDex processed 数据、L2/L4 人工质检结果、批次元数据 \\
+承接文档： & Training Data Quality Standard、Quality Ontology、Evidence Specification \\
+输出对象： & Metric Specification、Algorithm Specification、L3MetricsEngine v2、UI 与离线报告 \\
+核心原则： & 指标服务于训练数据质量，而不是服务于机器人控制器评分 \\
+\end{tabular}
+\vfill
+\begin{minipage}{0.88\linewidth}
+\centering\large\bfseries
+本指标库不把某一个公式直接等同于质量，而是将每个指标定位为“质量本体-证据-算法”链路中的可替换计算单元。指标可以升级，质量语义必须稳定。
+\end{minipage}
+\vfill
+{\large 2026 年 6 月\par}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section*{执行摘要}
+\addcontentsline{toc}{section}{执行摘要}
+
+本文档定义 RDDQF（Robot Demonstration Data Quality Framework）中的指标库层。此前的 Training Data Quality Standard 已经明确 L3 v2 的目标是评估 demonstration 对下游策略学习的训练价值，而不是评估机器人控制器执行精度；Quality Ontology 将训练数据质量拆解为可学习性、任务语义质量、示范行为质量、动作标签质量、状态与轨迹质量、观测质量、数据完整性与同步、数据集级质量和执行诊断等维度；Evidence Specification 定义了支撑这些质量判断的证据结构。本文档在此基础上进一步回答：每类证据应当落到哪些候选指标上，哪些指标应进入 L3 v2 初始实现，哪些指标应作为未来扩展，哪些指标只能作为诊断而不能作为训练价值主评分项。
+
+本文档给出 60 个指标条目。每个条目包含指标 ID、所属本体路径、优先级、依赖数据、学习意义、候选算法和注意事项。它不是最终公式文档，也不是 Python 实现文档，而是后续 Metric Specification 和 Algorithm Specification 的总索引。通过这份指标库，L3 v2 可以从旧版的“若干硬编码指标加权平均”升级为“质量本体驱动、证据支撑、指标可替换、算法可演进”的训练数据质量评价系统。
+
+\begin{notebox}{本版本的关键结论}
+旧版 L3 中的 LDLJ、Dead、Static、Saturation、Jitter、Tracking、Chatter、Effort 并非全部错误，但它们的语义需要重定位。LDLJ 应成为平滑性候选算法；Dead/Static 应迁移为低学习信号证据；Saturation 应迁移为动作语义风险；Jitter/Sync 是数据完整性指标；Tracking/Effort 应归为执行诊断，不应作为训练价值主评分项。
+\end{notebox}
+
+\section{文档定位}
+
+\subsection{指标库在 RDDQF 中的位置}
+
+RDDQF 推荐的设计链路如下：
+
+\begin{verbatim}
+Training Data Quality Standard
+        -> Quality Ontology
+        -> Evidence Specification
+        -> Metric Library
+        -> Metric Specification
+        -> Algorithm Specification
+        -> L3MetricsEngine v2
+\end{verbatim}
+
+Metric Library 的职责不是给出最终阈值，也不是直接实现公式，而是建立一个稳定的指标索引。它让团队能够清楚回答：某个指标为什么存在、服务哪个质量维度、依赖哪些证据、使用哪些数据、是否可以定位 timeline、是否适合作为评分项、是否只是诊断项。
+
+\subsection{Metric、Evidence 与 Algorithm 的区别}
+
+\begin{longtable}{L{3.2cm} L{4.0cm} L{6.8cm}}
+\toprule
+层级 & 回答的问题 & 示例 \\
+\midrule
+Quality Ontology & 评价什么质量 & Demonstration Behavior / Smoothness \\
+Evidence & 用什么现象支持判断 & 轨迹高频抖动、动作跳变、速度不连续 \\
+Metric & 形成什么可计算指标 & 示范轨迹平滑性、动作平滑性、末端轨迹平滑性 \\
+Algorithm & 具体怎么算 & LDLJ、SPARC、jerk RMS、频谱能量 \\
+Threshold & 怎么判定好坏 & 任务内 P80/P95、人工 approved 样本标定 \\
+\bottomrule
+\end{longtable}
+
+\subsection{设计原则}
+
+\begin{enumerate}
+  \item \Term{训练价值优先}：指标必须解释其对下游 policy learning 的影响。
+  \item \Term{质量语义稳定}：Smoothness、Learnability、Task Completion 等质量节点不因算法替换而改变。
+  \item \Term{算法可替换}：一个指标可以有多个候选算法，初期实现简单算法，后期升级统计或学习算法。
+  \item \Term{诊断与评分分离}：Tracking Error、Effort、IMU shock 等指标可以解释异常，但不能默认降低训练价值主分。
+  \item \Term{Episode 与 Dataset 分离}：单条 demonstration 质量和数据集发布质量是两个层级，不能混成一个分数。
+  \item \Term{任务类型感知}：任何与动作幅度、阶段、终态、效率相关的指标最终都需要按任务类型标定。
+\end{enumerate}
+
+\section{指标对象模型}
+
+每个指标推荐定义为一个结构化对象。后续数据库、API、前端卡片和离线报告都可以直接围绕此对象展开。
+
+\begin{longtable}{L{3.8cm} L{2.7cm} L{7.0cm}}
+\toprule
+字段 & 类型 & 说明 \\
+\midrule
+\Code{metric\_id} & string & 全局唯一 ID，例如 \MID{DBQ-01}。 \\
+\Code{name} & string & 指标中文名称。 \\
+\Code{ontology\_path} & list & 所属质量本体路径。 \\
+\Code{priority} & enum & Core/P0、Core/P1、Optional/P2、Advanced/P2、Diagnostic。 \\
+\Code{data\_sources} & list & 依赖数据字段或跨层结果。 \\
+\Code{learning\_impact} & text & 为什么影响模型训练。 \\
+\Code{candidate\_algorithms} & list & 候选算法，允许多版本并存。 \\
+\Code{scope} & enum & frame、window、segment、episode、batch、dataset。 \\
+\Code{score\_role} & enum & gate、score、explain、diagnostic、calibration。 \\
+\Code{timeline\_support} & bool & 是否可定位异常时间段。 \\
+\Code{task\_sensitive} & bool & 是否需要按任务类型标定。 \\
+\Code{implementation\_phase} & enum & MVP、v2.1、v2.2、research。 \\
+\bottomrule
+\end{longtable}
+
+\section{一级指标目录}
+
+\begin{longtable}{L{5.0cm} L{8.2cm}}
+\toprule
+指标族 & 设计目的 \\
+\midrule
+Learnability Metrics & 判断样本是否包含足够、清晰、连续的学习信号。 \\
+Task-Semantic Quality Metrics & 判断 demonstration 是否与任务目标、prompt 和关键阶段一致。 \\
+Demonstration Behavior Metrics & 判断操作者示范是否自然、平滑、高效、少犹豫。 \\
+Action Label Quality Metrics & 判断训练标签 actions 是否合法、连续、平滑、语义合理。 \\
+State and Trajectory Metrics & 判断实际状态与末端轨迹是否稳定、平滑、物理可解释。 \\
+Observation Quality Metrics & 引用和整合 L2 视觉质量及多模态观测可用性。 \\
+Data Integrity and Synchronization Metrics & 保证训练样本字段完整、时间轴稳定、多模态同步可靠。 \\
+Dataset-Level Metrics & 评价数据集发布层面的覆盖度、多样性、去重和质量分布。 \\
+Execution Diagnostics Metrics & 诊断控制器、硬件和执行异常，不直接等同于训练价值。 \\
+\bottomrule
+\end{longtable}
+
+\section{Learnability Metrics}
+
+Learnability 指标关注 demonstration 是否为下游策略学习提供足够、清晰、连续的监督信号。它们直接回答“模型能从这条数据中学到什么”。
+
+
+\subsection{LRN-01 有效动作信息密度}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{LRN-01} \\
+所属本体路径 & Learnability / Information Density \\
+优先级 & Core/P0 \\
+依赖数据 & \Code{actions,qpos,timestamps} \\
+学习意义 & 衡量 episode 中真正携带动作学习信号的时间比例。用于避免大量静止、等待或空动作片段进入训练集。 \\
+候选算法 & 基于 action delta、qpos delta、窗口内方差、有效动作窗口占比。 \\
+注意事项 & 不要把任务所需的保持、等待、夹持稳定阶段误判为低价值；需要结合任务阶段解释。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{LRN-02 低信号持续时间比例}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{LRN-02} \\
+所属本体路径 & Learnability / Low-Signal Duration \\
+优先级 & Core/P0 \\
+依赖数据 & \Code{actions,qpos,qvel} \\
+学习意义 & 统计长时间动作变化和状态变化都很小的片段。重点识别对策略学习贡献低的冗余段。 \\
+候选算法 & 滑动窗口内 action 与 state 变化低于任务自适应阈值的累计时长比例。 \\
+注意事项 & 与旧版 Dead/Static 相关，但语义从“机器人不动”改为“学习信号不足”。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{LRN-03 状态变化覆盖度}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{LRN-03} \\
+所属本体路径 & Learnability / State Change Coverage \\
+优先级 & Core/P1 \\
+依赖数据 & \Code{qpos,ee\_poses,timestamps} \\
+学习意义 & 判断 demonstration 是否产生足够状态变化，尤其是是否覆盖接近、抓取、移动、释放等关键运动阶段。 \\
+候选算法 & joint/EE 空间覆盖范围、分段变化量、主成分覆盖度。 \\
+注意事项 & 任务本身短或局部动作小的场景需要独立基线。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{LRN-04 动作-观测耦合度}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{LRN-04} \\
+所属本体路径 & Learnability / Action-Observation Coupling \\
+优先级 & Advanced/P2 \\
+依赖数据 & \Code{video,actions,qpos,depth} \\
+学习意义 & 衡量动作标签变化是否对应可观察的视觉或状态变化。若动作频繁变化但画面与状态无响应，训练标签可能噪声大。 \\
+候选算法 & action delta 与 optical flow、EE displacement、object state change 的相关性。 \\
+注意事项 & 需要视觉特征或 VLM/CV 模块；初期可作为离线研究指标。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{LRN-05 可学习片段比例}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{LRN-05} \\
+所属本体路径 & Learnability / Learnable Segment Ratio \\
+优先级 & Core/P1 \\
+依赖数据 & \Code{actions,qpos,timeline,L2,L4} \\
+学习意义 & 从整条 episode 中估计可直接用于训练的片段比例，为后续自动裁剪和数据集构建服务。 \\
+候选算法 & 基于数据完整、动作有效、观测可用、无严重异常的窗口比例。 \\
+注意事项 & 这是片段级指标，不宜只输出 episode 级平均值。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{LRN-06 任务进展单调性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{LRN-06} \\
+所属本体路径 & Learnability / Progress Monotonicity \\
+优先级 & Advanced/P2 \\
+依赖数据 & \Code{video,ee\_poses,task\_prompt,L4} \\
+学习意义 & 评价 demonstration 是否沿着任务目标持续推进，而不是大量来回试探。 \\
+候选算法 & 阶段识别后的进展得分、目标距离趋势、关键对象状态变化趋势。 \\
+注意事项 & 需要任务语义模型；适合在有任务模板后逐步实现。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{LRN-07 标签稀疏性风险}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{LRN-07} \\
+所属本体路径 & Learnability / Label Sparsity Risk \\
+优先级 & Optional/P1 \\
+依赖数据 & \Code{actions,timestamps} \\
+学习意义 & 识别 action 序列长期恒定或变化极低，导致监督信号稀疏的风险。 \\
+候选算法 & action entropy、delta entropy、non-zero command ratio。 \\
+注意事项 & 夹持保持阶段可能合法，应和阶段标签或接触证据联合判断。 \\
+\bottomrule
+\end{longtable}
+
+\section{Task-Semantic Quality Metrics}
+
+任务语义质量指标关注 demonstration 是否围绕正确任务展开、是否覆盖关键阶段、是否与 prompt 和目标状态一致。
+
+
+\subsection{TSQ-01 任务完成引用指标}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{TSQ-01} \\
+所属本体路径 & Task-Semantic Quality / Completion \\
+优先级 & Cross-Layer/P0 \\
+依赖数据 & \Code{L4 result,task\_prompt,video} \\
+学习意义 & 将 L4 的人工任务完成度作为训练数据资格的强门控输入。L3 不替代 L4，但应消费 L4 结果。 \\
+候选算法 & 来自人工 Pass/Fail、主原因码、备注，以及后续 VLM 辅助结果。 \\
+注意事项 & 未完成任务的数据不一定完全丢弃，可进入失败恢复或负样本数据集。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{TSQ-02 任务语义一致性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{TSQ-02} \\
+所属本体路径 & Task-Semantic Quality / Semantic Alignment \\
+优先级 & Advanced/P2 \\
+依赖数据 & \Code{task\_prompt,video,actions} \\
+学习意义 & 判断 episode 内容是否与 task prompt 一致，避免 prompt 错配或采错任务。 \\
+候选算法 & VLM 事件识别、关键对象检测、动作阶段与 prompt 对齐。 \\
+注意事项 & 短期可通过人工原因码；长期适合 VLM 自动辅助。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{TSQ-03 关键阶段覆盖度}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{TSQ-03} \\
+所属本体路径 & Task-Semantic Quality / Phase Coverage \\
+优先级 & Core/P1 \\
+依赖数据 & \Code{video,ee\_poses,actions,L4} \\
+学习意义 & 评估 demonstration 是否包含完整任务阶段，而不只是任务开始或结束的一部分。 \\
+候选算法 & 基于阶段模板或弱监督阶段切分的覆盖率。 \\
+注意事项 & 不同任务模板差异很大，需要按任务类型配置。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{TSQ-04 目标状态变化证据}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{TSQ-04} \\
+所属本体路径 & Task-Semantic Quality / Goal State Change \\
+优先级 & Advanced/P2 \\
+依赖数据 & \Code{video,depth,pointcloud,L4} \\
+学习意义 & 检测目标对象或环境是否发生了与任务相关的状态变化。 \\
+候选算法 & 对象位姿变化、容器内容变化、开合状态变化、接触后位移。 \\
+注意事项 & 需要视觉/深度/点云算法，适合未来扩展。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{TSQ-05 失败恢复价值}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{TSQ-05} \\
+所属本体路径 & Task-Semantic Quality / Recovery Value \\
+优先级 & Optional/P2 \\
+依赖数据 & \Code{video,actions,qpos,L4} \\
+学习意义 & 识别失败后成功恢复的片段是否具有训练价值，避免简单地把所有非理想过程视为废片。 \\
+候选算法 & 错误-修正-成功模式检测、回退动作、二次抓取识别。 \\
+注意事项 & 恢复过程对通用策略有价值，但需单独标注，不宜混入纯成功数据集。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{TSQ-06 任务边界完整性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{TSQ-06} \\
+所属本体路径 & Task-Semantic Quality / Episode Boundary \\
+优先级 & Core/P1 \\
+依赖数据 & \Code{video,actions,qpos,timestamps} \\
+学习意义 & 判断 episode 起止是否干净，例如是否缺少初始准备或结束稳定阶段。 \\
+候选算法 & 起止窗口动作/状态/视觉稳定性、第一关键动作时间、结束静止时间。 \\
+注意事项 & 用于自动裁剪；不一定用于拒绝整条数据。 \\
+\bottomrule
+\end{longtable}
+
+\section{Demonstration Behavior Metrics}
+
+示范行为质量指标关注操作者示范是否自然、流畅、高效、少犹豫、少反复修正。
+
+
+\subsection{DBQ-01 示范轨迹平滑性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DBQ-01} \\
+所属本体路径 & Demonstration Behavior / Smoothness \\
+优先级 & Core/P0 \\
+依赖数据 & \Code{actions,qpos,ee\_poses,timestamps} \\
+学习意义 & 评价操作者示范动作是否连续、平滑，避免模型学习到抖动或高频控制噪声。 \\
+候选算法 & LDLJ、SPARC、EE jerk、command jerk、finger jerk。 \\
+注意事项 & 平滑性应优先服务训练，而不是只反映机器人动力学。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{DBQ-02 运动连续性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DBQ-02} \\
+所属本体路径 & Demonstration Behavior / Continuity \\
+优先级 & Core/P0 \\
+依赖数据 & \Code{actions,qpos,qvel,timestamps} \\
+学习意义 & 识别不自然的断续、跳变、突停、突然大幅反向等行为。 \\
+候选算法 & 速度/加速度连续性、action jump、state jump、窗口切换异常。 \\
+注意事项 & 与数据缺帧和控制命令异常要区分。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{DBQ-03 犹豫与停顿比例}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DBQ-03} \\
+所属本体路径 & Demonstration Behavior / Hesitation \\
+优先级 & Core/P1 \\
+依赖数据 & \Code{actions,qpos,qvel,video} \\
+学习意义 & 衡量操作员是否存在大量犹豫、等待、反复微调，影响学习效率和动作自然性。 \\
+候选算法 & 低速窗口、接近目标前停顿、反复小幅动作、关键阶段停滞。 \\
+注意事项 & 有些任务需要等待物体稳定，应结合任务阶段判断。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{DBQ-04 重复修正率}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DBQ-04} \\
+所属本体路径 & Demonstration Behavior / Repetition and Correction \\
+优先级 & Core/P1 \\
+依赖数据 & \Code{actions,qpos,ee\_poses} \\
+学习意义 & 识别反复接近、撤回、再接近等低效示范。 \\
+候选算法 & motion reversal count、EE path self-overlap、目标附近往返次数。 \\
+注意事项 & 失败恢复片段不应完全扣分，应进入 Recovery Value 解释。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{DBQ-05 轨迹效率}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DBQ-05} \\
+所属本体路径 & Demonstration Behavior / Trajectory Efficiency \\
+优先级 & Core/P1 \\
+依赖数据 & \Code{ee\_poses,qpos,video} \\
+学习意义 & 评价路径是否过度绕行。效率高的示范更利于模型形成清晰策略。 \\
+候选算法 & 实际路径长度 / 起终点距离、EE path tortuosity、阶段路径效率。 \\
+注意事项 & 抓取避障任务不能简单用直线最短路径评价。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{DBQ-06 动作自然性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DBQ-06} \\
+所属本体路径 & Demonstration Behavior / Naturalness \\
+优先级 & Optional/P2 \\
+依赖数据 & \Code{actions,qpos,ee\_poses,operator\_id} \\
+学习意义 & 评估示范是否接近人类自然操作习惯，避免极端、机械、不可泛化动作。 \\
+候选算法 & 由平滑性、连续性、速度形态、节律、同类任务统计分布共同支持。 \\
+注意事项 & 不建议单独公式化，适合作为聚合维度。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{DBQ-07 节律一致性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DBQ-07} \\
+所属本体路径 & Demonstration Behavior / Rhythm Consistency \\
+优先级 & Optional/P2 \\
+依赖数据 & \Code{actions,qpos,timestamps} \\
+学习意义 & 衡量动作节奏是否稳定，例如接近、抓取、移动、释放阶段是否存在异常快慢切换。 \\
+候选算法 & velocity profile、phase duration variance、normalized temporal profile。 \\
+注意事项 & 同一任务需建立阶段时间分布。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{DBQ-08 单次示范成功度}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DBQ-08} \\
+所属本体路径 & Demonstration Behavior / One-Shotness \\
+优先级 & Optional/P2 \\
+依赖数据 & \Code{video,actions,L4} \\
+学习意义 & 衡量是否一次完成关键操作，还是多次尝试后才成功。 \\
+候选算法 & 关键对象接触次数、抓取尝试次数、失败尝试计数。 \\
+注意事项 & 多次尝试不是绝对坏数据，但会影响纯模仿学习标签清晰度。 \\
+\bottomrule
+\end{longtable}
+
+\section{Action Label Quality Metrics}
+
+动作标签质量指标关注训练标签 actions 本身是否合法、连续、平滑、语义合理。
+
+
+\subsection{ALQ-01 动作值域合法性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{ALQ-01} \\
+所属本体路径 & Action Label Quality / Range Validity \\
+优先级 & Core/P0 \\
+依赖数据 & \Code{actions,device\_info,metadata} \\
+学习意义 & 检查 action 是否处于对应机械臂/灵巧手的合法数值体系。 \\
+候选算法 & arm rad 范围、hand 0-255 范围、NaN/Inf、超界比例。 \\
+注意事项 & 手部 0/255 可能合法，不能简单视作饱和坏数据。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{ALQ-02 动作跳变率}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{ALQ-02} \\
+所属本体路径 & Action Label Quality / Command Jump \\
+优先级 & Core/P0 \\
+依赖数据 & \Code{actions,timestamps} \\
+学习意义 & 识别 action 标签中的不连续大跳变，避免模型学习到物理不可实现或采集异常动作。 \\
+候选算法 & 相邻帧 delta、速度上限、加速度上限、P99/P95 jump。 \\
+注意事项 & 需要区分真实快速动作和数据对齐/插值异常。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{ALQ-03 动作平滑性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{ALQ-03} \\
+所属本体路径 & Action Label Quality / Command Smoothness \\
+优先级 & Core/P0 \\
+依赖数据 & \Code{actions,timestamps} \\
+学习意义 & 直接评价训练标签本身是否平滑。对于预测 action 的策略模型，这是最直接的标签质量指标。 \\
+候选算法 & action jerk、action SPARC、delta RMS、频谱能量。 \\
+注意事项 & 应按 arm 与 hand 分开计算，避免单位混合。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{ALQ-04 动作熵与变化分布}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{ALQ-04} \\
+所属本体路径 & Action Label Quality / Action Entropy \\
+优先级 & Core/P1 \\
+依赖数据 & \Code{actions} \\
+学习意义 & 评价 action 标签是否过于单一或过度随机。 \\
+候选算法 & delta entropy、histogram entropy、per-dim active ratio。 \\
+注意事项 & 不是越大越好，目标是处于任务合理范围。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{ALQ-05 手指颤振}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{ALQ-05} \\
+所属本体路径 & Action Label Quality / Finger Chatter \\
+优先级 & Core/P1 \\
+依赖数据 & \Code{actions(hand),timestamps} \\
+学习意义 & 检测手部命令高频开合或方向反复翻转，避免模型学习到不稳定手部控制。 \\
+候选算法 & 方向翻转率、短窗口符号变化、频谱高频能量。 \\
+注意事项 & 旧版 Chatter 可迁移，但 timeline 需要降碎片化。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{ALQ-06 臂手协同一致性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{ALQ-06} \\
+所属本体路径 & Action Label Quality / Arm-Hand Coordination \\
+优先级 & Core/P1 \\
+依赖数据 & \Code{actions,ee\_poses,video} \\
+学习意义 & 判断机械臂接近目标与手部开合是否时序协调。 \\
+候选算法 & hand close/open 时刻与 EE/object 距离、接触阶段对齐。 \\
+注意事项 & 需要任务阶段或视觉接触证据，初期可做弱规则。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{ALQ-07 动作饱和语义风险}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{ALQ-07} \\
+所属本体路径 & Action Label Quality / Saturation Semantics \\
+优先级 & Diagnostic/P1 \\
+依赖数据 & \Code{actions,task\_type,hand\_model} \\
+学习意义 & 重新解释旧版 saturation：不是饱和即坏，而是识别是否出现不合理长时间极限命令。 \\
+候选算法 & 极限值持续时长、极限切换频率、任务阶段上下文。 \\
+注意事项 & 完全闭合/张开常常是合法动作，应作为语义风险而非硬扣分。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{ALQ-08 动作-状态延迟诊断}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{ALQ-08} \\
+所属本体路径 & Action Label Quality / Command-State Lag \\
+优先级 & Diagnostic/P1 \\
+依赖数据 & \Code{actions,qpos,timestamps} \\
+学习意义 & 估计 action 与 qpos 之间的响应滞后。主要用于诊断，不直接决定训练价值。 \\
+候选算法 & cross-correlation lag、dynamic time shift、tracking phase delay。 \\
+注意事项 & 与旧 Tracking Error 相关，但定位为诊断证据。 \\
+\bottomrule
+\end{longtable}
+
+\section{State and Trajectory Metrics}
+
+状态与轨迹质量指标关注实际机器人状态和末端执行器轨迹是否稳定、平滑、可解释。
+
+
+\subsection{STQ-01 关节轨迹平滑性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{STQ-01} \\
+所属本体路径 & State and Trajectory / Joint Smoothness \\
+优先级 & Core/P0 \\
+依赖数据 & \Code{qpos,qvel,timestamps} \\
+学习意义 & 评价实际机器人状态轨迹是否平滑，作为 demonstration 物理过程质量证据。 \\
+候选算法 & LDLJ、jerk RMS、velocity continuity、spectral smoothness。 \\
+注意事项 & 应避免被几乎不动维度稀释，可按 active DOF 计算。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{STQ-02 末端轨迹平滑性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{STQ-02} \\
+所属本体路径 & State and Trajectory / End-Effector Smoothness \\
+优先级 & Core/P1 \\
+依赖数据 & \Code{ee\_poses\_qpos,ee\_poses\_actions,timestamps} \\
+学习意义 & 用任务空间轨迹评价动作质量，比单纯 joint space 更接近任务学习。 \\
+候选算法 & EE position jerk、orientation angular velocity smoothness、SPARC。 \\
+注意事项 & 只有 ee\_poses 字段存在时启用。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{STQ-03 末端路径效率}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{STQ-03} \\
+所属本体路径 & State and Trajectory / End-Effector Path Efficiency \\
+优先级 & Core/P1 \\
+依赖数据 & \Code{ee\_poses\_qpos,video} \\
+学习意义 & 评价末端执行器是否存在过度绕行。 \\
+候选算法 & path length / displacement、曲率积分、阶段路径效率。 \\
+注意事项 & 避障和接触任务需要语义修正。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{STQ-04 速度轮廓质量}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{STQ-04} \\
+所属本体路径 & State and Trajectory / Velocity Profile \\
+优先级 & Optional/P2 \\
+依赖数据 & \Code{qvel,ee\_poses,timestamps} \\
+学习意义 & 判断速度是否呈现合理加速-匀速-减速形态，避免异常速度尖峰。 \\
+候选算法 & 速度峰值、速度峰次数、jerk峰、分位数形态。 \\
+注意事项 & 适合作为自然性和稳定性的证据。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{STQ-05 运动反向率}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{STQ-05} \\
+所属本体路径 & State and Trajectory / Reversal Rate \\
+优先级 & Core/P1 \\
+依赖数据 & \Code{qpos,ee\_poses,actions} \\
+学习意义 & 识别频繁来回动作，通常对应犹豫、修正或操作不稳定。 \\
+候选算法 & 速度符号翻转率、EE方向翻转、目标附近反向次数。 \\
+注意事项 & 必须过滤传感器噪声和低幅微动。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{STQ-06 端点稳定性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{STQ-06} \\
+所属本体路径 & State and Trajectory / Endpoint Stability \\
+优先级 & Core/P1 \\
+依赖数据 & \Code{qpos,ee\_poses,video} \\
+学习意义 & 评价任务结束时机器人是否稳定，防止未稳定即结束导致训练样本终态模糊。 \\
+候选算法 & 末尾窗口速度、EE抖动、手部状态变化、视觉目标稳定。 \\
+注意事项 & 适合用于自动裁剪和 L4 辅助复核。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{STQ-07 接触阶段稳定性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{STQ-07} \\
+所属本体路径 & State and Trajectory / Contact Stability \\
+优先级 & Optional/P2 \\
+依赖数据 & \Code{tactile,effort,video,ee\_poses} \\
+学习意义 & 抓取/接触任务中，检测接触后是否稳定。 \\
+候选算法 & 触觉合力稳定性、手指动作稳定性、目标物相对运动。 \\
+注意事项 & 需要 tactile 或视觉对象跟踪；当前可预留。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{STQ-08 双臂协调性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{STQ-08} \\
+所属本体路径 & State and Trajectory / Bimanual Coordination \\
+优先级 & Optional/P2 \\
+依赖数据 & \Code{qpos,actions,ee\_poses} \\
+学习意义 & 双臂任务中评价左右臂时序和空间协同。 \\
+候选算法 & 左右 EE 相对距离、同步相位、速度相关性、互补动作检测。 \\
+注意事项 & 单手任务不启用。 \\
+\bottomrule
+\end{longtable}
+
+\section{Observation Quality Metrics}
+
+观测质量指标不替代 L2，而是定义 L3/RDDQF 如何消费视觉、深度和多视角可用性结果。
+
+
+\subsection{OBQ-01 多视角视频可用性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{OBQ-01} \\
+所属本体路径 & Observation Quality / Multi-view Availability \\
+优先级 & Cross-Layer/P0 \\
+依赖数据 & \Code{manifest,video files,timestamps} \\
+学习意义 & 确认三路 RGB 视频是否存在、可读、帧数与 telemetry 可对齐。 \\
+候选算法 & 文件存在性、时长、帧数、编码可读性、timestamp 数量。 \\
+注意事项 & 与 L2 视觉质量共享数据，但 L3 需要消费其结论。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{OBQ-02 关键视角覆盖}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{OBQ-02} \\
+所属本体路径 & Observation Quality / View Coverage \\
+优先级 & Cross-Layer/P1 \\
+依赖数据 & \Code{video,task\_type,L2} \\
+学习意义 & 判断关键操作是否被至少一个视角有效看到。 \\
+候选算法 & 手/物体可见性、遮挡比例、目标区域覆盖率。 \\
+注意事项 & 初期可来自人工 L2；后期由检测模型支持。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{OBQ-03 视觉质量引用指标}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{OBQ-03} \\
+所属本体路径 & Observation Quality / L2 Visual Quality Reference \\
+优先级 & Cross-Layer/P0 \\
+依赖数据 & \Code{L2 result} \\
+学习意义 & 将 L2 的模糊、过曝、遮挡、深度异常等结论作为训练资格证据。 \\
+候选算法 & L2 Pass/Fail、原因码、严重时间段。 \\
+注意事项 & 不要在 L3 重复实现 L2，但应纳入总质量报告。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{OBQ-04 深度有效性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{OBQ-04} \\
+所属本体路径 & Observation Quality / Depth Validity \\
+优先级 & Optional/P1 \\
+依赖数据 & \Code{depth png,depth timestamps,camera\_info} \\
+学习意义 & 评价深度数据是否适合后续 3D 模型或点云训练。 \\
+候选算法 & 无效深度比例、深度孔洞、深度时间戳对齐、D2C状态。 \\
+注意事项 & 只在训练目标需要深度/点云时作为强指标。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{OBQ-05 视觉-动作时间一致性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{OBQ-05} \\
+所属本体路径 & Observation Quality / Visual-Action Alignment \\
+优先级 & Advanced/P2 \\
+依赖数据 & \Code{video,actions,timestamps} \\
+学习意义 & 判断动作变化和视觉变化是否存在系统性错位。 \\
+候选算法 & 光流/action 互相关、EE运动/视频运动峰值对齐。 \\
+注意事项 & 可作为同步异常的补充证据。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{OBQ-06 相机 IMU 稳定性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{OBQ-06} \\
+所属本体路径 & Observation Quality / Camera IMU Stability \\
+优先级 & Diagnostic/P1 \\
+依赖数据 & \Code{imu\_cam\_*} \\
+学习意义 & 识别相机剧烈晃动、碰撞或平台震动，影响视觉 observation 稳定性。 \\
+候选算法 & 加速度/角速度峰值、频谱能量、异常段。 \\
+注意事项 & 不是所有晃动都是坏数据，需结合视频和任务。 \\
+\bottomrule
+\end{longtable}
+
+\section{Data Integrity and Synchronization Metrics}
+
+数据完整性与同步指标是训练资格的底线，确保样本字段完整、时间轴稳定、多模态可对齐。
+
+
+\subsection{DIS-01 Telemetry 完整性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DIS-01} \\
+所属本体路径 & Data Integrity and Synchronization / Telemetry Completeness \\
+优先级 & Core/P0 \\
+依赖数据 & \Code{telemetry.npz} \\
+学习意义 & 检查核心字段是否存在、shape 是否一致、是否含 NaN/Inf。 \\
+候选算法 & 字段存在性、N/D一致性、finite ratio、空数组检测。 \\
+注意事项 & 强门控指标。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{DIS-02 时间戳单调性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DIS-02} \\
+所属本体路径 & Data Integrity and Synchronization / Timestamp Monotonicity \\
+优先级 & Core/P0 \\
+依赖数据 & \Code{timestamps} \\
+学习意义 & 确认时间轴递增且无异常重复或倒退。 \\
+候选算法 & dt<=0 数量、重复时间戳、负间隔。 \\
+注意事项 & 强门控指标。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{DIS-03 采样均匀性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DIS-03} \\
+所属本体路径 & Data Integrity and Synchronization / Sampling Regularity \\
+优先级 & Core/P0 \\
+依赖数据 & \Code{timestamps,manifest} \\
+学习意义 & 评价固定 FPS 对齐结果是否均匀。 \\
+候选算法 & dt CV、P95/P99 dt、缺口段、与 manifest dt 对比。 \\
+注意事项 & 旧版 Jitter 可迁移。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{DIS-04 同步有效性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DIS-04} \\
+所属本体路径 & Data Integrity and Synchronization / Sync Validity \\
+优先级 & Core/P0 \\
+依赖数据 & \Code{sync\_validation\_is\_valid,sync\_validation\_max\_diff,metadata} \\
+学习意义 & 评价多模态跨传感器时间同步是否满足训练要求。 \\
+候选算法 & invalid ratio、max diff、p95 diff、异常连续段。 \\
+注意事项 & 强门控或 warn，依据训练模态选择。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{DIS-05 媒体-遥测对齐完整性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DIS-05} \\
+所属本体路径 & Data Integrity and Synchronization / Media-Telemetry Alignment \\
+优先级 & Core/P1 \\
+依赖数据 & \Code{video timestamps,telemetry timestamps,manifest} \\
+学习意义 & 检查视频帧数和 telemetry 时间轴是否对应。 \\
+候选算法 & 起止时间差、帧数差、timestamp overlap ratio。 \\
+注意事项 & 对 VLA 训练非常重要。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{DIS-06 数据维度一致性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DIS-06} \\
+所属本体路径 & Data Integrity and Synchronization / DOF Consistency \\
+优先级 & Core/P0 \\
+依赖数据 & \Code{qpos,actions,qvel,effort,device\_info} \\
+学习意义 & 确认 qpos/actions/qvel/effort 维度一致，并与设备配置合理匹配。 \\
+候选算法 & D一致性、arm/hand 维度识别、全零维度记录。 \\
+注意事项 & 不是所有全零维度都是坏数据，但必须显式标记。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{DIS-07 裁剪边界有效性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DIS-07} \\
+所属本体路径 & Data Integrity and Synchronization / Trim Boundary Validity \\
+优先级 & Optional/P1 \\
+依赖数据 & \Code{metadata,manifest,timestamps} \\
+学习意义 & 确认 converter 的 global/trimmed valid range 是否合理。 \\
+候选算法 & trim duration、skip final frames、有效区间覆盖率。 \\
+注意事项 & 用于追踪上游转换异常。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{DIS-08 版本与格式兼容性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DIS-08} \\
+所属本体路径 & Data Integrity and Synchronization / Format Compatibility \\
+优先级 & Core/P1 \\
+依赖数据 & \Code{manifest,metadata} \\
+学习意义 & 确认数据格式版本、转换方式、字段集与当前 pipeline 兼容。 \\
+候选算法 & format\_version、conversion mode、required npz keys。 \\
+注意事项 & 避免混合旧格式数据导致训练字段缺失。 \\
+\bottomrule
+\end{longtable}
+
+\section{Dataset-Level Metrics}
+
+数据集级指标不评价单条 episode，而评价一个 dataset release 是否覆盖、多样、去重、分布健康。
+
+
+\subsection{DLQ-01 任务分布覆盖}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DLQ-01} \\
+所属本体路径 & Dataset-Level Quality / Task Coverage \\
+优先级 & Dataset/P2 \\
+依赖数据 & \Code{episode metadata,task tags} \\
+学习意义 & 评价一个数据集是否覆盖足够任务类型，而不是单一任务过拟合。 \\
+候选算法 & task histogram、long-tail ratio、任务层级覆盖。 \\
+注意事项 & 批次/数据集级，不属于单条 episode。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{DLQ-02 初始状态多样性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DLQ-02} \\
+所属本体路径 & Dataset-Level Quality / Initial State Diversity \\
+优先级 & Dataset/P2 \\
+依赖数据 & \Code{video,ee\_poses,qpos,metadata} \\
+学习意义 & 衡量同一任务中初始物体位置、机器人姿态和场景配置的多样性。 \\
+候选算法 & embedding diversity、initial qpos spread、object pose spread。 \\
+注意事项 & 需要场景/对象特征提取。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{DLQ-03 轨迹模式多样性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DLQ-03} \\
+所属本体路径 & Dataset-Level Quality / Trajectory Diversity \\
+优先级 & Dataset/P2 \\
+依赖数据 & \Code{actions,qpos,ee\_poses} \\
+学习意义 & 避免同一任务数据高度重复，提升模型泛化能力。 \\
+候选算法 & trajectory embedding clustering、DTW distance、路径形状分布。 \\
+注意事项 & 多样性不是 episode 级质量，而是 dataset release 级指标。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{DLQ-04 操作员多样性}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DLQ-04} \\
+所属本体路径 & Dataset-Level Quality / Operator Diversity \\
+优先级 & Dataset/P2 \\
+依赖数据 & \Code{operator\_id,batch metadata} \\
+学习意义 & 评估数据是否来自多个操作员和采集批次，避免单人风格偏置。 \\
+候选算法 & operator histogram、operator-task coverage matrix。 \\
+注意事项 & 需要元数据支持。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{DLQ-05 质量分布健康度}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DLQ-05} \\
+所属本体路径 & Dataset-Level Quality / Quality Distribution \\
+优先级 & Dataset/P1 \\
+依赖数据 & \Code{all metrics,L2,L4} \\
+学习意义 & 分析数据集内部质量分数分布，辅助阈值标定与版本发布。 \\
+候选算法 & score histogram、bad/warn/good ratio、任务内分布。 \\
+注意事项 & 用于报告和阈值校准。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{DLQ-06 近重复样本比例}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{DLQ-06} \\
+所属本体路径 & Dataset-Level Quality / Duplicate Ratio \\
+优先级 & Dataset/P2 \\
+依赖数据 & \Code{trajectory embeddings,video embeddings} \\
+学习意义 & 识别高度重复 demonstration，避免训练集容量被重复数据占用。 \\
+候选算法 & embedding nearest-neighbor、trajectory distance、video hash。 \\
+注意事项 & 大规模数据资产平台非常重要。 \\
+\bottomrule
+\end{longtable}
+
+\section{Execution Diagnostics Metrics}
+
+执行诊断指标用于解释机器人或控制器健康问题，但不应直接等同于训练价值。
+
+
+\subsection{EXD-01 命令跟踪误差诊断}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{EXD-01} \\
+所属本体路径 & Execution Diagnostics / Command Tracking Error \\
+优先级 & Diagnostic/P0 \\
+依赖数据 & \Code{actions,qpos,timestamps} \\
+学习意义 & 评价机器人实际状态与遥操作命令的偏差，用于控制器或执行健康诊断。 \\
+候选算法 & |actions-qpos| P95、lag-adjusted error、arm/hand separated error。 \\
+注意事项 & 不应作为训练价值主评分项；可作为解释和异常诊断。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{EXD-02 执行力/力矩异常}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{EXD-02} \\
+所属本体路径 & Execution Diagnostics / Effort Anomaly \\
+优先级 & Diagnostic/P1 \\
+依赖数据 & \Code{effort,timestamps} \\
+学习意义 & 识别异常负载、卡滞、碰撞或抓取用力异常。 \\
+候选算法 & effort P95/P99、spike count、持续高 effort 段。 \\
+注意事项 & 力矩语义受设备和任务影响大，需谨慎评分。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{EXD-03 碰撞/冲击疑似证据}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{EXD-03} \\
+所属本体路径 & Execution Diagnostics / Shock or Collision \\
+优先级 & Diagnostic/P2 \\
+依赖数据 & \Code{imu\_cam\_*,effort,video} \\
+学习意义 & 检测明显冲击或碰撞事件。 \\
+候选算法 & IMU spike、effort spike、视觉抖动、声音/触觉可选。 \\
+注意事项 & 作为人工复核触发器，不宜单独拒绝。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{EXD-04 控制响应滞后}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{EXD-04} \\
+所属本体路径 & Execution Diagnostics / Control Delay \\
+优先级 & Diagnostic/P1 \\
+依赖数据 & \Code{actions,qpos,timestamps} \\
+学习意义 & 估计机器人响应命令的系统延迟。 \\
+候选算法 & cross-correlation lag、lag distribution、per-DOF delay。 \\
+注意事项 & 用于上游 TeleDex/控制系统诊断。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{EXD-05 硬件健康风险}
+
+\begin{longtable}{L{3.6cm} L{9.6cm}}
+\toprule
+字段 & 内容 \\
+\midrule
+指标 ID & \MID{EXD-05} \\
+所属本体路径 & Execution Diagnostics / Hardware Health Risk \\
+优先级 & Diagnostic/P2 \\
+依赖数据 & \Code{effort,tracking,imu,batch stats} \\
+学习意义 & 从多条 episode 统计硬件异常风险。 \\
+候选算法 & 同设备长期 trend、tracking/effort 漂移、异常率变化。 \\
+注意事项 & 批次级诊断，非单条训练质量核心。 \\
+\bottomrule
+\end{longtable}
+
+\section{P0 / MVP 指标集合建议}
+
+第一版 L3 v2 不应一次实现全部指标，而应建立一个稳定、可解释、能替代旧 L3 v1 的 MVP 指标集合。推荐如下。
+
+\begin{longtable}{L{2.2cm} L{4.5cm} L{6.3cm}}
+\toprule
+ID & 指标 & 进入 MVP 的理由 \\
+\midrule
+DIS-01 & Telemetry 完整性 & 训练资格底线，任何字段缺失或 shape 不一致都应先拦截。 \\
+DIS-02 & 时间戳单调性 & 时间轴错误会破坏序列训练。 \\
+DIS-03 & 采样均匀性 & 替代旧版 Jitter，作为数据完整性指标保留。 \\
+DIS-04 & 同步有效性 & 多模态训练强依赖对齐。 \\
+ALQ-01 & 动作值域合法性 & 训练 label 必须合法。 \\
+ALQ-02 & 动作跳变率 & 识别标签异常与采集噪声。 \\
+ALQ-03 & 动作平滑性 & 直接评价模型要学习的 action label。 \\
+LRN-01 & 有效动作信息密度 & 避免大量低价值片段进入训练集。 \\
+LRN-02 & 低信号持续时间比例 & 替代旧版 Dead/Static 的训练视角解释。 \\
+DBQ-01 & 示范轨迹平滑性 & 保留 LDLJ 价值，但升级为平滑性证据之一。 \\
+DBQ-03 & 犹豫与停顿比例 & 体现 demonstration 行为质量。 \\
+STQ-01 & 关节轨迹平滑性 & 保留当前 telemetry 可直接计算能力。 \\
+STQ-02 & 末端轨迹平滑性 & 充分利用 TeleDex 的 ee\_poses 字段。 \\
+EXD-01 & 命令跟踪误差诊断 & 保留旧 Tracking，但降级为 diagnostic。 \\
+EXD-02 & 执行力/力矩异常 & 保留旧 Effort，但降级为 diagnostic。 \\
+\bottomrule
+\end{longtable}
+
+\section{旧版 L3 指标迁移表}
+
+\begin{longtable}{L{3.2cm} L{4.2cm} L{5.8cm}}
+\toprule
+旧指标 & 新定位 & 迁移说明 \\
+\midrule
+LDLJ & DBQ-01 / STQ-01 的候选算法 & 保留，但不再单独代表 Motion Quality；应增加 EE 和 hand 版本。 \\
+Dead Actions & LRN-01 / LRN-02 & 从“动作无效”改为“学习信号不足”。 \\
+Saturation & ALQ-07 & 从硬扣分改为动作语义风险，尤其要避免手部 0/255 误报。 \\
+Static & LRN-02 / DBQ-03 & 从“停滞”改为低信息片段或犹豫停顿证据。 \\
+Timestamp Jitter & DIS-03 & 保留为数据完整性指标。 \\
+Tracking Error & EXD-01 & 降级为执行诊断，不作为训练价值主分。 \\
+Chatter & ALQ-05 & 保留为手部动作标签质量指标，但优化 timeline 生成。 \\
+Effort & EXD-02 & 降级为执行诊断，主要用于卡滞/碰撞/硬件异常解释。 \\
+Q\_motion & 暂停使用旧语义 & 应替换为 Training Quality Score，并拆分主分与诊断分。 \\
+\bottomrule
+\end{longtable}
+
+\section{评分体系建议}
+
+\subsection{主分与诊断分分离}
+
+L3 v2 不建议继续使用单一 Q\_motion 汇总全部现象。推荐拆分为：
+
+\begin{itemize}
+  \item \Term{Training Quality Score}: 面向是否进入训练集的主评分。
+  \item \Term{Data Integrity Score}: 面向格式、字段、同步、时间轴的硬质量评分。
+  \item \Term{Action Label Quality Score}: 面向 actions 作为训练标签的质量评分。
+  \item \Term{Demonstration Behavior Score}: 面向操作者示范行为质量评分。
+  \item \Term{Execution Diagnostic Score}: 面向机器人执行/控制器健康诊断，不参与或弱参与主评分。
+\end{itemize}
+
+\begin{warningbox}{重要决策}
+Tracking Error 与 Effort 不应再直接参与 Training Quality 主分。它们可以触发人工复核、解释异常片段、辅助上游采集系统诊断，但不能因为机器人跟踪误差稍大而自动否定一条对模型训练有价值的 demonstration。
+\end{warningbox}
+
+\subsection{门控、评分、解释三类角色}
+
+每个指标必须标注角色：
+
+\begin{itemize}
+  \item \Term{Gate}: 触发硬拒绝，例如 telemetry 缺失、时间戳倒退、严重同步错误。
+  \item \Term{Score}: 参与训练价值评分，例如动作标签平滑性、有效动作信息密度。
+  \item \Term{Explain}: 不一定扣分，但用于解释，例如末端路径效率、停顿片段。
+  \item \Term{Diagnostic}: 只诊断执行或硬件问题，例如 Tracking、Effort、IMU Shock。
+\end{itemize}
+
+\section{后续文档衔接}
+
+本指标库之后，应继续编写两份文档：
+
+\begin{enumerate}
+  \item \Term{Metric Algorithm Specification}: 为 MVP 指标给出具体公式、输入输出、单位归一化、timeline 生成规则和复杂度。
+  \item \Term{L3MetricsEngine v2 Implementation Specification}: 将指标对象、算法、缓存、API、数据库和前端展示落到工程实现。
+\end{enumerate}
+
+\section{版本边界}
+
+本 v1.0 文档只完成指标库设计，不做以下事情：
+
+\begin{itemize}
+  \item 不给出最终阈值；阈值需要基于 approved samples 做统计标定。
+  \item 不给出最终公式；公式应在 Algorithm Specification 中定义。
+  \item 不替代 L2/L4；只定义如何引用 L2/L4 的结果。
+  \item 不承诺所有指标立即实现；P0/P1/P2 已用于区分阶段。
+\end{itemize}
+
+\section*{结语}
+\addcontentsline{toc}{section}{结语}
+
+本指标库的核心价值，是把 L3 从一组经验指标升级为面向训练数据质量的可扩展指标体系。旧版 L3 的问题不在于指标完全错误，而在于指标缺少稳定的质量语义和训练目标解释。通过本指标库，后续每个算法都可以追溯到质量本体和证据层，每个分数都可以解释其对下游策略学习的影响。这样，L3 v2 才能真正成为机器人数字资产平台中的训练数据质量评价引擎。
+
+
+\newpage
+\section*{v1.1 实现同步附录：L3 v2 指标修订}
+\addcontentsline{toc}{section}{v1.1 实现同步附录：L3 v2 指标修订}
+
+本附录同步实现阶段对当前指标库的修订结论。完整公式、阈值和 Agent 修改任务详见 \Code{08\_L3\_v2\_Metric\_Revision\_Update/l3\_v2\_metric\_revision\_update\_v1\_1.pdf}。
+
+\begin{decisionbox}{核心修订结论}
+\begin{itemize}
+\item MQ-01 使用三阶差分 jerk 评价轨迹平滑性；旧二阶差分只保留为 acceleration-like diagnostic feature。
+\item MQ-02 使用 action 二阶差分评价 action label 连续性；一阶 action step 保留给 Learnability 使用。
+\item MQ-03 使用幅度门控后的持续震荡比例与 hand chatter 持续比例，不再直接使用 sign flip P95。
+\item LQ-01 使用 arm/hand 分离的有效动作 mask；LQ-02 定义为 coverage \(\times\) intensity + state intensity；LQ-03 定义为长时间低价值片段占比。
+\item DI-01 使用鲁棒 jitter、长 gap 比例和非法 timestamp 比例；DI-02 使用自适应同步阈值并输出 sensor-specific evidence。
+\item 新增 DI-03/OQ-01 Camera Temporal Continuity，用于检测 wrist camera freeze、stale frame、timestamp gap、jump after freeze。
+\item DX-01 降级为 Execution Tracking Diagnostic，不进入 Training Quality Score。
+\item 总分使用 Motion 40\%、Learnability 40\%、Data Integrity 20\%，并对 Data Integrity 引入 reliability cap。
+\end{itemize}
+\end{decisionbox}
+
+\subsection*{推荐的最终指标集合}
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{L{2.0cm} L{4.2cm} Y}
+\toprule
+类别 & 指标 & v1.1 语义 \\
+\midrule
+MQ & MQ-01 Trajectory Smoothness & 关节轨迹 jerk / 加速度变化连续性。 \\
+MQ & MQ-02 Motion Continuity & action label 二阶差分，检测动作指令突变。 \\
+MQ & MQ-03 Motion Stability & 持续震荡、反复修正、hand chatter。 \\
+LQ & LQ-01 Effective Action Ratio & 有效动作监督覆盖率。 \\
+LQ & LQ-02 Information Density & 覆盖率与动作/状态信息强度组合。 \\
+LQ & LQ-03 Low-value Segment Ratio & 长时间低学习价值片段占比。 \\
+DI & DI-01 Timestamp Regularity & 鲁棒时间戳规则性、gap、非法 dt。 \\
+DI & DI-02 Sensor Synchronization Validity & 自适应多模态同步有效性。 \\
+DI/OQ & DI-03 Camera Temporal Continuity & 相机冻结、旧帧复用、丢帧、跳变。 \\
+DX & DX-01 Execution Tracking Diagnostic & 执行跟踪诊断，不进入主训练质量分。 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\end{document}

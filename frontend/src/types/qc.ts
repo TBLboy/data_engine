@@ -420,3 +420,26 @@ export interface DatasetEpisodeListPayload {
   page: number
   pageSize: number
 }
+
+// Export history
+export interface DatasetExportJob {
+  id: number
+  taskTypeId: string
+  exportFormat: string
+  episodeCount: number
+  createdBy: string | null
+  createdAt: string | null
+}
+
+// Reviewer task manager
+export interface ReviewerTask {
+  taskId: string
+  episodeId: string
+  batchId: string
+  batchName: string
+  taskName: string
+  status: string
+  assignee: string
+  createdAt: string | null
+  lockAcquiredAt: string | null
+}

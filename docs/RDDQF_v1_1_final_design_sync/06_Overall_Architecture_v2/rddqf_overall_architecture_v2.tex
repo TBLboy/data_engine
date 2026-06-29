@@ -1,0 +1,450 @@
+
+\documentclass[UTF8,zihao=-4]{ctexart}
+\usepackage[a4paper,top=2.35cm,bottom=2.35cm,left=2.35cm,right=2.35cm]{geometry}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setmainfont{DejaVu Sans}
+\setsansfont{DejaVu Sans}
+\setmonofont{Noto Sans Mono}
+\setCJKmainfont{Noto Sans CJK SC}
+\setCJKsansfont{Noto Sans CJK SC}
+\setCJKmonofont{Noto Sans CJK SC}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{lastpage}
+\usepackage{pifont}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{makecell}
+\usepackage{multirow}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes,fit}
+\hypersetup{colorlinks=true,linkcolor=black,urlcolor=blue,citecolor=black}
+\definecolor{RuleBlue}{RGB}{25,74,135}
+\definecolor{LightBlue}{RGB}{236,243,252}
+\definecolor{LightGray}{RGB}{247,247,247}
+\definecolor{DarkGray}{RGB}{80,80,80}
+\definecolor{WarnOrange}{RGB}{172,103,0}
+\definecolor{RejectRed}{RGB}{150,35,35}
+\definecolor{PassGreen}{RGB}{38,118,82}
+\definecolor{SoftGreen}{RGB}{237,247,241}
+\definecolor{SoftYellow}{RGB}{255,248,229}
+\titleformat{\section}{\Large\bfseries\color{RuleBlue}}{\thesection}{0.8em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.8em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{0.8em}{}
+\setlist[itemize]{topsep=3pt,itemsep=2pt,parsep=0pt,leftmargin=1.9em}
+\setlist[enumerate]{topsep=3pt,itemsep=2pt,parsep=0pt,leftmargin=2.2em}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcommand{\Pass}{\textcolor{PassGreen}{\ding{51}}}
+\newcommand{\Warn}{\textcolor{WarnOrange}{\ding{115}}}
+\newcommand{\Reject}{\textcolor{RejectRed}{\ding{55}}}
+\newcommand{\Code}[1]{\texttt{#1}}
+\newcommand{\Term}[1]{\textbf{#1}}
+\newenvironment{notebox}[1]{\vspace{0.5em}\noindent\colorbox{LightBlue}{\parbox{0.96\linewidth}{\textbf{#1}}}\par\vspace{-0.2em}\begin{quote}\small}{\end{quote}\vspace{0.3em}}
+\newenvironment{decisionbox}[1]{\vspace{0.5em}\noindent\colorbox{LightGray}{\parbox{0.96\linewidth}{\textbf{#1}}}\par\vspace{-0.2em}\begin{quote}\small}{\end{quote}\vspace{0.3em}}
+\newenvironment{greenbox}[1]{\vspace{0.5em}\noindent\colorbox{SoftGreen}{\parbox{0.96\linewidth}{\textbf{#1}}}\par\vspace{-0.2em}\begin{quote}\small}{\end{quote}\vspace{0.3em}}
+\newenvironment{warnbox}[1]{\vspace{0.5em}\noindent\colorbox{SoftYellow}{\parbox{0.96\linewidth}{\textbf{#1}}}\par\vspace{-0.2em}\begin{quote}\small}{\end{quote}\vspace{0.3em}}
+
+\hypersetup{pdftitle={RDDQF Overall Architecture v2.0}, pdfauthor={ChatGPT for Lingji Qiwuzhi}}
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{RDDQF Overall Architecture v2.0}
+\rhead{Framework to Implementation}
+\cfoot{第 \thepage\ 页}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+\vspace*{2.1cm}
+{\Huge\bfseries RDDQF 总体架构设计说明\par}
+\vspace{0.35cm}
+{\Large Robot Demonstration Data Quality Framework Overall Architecture\par}
+\vspace{0.65cm}
+{\LARGE v2.0\par}
+\vspace{1.2cm}
+\begin{tabular}{rl}
+文档定位： & 整套 RDDQF 理论与工程路线的总设计说明 \\
+适用系统： & 灵机启物机器人数采质检平台及后续机器人数据资产平台 \\
+核心目标： & 统一 Standard、Ontology、Evidence、Metric、Engine 与实现路线 \\
+当前状态： & 理论设计阶段最终版，后续进入工程实现阶段 \\
+覆盖文档： & TDQS、Quality Ontology、Evidence Specification、Metric Library、L3 Engine v2 \\
+长期目标： & 支撑机器人训练数据筛选、数据集发布和数字资产平台建设 \\
+\end{tabular}
+\vfill
+\begin{minipage}{0.88\linewidth}
+\centering\large\bfseries
+RDDQF 的核心思想是：用训练价值定义数据质量，用质量本体组织评价语义，用证据解释质量判断，用指标和算法计算证据，用工程引擎让质量结果成为可复用的数据资产。
+\end{minipage}
+\vfill
+{\large 2026 年 6 月\par}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section*{执行摘要}
+\addcontentsline{toc}{section}{执行摘要}
+
+本文档是 RDDQF（Robot Demonstration Data Quality Framework）的总体架构设计说明 v2.0。它在早期系统设计文档的基础上，补充并统一了后续形成的整套思路：Training Data Quality Standard、Quality Ontology、Evidence Specification、Metric Library 和 L3MetricsEngine v2 Architecture。本文档的作用不是新增一个孤立模块，而是把所有理论文档与工程落地路径串成一条完整链路。
+
+RDDQF 的基本判断是：当前机器人遥操作数据质检如果继续围绕“机器人执行是否平滑”“控制器是否跟踪命令”来设计 L3，就会与下游 Foundation Model / VLA 训练目标发生偏移。训练数据质量应由 demonstration 对模型学习的价值定义，而不是由控制器执行误差定义。因此，L3 不应继续只是 Motion QC，而应升级为 Training Data Quality Assessment。
+
+RDDQF 的整体链路如下：
+
+\begin{verbatim}
+Training Data Quality Standard
+      -> Quality Ontology
+      -> Evidence Specification
+      -> Metric Library
+      -> Metric Algorithms
+      -> L3MetricsEngine v2
+      -> Manual QC UI / Batch Report / Dataset Release
+\end{verbatim}
+
+本文档标志着理论设计阶段完成。后续工作应停止继续扩写框架文档，转入代码和系统重构：Feature Layer、Evidence Layer、Metric Layer、Quality Fusion、Timeline v2、缓存表、API 与前端 UI。
+
+\section{项目定位的根本转变}
+
+\subsection{从 Motion QC 到 Training Data QC}
+
+原有 L3 v1 的潜在目标是评价遥操作轨迹的运动执行质量，因此自然产生了 LDLJ、Tracking Error、Dead Action、Static、Saturation、Jitter、Chatter、Effort 等指标。这些指标在机器人控制和采集诊断中有价值，但它们不完全等价于“这条数据是否适合训练模型”。
+
+面向 VLA、模仿学习和机器人基础模型时，训练数据更重要的问题是：
+
+\begin{itemize}
+\item demonstration 是否成功表达了任务意图？
+\item observation-action 序列是否连续、可学习、信息量充足？
+\item 动作是否自然、稳定、没有无意义抖动和大量犹豫？
+\item 数据是否同步、完整、可对齐？
+\item 这条 episode 在整个数据集中是否有贡献，而不是冗余？
+\end{itemize}
+
+因此，RDDQF 的评价对象不是机器人本体，也不是控制器，而是 demonstration 作为训练数据资产的价值。
+
+\begin{notebox}{核心命题}
+L3 的目标不是评价机器人执行得有多好，而是评价记录下来的 demonstration 对下游策略学习有多大价值。
+\end{notebox}
+
+\subsection{为什么 Tracking Error 不能作为核心质量指标}
+
+在 TeleDex 数据中，\Code{actions} 表示遥操作设备发送的目标关节位置，\Code{qpos} 表示机器人实际反馈位置。\Code{|actions-qpos|} 衡量的是命令跟踪误差，主要反映控制执行或机械响应，而不是 demonstration 本身的训练价值。
+
+如果一条数据视频清晰、动作自然、任务完成、学习信号充分，但机器人控制器略有滞后，它仍可能是优质训练数据。反之，如果控制器跟踪完美，但操作者反复犹豫、动作抖动、任务失败，它并不是优质 demonstration。因此，Tracking Error 在新框架中应被降级为 Diagnostic Evidence，而不是训练质量主指标。
+
+\section{RDDQF 文档体系}
+
+\subsection{文档栈}
+
+\begin{center}
+\begin{tikzpicture}[
+  node distance=0.62cm,
+  box/.style={rectangle,draw=RuleBlue,rounded corners,align=center,minimum width=10.2cm,minimum height=0.72cm,fill=LightBlue},
+  arr/.style={-Latex,thick,draw=RuleBlue}
+]
+\node[box] (std) {01 Training Data Quality Standard\\定义什么叫高质量训练数据};
+\node[box,below=of std] (onto) {02 Quality Ontology\\定义高质量由哪些质量维度组成};
+\node[box,below=of onto] (ev) {03 Evidence Specification\\定义每个质量判断需要哪些证据};
+\node[box,below=of ev] (met) {04 Metric Library\\定义可选指标库和指标语义};
+\node[box,below=of met] (eng) {05 L3MetricsEngine v2 Architecture\\定义如何把框架落地到后端、API、UI 和缓存};
+\draw[arr] (std) -- (onto);
+\draw[arr] (onto) -- (ev);
+\draw[arr] (ev) -- (met);
+\draw[arr] (met) -- (eng);
+\end{tikzpicture}
+\end{center}
+
+\subsection{当前文档清单}
+
+\begin{longtable}{L{4.3cm} L{3cm} L{6.5cm}}
+\toprule
+文档 & 状态 & 作用 \\
+\midrule
+Training Data Quality Standard v1.0 & 已完成 & 定义训练数据质量的目标、哲学、边界和基本原则。 \\
+Robot Demonstration Quality Ontology v1.0 & 已完成 & 建立 Learnability、Demonstration Quality、Motion Quality、Observation Quality、Data Integrity、Diversity 等质量本体。 \\
+Robot Demonstration Quality Evidence Specification v1.0 & 已完成 & 定义 Positive/Negative/Diagnostic/Coverage/Integrity Evidence，并将质量判断转化为可解释证据。 \\
+Robot Demonstration Metric Library v1.0 & 已完成 & 按质量本体组织候选指标，不把 LDLJ/Tracking 等旧指标作为第一对象。 \\
+L3MetricsEngine v2 System Architecture v1.0 & 本轮完成 & 定义工程分层、数据契约、缓存、API、UI 接入和实现路线。 \\
+RDDQF Overall Architecture v2.0 & 本文档 & 统一整套思想，明确理论阶段结束和工程阶段路线。 \\
+\bottomrule
+\end{longtable}
+
+\section{五层思想链路}
+
+\subsection{Standard：定义质量目标}
+
+Standard 解决的是最根本的问题：什么样的机器人 demonstration 值得进入训练集。它不讨论公式、不讨论代码、不讨论阈值，只定义评价哲学。
+
+核心原则包括：
+
+\begin{itemize}
+\item 质量由可学习性定义，而不是由执行精度定义。
+\item 评价对象是 demonstration，不是机器人硬件。
+\item 评价的是 learning signal，而不是机械物理量本身。
+\item 所有指标都必须能说明它为什么影响下游模型学习。
+\end{itemize}
+
+\subsection{Ontology：定义质量维度}
+
+Ontology 将抽象质量目标拆解为稳定的质量树。它是后续所有指标、UI、报告和数据库的共同语义基础。
+
+一套简化的一级结构如下：
+
+\begin{verbatim}
+Robot Demonstration Quality
+  Learnability
+  Demonstration Quality
+  Motion Quality
+  Observation Quality
+  Data Integrity
+  Task Quality
+  Diversity and Coverage
+\end{verbatim}
+
+Ontology 的价值在于稳定性。算法会变，阈值会变，指标会变，但质量节点应保持相对稳定。
+
+\subsection{Evidence：定义解释依据}
+
+Evidence 是 RDDQF 区别于传统指标系统的关键。传统系统给出“LDLJ=7.2”，但不能充分解释为什么这条数据适合或不适合训练。Evidence Layer 要求每个质量判断都能回溯到具体证据，例如：
+
+\begin{itemize}
+\item 有效动作密度低，说明学习信号不足。
+\item 末端轨迹平滑，说明动作示范自然。
+\item 同步误差持续超过阈值，说明 observation-action 对齐不可靠。
+\item 手指快速反复翻转，说明灵巧手动作存在抖动。
+\item 关键动作段清晰，说明该片段具有较高训练价值。
+\end{itemize}
+
+\subsection{Metric：定义可计算表达}
+
+Metric Library 将证据进一步数值化。它不是最终算法规范，而是候选指标集合。一个质量节点可以由多个指标支持，一个指标也可以有多个算法实现。
+
+例如 Smoothness 可以由 joint jerk、EE jerk、SPARC、频域能量等指标表达。不同阶段可以先实现简单指标，再替换为更鲁棒算法。
+
+\subsection{Engine：定义工程实现}
+
+Engine Architecture 将前面的理论对象落地为后端架构。其核心分层是：
+
+\begin{verbatim}
+Data Access
+  -> Feature Extraction
+  -> Evidence Extraction
+  -> Metric Computation
+  -> Quality Scoring
+  -> Decision Recommendation
+  -> Timeline / Report / Cache
+\end{verbatim}
+
+这使 RDDQF 从文档框架变成可以实现的系统架构。
+
+\section{与现有 L1-L4 质检体系的关系}
+
+\subsection{L1：硬性门控}
+
+L1 仍由上游采集或平台硬性门控负责。L3 v2 可以读取 L1 结果作为 Data Integrity 的先验，不重复做采集侧不可恢复问题的判定。
+
+\subsection{L2：视觉质量}
+
+L2 负责视觉模糊、过曝、遮挡、深度异常等人工判断。RDDQF 中的 Observation Quality 可以吸收 L2 结果作为 Evidence。未来也可以将 L2 自动化指标纳入同一质量本体。
+
+\subsection{L3：训练数据质量}
+
+L3 v2 是 RDDQF 在当前系统中的核心落地点。它以 telemetry、metadata、manifest、L2/L4 结果为输入，输出 episode quality profile、timeline evidence、训练准入建议和批次报告。
+
+\subsection{L4：任务完成度}
+
+L4 是 Task Quality 的关键来源。当前 L4 由人工判断，未来可通过 VLM 或任务状态检测辅助。L3 v2 不替代 L4，而是将 L4 结果作为最高权重的任务证据之一。
+
+\section{系统总体架构}
+
+\subsection{数据链路}
+
+\begin{verbatim}
+TeleDex raw mcap
+    -> TeleDex processed conversion
+    -> MinIO processed episode files
+    -> PostgreSQL episode metadata
+    -> RDDQF / L3MetricsEngine v2
+    -> Quality Result Store
+    -> Manual QC UI
+    -> Batch Quality Report
+    -> Dataset Release Pipeline
+    -> Foundation Model Training
+\end{verbatim}
+
+\subsection{业务闭环}
+
+RDDQF 不是一次性评分系统，而是闭环系统：
+
+\begin{enumerate}
+\item 采集系统产生数据。
+\item L3 v2 自动生成质量画像。
+\item 人工 QC 审核系统建议。
+\item 审核结果反哺阈值标定和算法验证。
+\item 批次报告决定数据集发布策略。
+\item 训练表现反过来验证质量指标有效性。
+\end{enumerate}
+
+\section{质量结果的数据资产化}
+
+\subsection{为什么质量结果必须持久化}
+
+如果质量结果只在打开页面时临时计算，它就只是 UI 辅助信息。若要成为数据资产平台的一部分，质量结果必须持久化、版本化、可追溯。
+
+\subsection{质量资产包括什么}
+
+\begin{itemize}
+\item Episode 级 Quality Profile。
+\item Evidence Records 和 Timeline Segments。
+\item Metric Results 与 Algorithm Version。
+\item Batch Quality Distribution。
+\item Dataset Release Report。
+\item 人工审核反馈和标定样本集合。
+\end{itemize}
+
+\subsection{版本化要求}
+
+任何质量结果都必须绑定：
+
+\begin{itemize}
+\item ontology version；
+\item metric library version；
+\item algorithm version；
+\item threshold config version；
+\item source data checksum；
+\item engine run id。
+\end{itemize}
+
+\section{工程阶段总体路线}
+
+\subsection{Phase I：理论阶段（已完成）}
+
+本阶段完成文档：
+
+\begin{itemize}
+\item Training Data Quality Standard。
+\item Quality Ontology。
+\item Evidence Specification。
+\item Metric Library。
+\item L3MetricsEngine v2 Architecture。
+\item Overall Architecture v2。
+\end{itemize}
+
+\subsection{Phase II：Engine 最小实现}
+
+目标是让 v2 架构跑起来，而不是一次性实现所有指标。建议最小实现包括：
+
+\begin{itemize}
+\item Data Access Layer。
+\item FeatureBundle。
+\item EvidenceRecord。
+\item MetricResult。
+\item QualityNodeScore。
+\item TimelineSegment v2。
+\item 将 v1 指标迁移到 v2 输出结构。
+\end{itemize}
+
+\subsection{Phase III：UI 与 API 迁移}
+
+目标是在不破坏现有人工 QC 流程的情况下，逐步将前端从指标卡片迁移到质量画像。
+
+\begin{itemize}
+\item 新增 \Code{qualityProfile} API。
+\item 前端保留旧卡片，增加质量树视图。
+\item Timeline 支持多类型 segment。
+\item 曲线图与 evidence 联动。
+\end{itemize}
+
+\subsection{Phase IV：离线缓存与批次报告}
+
+目标是让质量评价服务批次和数据集，而不是只服务单条 episode。
+
+\begin{itemize}
+\item 建立 quality result tables。
+\item 批次后台计算。
+\item 指标分布统计。
+\item 代表样本抽取。
+\item 同类任务基线对比。
+\end{itemize}
+
+\subsection{Phase V：标定与数据发布}
+
+目标是从经验阈值升级为数据驱动阈值，并支持训练数据集发布。
+
+\begin{itemize}
+\item approved sample 标定。
+\item 按任务类型建立阈值组。
+\item 数据集发布质量报告。
+\item 训练表现回流验证。
+\end{itemize}
+
+\section{下一步具体落地操作}
+
+\subsection{立即执行的工程任务}
+
+理论阶段完成后，下一步不再新增框架文档，而是开始代码层落地。建议第一批任务如下：
+
+\begin{enumerate}
+\item 在后端新增 \Code{backend/app/services/rddqf/} 包。
+\item 定义核心 schema：\Code{FeatureBundle}、\Code{EvidenceRecord}、\Code{MetricResult}、\Code{QualityNodeScore}、\Code{EpisodeQualityProfile}。
+\item 实现 Data Access Layer，统一读取 telemetry、manifest、metadata。
+\item 实现 Time/Joint/Action/Sync 四类基础 Feature。
+\item 将当前 8 个 v1 指标迁移为 v2 MetricResult 和 EvidenceRecord。
+\item 新增 \Code{/quality-profile} API，暂时与旧 \Code{/qc-context} 并行。
+\item 前端先展示 v2 summary，不立即推翻旧 UI。
+\end{enumerate}
+
+\subsection{第一阶段成功标准}
+
+\begin{greenbox}{MVP 成功标准}
+在不改变现有人工 QC 主流程的前提下，任意 episode 可以通过新 API 获得版本化的 EpisodeQualityProfile，其中包含至少：summary、quality nodes、metrics、evidence、timeline 和 recommendation。
+\end{greenbox}
+
+\section{风险控制}
+
+\begin{longtable}{L{4cm} L{4cm} L{5.8cm}}
+\toprule
+风险 & 表现 & 控制方式 \\
+\midrule
+理论体系过大 & 工程落地慢 & 先实现最小闭环，不一次性实现全部指标。 \\
+前端重构压力大 & QC 页面不稳定 & 新旧 API 并行，质量画像逐步替换旧卡片。 \\
+指标争议 & 自动评分不被信任 & 优先展示 evidence 和解释，不强行自动 reject。 \\
+计算成本增加 & 页面打开慢 & 离线缓存、按需计算、批次任务。 \\
+阈值误判 & Good/Warn/Bad 不可靠 & 初期以 review 建议为主，后期用 approved samples 标定。 \\
+\bottomrule
+\end{longtable}
+
+\section{结论}
+
+RDDQF 的理论设计阶段已经完成。它将项目从一个 L3 Motion QC 模块升级为一套面向机器人训练数据资产的质量评价框架。该框架的核心不是某一个指标，而是一条完整链路：用 Standard 定义质量目标，用 Ontology 组织质量语义，用 Evidence 解释质量判断，用 Metric Library 提供可计算表达，用 L3MetricsEngine v2 将这些概念落地为系统能力。
+
+下一阶段应停止继续扩展理论文档，转入工程实现。优先目标不是实现所有高级指标，而是把新架构的最小闭环跑通：Feature - Evidence - Metric - Quality - Timeline - API - UI。只要这个闭环建立，后续算法替换、阈值标定、批次报告和数据资产平台扩展都会变成自然演进，而不是推倒重来。
+
+
+\newpage
+\section*{v2.1 实现同步附录：从指标库到可诊断质量平台}
+\addcontentsline{toc}{section}{v2.1 实现同步附录：从指标库到可诊断质量平台}
+
+真实 wrist camera 卡顿案例表明，RDDQF 的工程目标不能止步于输出分数，而必须输出可定位、可解释、可复核的质量诊断。
+
+\begin{decisionbox}{总体架构修订}
+\begin{itemize}
+\item 主评分仍为 Training Quality Score，但必须显示 Motion、Learnability、Data Integrity 三个维度分。
+\item Execution Diagnostics 作为独立诊断分，不进入训练质量主分。
+\item Data Integrity 不只是普通加权项，还应作为 reliability gate 限制总分上限。
+\item Observation Quality 需要吸收相机时序连续性问题；MVP 阶段可先以 DI-03 Camera Temporal Continuity 形式落地。
+\item 平台应支持从 timeline 点击到证据详情，查看 sensor、capture time、sync offset、duration、possible cause 和 training risk。
+\end{itemize}
+\end{decisionbox}
+
+后续工程路线应从“增加更多指标”转向“提升证据解释性与故障定位能力”。
+
+\end{document}

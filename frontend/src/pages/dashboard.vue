@@ -2,8 +2,8 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
-import { assignBatchTasks, fetchDashboard, submitDispatchPlan, type DashboardPayload } from '../api/client'
-import type { BatchDispatchAssignRequest, DispatchMode } from '../types/qc'
+import { assignBatchTasks, fetchDashboard, submitDispatchPlan, fetchReviewerTasks, revokeTask, releaseTask, type DashboardPayload } from '../api/client'
+import type { BatchDispatchAssignRequest, DispatchMode, ReviewerTask } from '../types/qc'
 
 const payload = ref<DashboardPayload | null>(null)
 const loading = ref(true)
@@ -179,6 +179,53 @@ const applyBatchAssignment = async () => {
     savingAssignments.value = false
   }
 }
+
+// ── Reviewer task manager drawer ──
+const taskDrawerVisible = ref(false)
+const taskDrawerReviewer = ref('')
+const taskDrawerReviewerId = ref('')
+const reviewerTasks = ref<ReviewerTask[]>([])
+const taskLoading = ref(false)
+const selectedTaskIds = ref<string[]>([])
+const taskOpReason = ref('')
+
+async function openTaskDrawer(reviewerName: string) {
+  const reviewer = reviewerAccounts.value.find(a => a.name === reviewerName)
+  if (!reviewer) return
+  taskDrawerReviewer.value = reviewerName
+  taskDrawerReviewerId.value = reviewer.id
+  selectedTaskIds.value = []
+  taskOpReason.value = ''
+  taskLoading.value = true
+  taskDrawerVisible.value = true
+  try {
+    reviewerTasks.value = await fetchReviewerTasks(reviewer.id)
+  } catch {
+    ElMessage.error('加载任务列表失败')
+  } finally {
+    taskLoading.value = false
+  }
+}
+
+async function doRevokeTask(taskId: string) {
+  try {
+    await revokeTask(taskId, taskOpReason.value)
+    ElMessage.success('任务已撤回')
+    await openTaskDrawer(taskDrawerReviewer.value)
+  } catch (e: any) {
+    ElMessage.error(e.message || '撤回失败')
+  }
+}
+
+async function doReleaseTask(taskId: string) {
+  try {
+    await releaseTask(taskId, taskOpReason.value)
+    ElMessage.success('任务已释放')
+    await openTaskDrawer(taskDrawerReviewer.value)
+  } catch (e: any) {
+    ElMessage.error(e.message || '释放失败')
+  }
+}
 </script>
 
 <template>
@@ -313,6 +360,7 @@ const applyBatchAssignment = async () => {
               <div><strong>{{ reviewer.name }}</strong><span>平均 {{ reviewer.avgMinutes }} min / episode</span></div>
               <el-progress class="qc-progress" :percentage="reviewer.assigned + reviewer.done ? Math.round((reviewer.done / (reviewer.assigned + reviewer.done)) * 100) : 0" />
               <b>{{ reviewer.done }}/{{ reviewer.assigned + reviewer.done }}</b>
+              <el-button size="small" text type="primary" style="margin-left:8px" @click="openTaskDrawer(reviewer.name)">管理任务</el-button>
             </div>
           </el-card>
         </el-col>
@@ -329,5 +377,38 @@ const applyBatchAssignment = async () => {
         </el-col>
       </el-row>
     </div>
+
+    <!-- Reviewer task manager drawer -->
+    <el-drawer v-model="taskDrawerVisible" :title="`${taskDrawerReviewer} 的任务池`" size="60%">
+      <div v-loading="taskLoading">
+        <div style="margin-bottom:12px;display:flex;gap:8px;align-items:center">
+          <el-input v-model="taskOpReason" placeholder="操作原因 (可选)" size="small" style="width:240px" />
+          <span style="color:#909399;font-size:12px">选中任务后可执行撤回/转派/释放</span>
+        </div>
+        <el-table :data="reviewerTasks" stripe class="qc-table" height="500" @selection-change="(rows:any) => selectedTaskIds = rows.map((r:any) => r.taskId)">
+          <el-table-column type="selection" width="40" />
+          <el-table-column prop="taskId" label="任务 ID" width="200" />
+          <el-table-column prop="episodeId" label="Episode" width="200" />
+          <el-table-column prop="taskName" label="任务类型" width="120" />
+          <el-table-column prop="batchName" label="批次" min-width="160" />
+          <el-table-column label="状态" width="110">
+            <template #default="{ row }">
+              <el-tag :type="row.status === 'done' ? 'success' : row.status === 'in_review' ? 'warning' : 'info'" size="small">
+                {{ row.status === 'done' ? '已完成' : row.status === 'in_review' ? '进行中' : '待处理' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="180">
+            <template #default="{ row }">
+              <template v-if="row.status !== 'done' && row.status !== 'in_review'">
+                <el-button size="small" text type="danger" @click="doRevokeTask(row.taskId)">撤回</el-button>
+                <el-button size="small" text type="warning" @click="doReleaseTask(row.taskId)">释放</el-button>
+              </template>
+              <span v-else style="color:#909399;font-size:12px">不可操作</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </el-drawer>
   </AppLayout>
 </template>

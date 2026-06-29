@@ -1,0 +1,608 @@
+
+\documentclass[UTF8,zihao=-4]{ctexart}
+\usepackage[a4paper,top=2.3cm,bottom=2.3cm,left=2.35cm,right=2.35cm]{geometry}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setmainfont{DejaVu Sans}
+\setsansfont{DejaVu Sans}
+\setmonofont{Noto Sans Mono}
+\setCJKmainfont{Noto Sans CJK SC}
+\setCJKsansfont{Noto Sans CJK SC}
+\setCJKmonofont{Noto Sans CJK SC}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{lastpage}
+\usepackage{pifont}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{makecell}
+\hypersetup{colorlinks=true,linkcolor=black,urlcolor=blue,citecolor=black}
+\definecolor{RuleBlue}{RGB}{25,74,135}
+\definecolor{LightBlue}{RGB}{236,243,252}
+\definecolor{LightGray}{RGB}{247,247,247}
+\definecolor{DarkGray}{RGB}{80,80,80}
+\definecolor{WarnOrange}{RGB}{172,103,0}
+\definecolor{RejectRed}{RGB}{150,35,35}
+\definecolor{PassGreen}{RGB}{38,118,82}
+\titleformat{\section}{\Large\bfseries\color{RuleBlue}}{\thesection}{0.8em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.8em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{0.8em}{}
+\setlist[itemize]{topsep=3pt,itemsep=2pt,parsep=0pt,leftmargin=1.9em}
+\setlist[enumerate]{topsep=3pt,itemsep=2pt,parsep=0pt,leftmargin=2.2em}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcommand{\Pass}{\textcolor{PassGreen}{\ding{51}}}
+\newcommand{\Warn}{\textcolor{WarnOrange}{\ding{115}}}
+\newcommand{\Reject}{\textcolor{RejectRed}{\ding{55}}}
+\newcommand{\Code}[1]{\texttt{#1}}
+\newcommand{\Term}[1]{\textbf{#1}}
+\newenvironment{notebox}[1]{\vspace{0.5em}\noindent\colorbox{LightBlue}{\parbox{0.96\linewidth}{\textbf{#1}}}\par\vspace{-0.2em}\begin{quote}\small}{\end{quote}\vspace{0.3em}}
+\newenvironment{decisionbox}[1]{\vspace{0.5em}\noindent\colorbox{LightGray}{\parbox{0.96\linewidth}{\textbf{#1}}}\par\vspace{-0.2em}\begin{quote}\small}{\end{quote}\vspace{0.3em}}
+
+\hypersetup{pdftitle={Robot Demonstration Data Quality Ontology v1.0}, pdfauthor={ChatGPT for Lingji Qiwuzhi}}
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{Robot Demonstration Data Quality Ontology v1.0}
+\rhead{L3 v2 Ontology}
+\cfoot{第 \thepage\ 页}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+\vspace*{2.5cm}
+{\Huge\bfseries 机器人 Demonstration 数据质量本体\par}
+\vspace{0.35cm}
+{\Large Robot Demonstration Data Quality Ontology\par}
+\vspace{0.6cm}
+{\LARGE v1.0\par}
+\vspace{1.2cm}
+\begin{tabular}{rl}
+文档定位： & L3 v2 指标体系的质量本体与分类标准 \\
+适用系统： & 灵机启物机器人数采质检平台 \\
+关联文档： & Training Data Quality Standard v1.0 \\
+上游数据： & Linker Open TeleDex processed 数据 \\
+核心对象： & robot demonstration episode \\
+主要用途： & 指标体系设计、UI 分组、数据库建模、批次报告、数据资产发布 \\
+\end{tabular}
+\vfill
+\begin{minipage}{0.86\linewidth}
+\centering\large\bfseries
+本体的作用不是直接给出公式，而是定义“训练数据质量”由哪些可复用、可扩展、可治理的质量概念组成。后续每一个 L3 指标都必须挂载到本体树上的某一个节点。
+\end{minipage}
+\vfill
+{\large 2026 年 6 月\par}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section*{执行摘要}
+\addcontentsline{toc}{section}{执行摘要}
+
+本文档是 L3 v2 的第二层设计文档。第一层文档 \emph{Training Data Quality Standard v1.0} 已经回答了“什么样的数据值得训练模型”这一问题；本文档进一步回答“训练数据质量由哪些维度组成”。
+
+本文档将机器人训练数据质量定义为一棵多层质量本体树：根节点为 \Term{Robot Demonstration Training Quality}，下设九个一级维度：\Term{Learnability}、\Term{Task-Semantic Quality}、\Term{Demonstration Behavior Quality}、\Term{Action Label Quality}、\Term{State and Trajectory Quality}、\Term{Observation Quality}、\Term{Data Integrity and Synchronization}、\Term{Dataset-Level Quality}、\Term{Execution Diagnostics}。其中，前七类主要用于 episode 级 L3/L2/L4 质量判断；第八类用于批次和数据集级分析；第九类用于辅助诊断，不应直接支配训练数据准入。
+
+本体的核心设计结论是：\Term{L3 v2 不是 Motion Score，而是 Training Demonstration Quality Assessment}。原有 L3 中的 LDLJ、Dead、Static、Jitter、Chatter 等指标可以被重新挂载到本体树中；Tracking Error 和 Effort 应降级为 Execution Diagnostics，主要用于排查机器人控制或硬件问题，而不应作为训练数据质量的主评分项。
+
+\section{文档目的与边界}
+
+\subsection{为什么需要质量本体}
+
+在 L3 v1 中，指标是直接围绕可计算量设计的：能从 \Code{telemetry.npz} 算什么，就把它变成一个 metric。这样做的优点是工程落地快，但缺点是指标之间缺少稳定的上层语义。例如，Dead 与 Static 都在描述“动作不足”，Tracking 与 Effort 都在描述执行侧问题，Saturation 在某些抓取任务中可能是正常动作状态，却在统一阈值下被判为异常。
+
+质量本体提供的是一套中间抽象层：
+\begin{verbatim}
+Training Data Quality Standard  ->  Quality Ontology  ->  Metrics  ->  Algorithms  ->  Code
+\end{verbatim}
+
+其中，Ontology 不回答“怎么算”，而回答“这个质量概念是什么、为什么存在、依赖哪些数据、和其他质量概念是什么关系”。有了本体之后，指标不再是散乱规则，而是可以被统一治理的质量节点。
+
+\subsection{本文档解决的问题}
+
+本文档解决以下问题：
+\begin{enumerate}
+  \item 为 L3 v2 建立一个稳定的质量分类树。
+  \item 明确每个质量维度的定义、作用、输入字段和责任边界。
+  \item 明确哪些维度是核心训练质量，哪些是辅助诊断质量。
+  \item 为后续 Metric Specification 文档提供指标挂载位置。
+  \item 为前端 UI、数据库 schema、批次报告和数据资产平台提供统一语义。
+\end{enumerate}
+
+\subsection{本文档不解决的问题}
+
+本文档有意不包含以下内容：
+\begin{itemize}
+  \item 不定义具体阈值，例如 Good/Warn/Bad 的数值边界。
+  \item 不定义最终公式，例如 LDLJ、SPARC 或 trajectory efficiency 的具体计算方式。
+  \item 不直接决定 Pass/Fail，而是定义 Pass/Fail 所依赖的质量概念。
+  \item 不替代 L2 视觉质检和 L4 任务完成度质检，而是定义它们与 L3 v2 的关系。
+\end{itemize}
+
+\section{核心实体定义}
+
+\subsection{Episode}
+
+\Term{Episode} 是一次完整的数据采集单元，通常对应 TeleDex processed 目录下的一个 \Code{episode\_NNNNNN}。一个 episode 至少包含：统一时间轴、机器人状态、遥操作动作、视频、时间戳、metadata 和 manifest。对 L3 v2 而言，episode 是最小的自动质量评估单位。
+
+\subsection{Demonstration}
+
+\Term{Demonstration} 是一个 episode 中可被模型学习的示范行为。它不等同于机器人执行结果，也不等同于人类操作动作本身，而是由以下内容共同构成：任务语义、观测序列、机器人状态序列、动作标签序列和任务结果。
+
+\begin{notebox}{关键定义}
+一条 demonstration 的质量，不由机器人控制器是否完美跟踪目标命令决定，而由它是否为下游策略学习提供清晰、连续、有效、可泛化的学习信号决定。
+\end{notebox}
+
+\subsection{Observation}
+
+\Term{Observation} 表示模型训练时可见的输入，包括 RGB、Depth、机器人状态、末端位姿、可选触觉、可选 IMU，以及任务文本 prompt。L2 主要负责视觉层面的 observation 质量，但 L3 v2 需要在本体层面知道 observation 与 action label 的耦合关系。
+
+\subsection{State}
+
+\Term{State} 是机器人在每一帧的实际状态，通常包括 \Code{qpos}、\Code{qvel}、\Code{effort} 和可选的 \Code{ee\_poses\_qpos\_*}。在训练格式中，state 通常作为 observation 的一部分，而不是预测标签。
+
+\subsection{Action Label}
+
+\Term{Action Label} 是模型需要学习或预测的动作标签。在当前 TeleDex 数据中，\Code{actions} 来源于遥操作控制话题，语义上是目标关节位置命令。机械臂 actions 通常为弧度制，灵巧手 actions 通常为 0 至 255 范围值。
+
+\subsection{Outcome}
+
+\Term{Outcome} 表示任务是否完成，以及完成质量如何。Outcome 主要由 L4 人工判断或未来自动任务理解模块提供。对训练而言，任务失败但动作过程完整的数据可能仍有诊断价值，但不应和成功 demonstration 混入同一类正样本训练集。
+
+\subsection{Segment}
+
+\Term{Segment} 是 episode 内具有质量语义的时间片段，例如“关键抓取段”“长时间停顿段”“手部颤振段”“同步异常段”。L3 v2 的 Timeline 不应只展示异常，还应展示可学习片段、低信息片段和需要人工复核的语义片段。
+
+\section{顶层质量本体}
+
+\subsection{根节点}
+
+根节点定义为：
+\begin{quote}
+\Term{Robot Demonstration Training Quality}: 一条或一组机器人 demonstration 对下游策略学习的训练价值。
+\end{quote}
+
+它不是单一分数的同义词，而是一组可拆解、可计算、可复核的质量概念集合。
+
+\subsection{一级质量维度}
+
+\begin{longtable}{L{3.2cm} L{4.2cm} L{6.2cm}}
+\toprule
+一级维度 & 核心问题 & 说明 \\
+\midrule
+Learnability & 模型是否能从中学到有效映射 & 关注信息密度、动作有效性、状态动作因果关系、时间连续性。 \\
+Task-Semantic Quality & 数据是否符合任务语义 & 关注 prompt、目标物、阶段结构、任务完成度和语义一致性。 \\
+Demonstration Behavior Quality & 示范行为本身是否优质 & 关注流畅性、自然性、效率、犹豫、修正和重复操作。 \\
+Action Label Quality & 训练标签是否可靠 & 关注 actions 是否有效、平滑、可解释、无异常跳变，并符合手/臂语义。 \\
+State and Trajectory Quality & 机器人状态轨迹是否可信 & 关注 qpos、qvel、EE pose 的连续性、可达性、几何合理性。 \\
+Observation Quality & 模型输入是否可用 & 关注视频、深度、遮挡、相机可用性和观测与动作对齐。 \\
+Data Integrity and Synchronization & 数据文件是否完整同步 & 关注时间戳、帧数、转换结果、sync validation、metadata 一致性。 \\
+Dataset-Level Quality & 数据集是否覆盖充分且不过度重复 & 关注多样性、分布、冗余、任务覆盖和长尾样本。 \\
+Execution Diagnostics & 机器人执行侧是否异常 & 关注 command tracking、effort、IMU 冲击、硬件异常；用于诊断，不作为训练价值主判据。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{本体树概览}
+
+\begin{verbatim}
+Robot Demonstration Training Quality
+|
+|-- Learnability
+|   |-- Information Density
+|   |-- Action Effectiveness
+|   |-- State-Action Causality
+|   |-- Temporal Learnability
+|   |-- Label Discriminability
+|
+|-- Task-Semantic Quality
+|   |-- Prompt Alignment
+|   |-- Goal Completeness
+|   |-- Phase Integrity
+|   |-- Object Interaction Correctness
+|   |-- Success Condition Compatibility
+|
+|-- Demonstration Behavior Quality
+|   |-- Smoothness
+|   |-- Continuity
+|   |-- Efficiency
+|   |-- Stability
+|   |-- Naturalness
+|   |-- Correction Burden
+|   |-- Dexterity
+|
+|-- Action Label Quality
+|   |-- Action Validity
+|   |-- Action Dynamic Range
+|   |-- Action Smoothness
+|   |-- Action Saturation Semantics
+|   |-- Finger Command Quality
+|   |-- Command Segment Quality
+|
+|-- State and Trajectory Quality
+|   |-- Joint State Plausibility
+|   |-- End-Effector Trajectory Quality
+|   |-- Kinematic Continuity
+|   |-- Workspace Efficiency
+|   |-- State Coverage
+|
+|-- Observation Quality
+|   |-- Visual Availability
+|   |-- Multi-view Usability
+|   |-- Depth Availability
+|   |-- Occlusion and Visibility
+|   |-- Observation-Action Alignment
+|
+|-- Data Integrity and Synchronization
+|   |-- File Completeness
+|   |-- Timestamp Regularity
+|   |-- Cross-sensor Synchronization
+|   |-- Conversion Validity
+|   |-- Metadata Consistency
+|
+|-- Dataset-Level Quality
+|   |-- Diversity
+|   |-- Coverage
+|   |-- Redundancy
+|   |-- Distribution Balance
+|   |-- Outlierness
+|
+`-- Execution Diagnostics
+    |-- Command Tracking
+    |-- Effort Load
+    |-- IMU Shock
+    |-- Controller Lag
+    `-- Hardware Health Signal
+\end{verbatim}
+
+\section{Learnability 本体}
+
+\subsection{定义}
+
+\Term{Learnability} 表示一条 demonstration 是否向模型提供了可学习的输入输出映射。它是训练数据质量的最高优先级维度之一。一个 episode 即使任务成功，如果动作标签缺乏变化、关键步骤缺失、观测和动作因果不清，也可能具有较低 learnability。
+
+\subsection{二级节点}
+
+\begin{longtable}{L{3.4cm} L{4.6cm} L{5.6cm}}
+\toprule
+二级节点 & 定义 & 典型问题 \\
+\midrule
+Information Density & 单位时间内可学习信号的密度 & 长时间无动作、重复等待、无意义空转。 \\
+Action Effectiveness & action 是否导致可观察状态变化 & 发出动作但状态或场景无变化；动作与任务进展无关。 \\
+State-Action Causality & state/observation 与 action 的因果关系是否清晰 & 视觉变化和动作标签错位；动作发生在不可见或不可解释状态。 \\
+Temporal Learnability & 时序是否连续且适合序列模型学习 & 缺帧、跳变、异常快慢切换、动作片段割裂。 \\
+Label Discriminability & action label 是否具有可区分性 & 大量近似常数标签、动作维度无效、噪声掩盖真实控制意图。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{与现有指标的关系}
+
+现有 Dead 和 Static 指标可重新解释为 Information Density 的候选指标，但不能简单重复计入。Dead 关注 action 标签是否缺乏有效变化，Static 关注机器人状态是否缺乏有效运动。二者在本体上都属于“低学习信号”问题，应合并到同一质量维度下统一治理。
+
+\begin{decisionbox}{设计决策 LRN-1}
+Dead Actions 与 Static 不再作为两个并列的一级指标，而是作为 Learnability/Information Density 下的候选观测证据。最终评分应避免重复惩罚同一种“低信息片段”。
+\end{decisionbox}
+
+\section{Task-Semantic Quality 本体}
+
+\subsection{定义}
+
+\Term{Task-Semantic Quality} 表示 demonstration 是否与任务语义一致。对 VLA 或语言条件策略模型而言，任务 prompt 不是附属信息，而是训练样本的重要条件变量。如果 prompt、视觉场景、动作过程和任务结果不一致，模型会学习到错误的语义-动作映射。
+
+\subsection{二级节点}
+
+\begin{longtable}{L{3.2cm} L{5.2cm} L{5.2cm}}
+\toprule
+二级节点 & 高质量表现 & 低质量表现 \\
+\midrule
+Prompt Alignment & 动作过程与 task prompt 一致 & prompt 说抓取杯子，实际操作其他物体。 \\
+Goal Completeness & 任务从起始状态推进到目标状态 & 中途停止、未完成关键结果。 \\
+Phase Integrity & episode 包含完整任务阶段 & 缺少接近、抓取、移动、放置中的关键阶段。 \\
+Object Interaction Correctness & 与目标物体交互正确 & 误碰、抓错、未接触、接触后滑落。 \\
+Success Condition Compatibility & L4 结果与 L3 过程相容 & L4 判定成功但 L3 检测到关键过程缺失，需要复核。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{与 L4 的关系}
+
+Task-Semantic Quality 中的任务完成度主要由 L4 人工判断提供，但 L3 v2 可以提供过程证据，例如关键阶段是否存在、动作是否集中于目标操作时间段、是否出现长时间无效尝试。L3 不应替代 L4，但可以降低 L4 人工复核成本。
+
+\section{Demonstration Behavior Quality 本体}
+
+\subsection{定义}
+
+\Term{Demonstration Behavior Quality} 评价人类示范行为本身是否值得模型模仿。它比“机器人执行质量”更接近训练数据价值，因为模仿学习会直接吸收示范中的动作风格、修正行为和节奏模式。
+
+\subsection{二级节点}
+
+\begin{longtable}{L{3.1cm} L{4.7cm} L{5.8cm}}
+\toprule
+二级节点 & 含义 & 训练影响 \\
+\midrule
+Smoothness & 动作变化是否平滑 & 抖动示范会诱导模型输出抖动动作。 \\
+Continuity & 动作是否连续推进任务 & 断续示范降低序列模型学习稳定性。 \\
+Efficiency & 是否以合理路径完成任务 & 大量绕路和反复尝试会稀释优质策略。 \\
+Stability & 是否避免剧烈震荡和不稳定交互 & 不稳定动作会增加失败策略概率。 \\
+Naturalness & 示范是否符合人类直觉和机器人可执行习惯 & 过度反常示范降低泛化质量。 \\
+Correction Burden & 是否包含大量纠错、回退、重试 & 模型可能学习到不必要修正行为。 \\
+Dexterity & 手部和末端操作是否协调 & 对抓取、插入、装配等精细任务尤其重要。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{当前 L3 的迁移}
+
+LDLJ 可以迁移到 Smoothness；Chatter 可以迁移到 Dexterity 或 Finger Command Quality；Static 的一部分可以迁移到 Continuity；未来可新增 Trajectory Efficiency、Correction Count、EE Smoothness 等候选指标。
+
+\section{Action Label Quality 本体}
+
+\subsection{定义}
+
+\Term{Action Label Quality} 评价 \Code{actions} 作为训练标签是否可靠。由于当前 TeleDex 的 \Code{actions} 是遥操作设备发送的目标关节位置，它是模型训练中最重要的监督信号之一。Action Label Quality 不关心机器人是否完全到达目标位置，而关心该标签是否表达了清晰、稳定、合理的操作意图。
+
+\subsection{二级节点}
+
+\begin{longtable}{L{3.3cm} L{5.1cm} L{5.3cm}}
+\toprule
+二级节点 & 关注点 & 说明 \\
+\midrule
+Action Validity & 是否存在 NaN、越界、全零异常、维度错位 & 属于硬性数据完整性与标签有效性问题。 \\
+Action Dynamic Range & 动作是否具有足够但不过度的变化 & 过小表示无学习信号，过大可能表示异常跳变。 \\
+Action Smoothness & 标签随时间变化是否平滑 & 直接影响模型学习到的输出平滑性。 \\
+Action Saturation Semantics & 0/255 或关节极限是否具有任务语义 & 手部完全张开/闭合可能是正常动作，不应简单惩罚。 \\
+Finger Command Quality & 手部命令是否稳定协调 & 关注指令颤振、频繁反向、手指协同。 \\
+Command Segment Quality & 动作片段是否有明确起止与语义 & 用于构建关键动作片段、低质量片段和训练片段。 \\
+\bottomrule
+\end{longtable}
+
+\begin{decisionbox}{设计决策 ACT-1}
+Saturation 不应继续作为全局硬惩罚指标。对于手部 0/255，必须区分“合法完全张开/闭合状态”和“异常饱和抖动”。饱和本身不是坏质量，饱和伴随高频震荡、任务无关或长期卡死才是坏质量。
+\end{decisionbox}
+
+\section{State and Trajectory Quality 本体}
+
+\subsection{定义}
+
+\Term{State and Trajectory Quality} 评价机器人状态序列和末端轨迹是否可信、连续、可用于训练。它既包括 joint space，也包括 task space。当前数据中已有 \Code{ee\_poses\_qpos\_*} 和 \Code{ee\_poses\_actions\_*}，这为从关节空间扩展到末端空间提供了基础。
+
+\subsection{二级节点}
+
+\begin{longtable}{L{3.3cm} L{4.9cm} L{5.5cm}}
+\toprule
+二级节点 & 关注点 & 候选数据源 \\
+\midrule
+Joint State Plausibility & qpos/qvel 是否连续、范围合理 & \Code{qpos}, \Code{qvel} \\
+End-Effector Trajectory Quality & 末端路径是否平滑、连续、有效 & \Code{ee\_poses\_qpos\_*} \\
+Kinematic Continuity & 是否存在不可能的关节或末端跳变 & \Code{qpos}, \Code{ee\_poses\_*} \\
+Workspace Efficiency & 末端路径是否过度绕行 & \Code{ee\_poses\_qpos\_*}, task phase \\
+State Coverage & episode 是否覆盖有效状态变化 & \Code{qpos}, \Code{ee\_poses\_*}, video \\
+\bottomrule
+\end{longtable}
+
+\subsection{Joint Space 与 Task Space 的分工}
+
+Joint space 指标适合检测关节层面的异常，例如跳变、抖动和死区；Task space 指标适合评价任务相关的运动质量，例如末端是否平滑接近目标、是否绕路、是否在关键接触阶段稳定。L3 v2 应逐步将 Smoothness、Efficiency 和 Stability 从纯 joint space 扩展到 EE pose。
+
+\section{Observation Quality 本体}
+
+\subsection{定义}
+
+\Term{Observation Quality} 评价模型输入是否可用于学习。虽然 L2 已经负责视觉质量人工判断，但在训练数据质量本体中，Observation Quality 仍然是不可缺少的一级维度，因为模型训练不是只看 action，还依赖 RGB、Depth、state 和 task prompt。
+
+\subsection{二级节点}
+
+\begin{longtable}{L{3.2cm} L{5cm} L{5.5cm}}
+\toprule
+二级节点 & 关注点 & 与 L3 的关系 \\
+\midrule
+Visual Availability & 三路 RGB 是否存在且可播放 & L2 主责，L3 读取上下文用于综合报告。 \\
+Multi-view Usability & top/wrist 视角是否覆盖关键动作 & L2/L3/L4 共同使用。 \\
+Depth Availability & 深度是否可用、是否 D2C、是否有无效深度 & L2 主责，训练数据发布时重要。 \\
+Occlusion and Visibility & 目标物和末端是否可见 & L2 人工判断，未来可自动化。 \\
+Observation-Action Alignment & 观测与动作时间是否对齐 & L3/Data Integrity 主责。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{跨层设计原则}
+
+Observation Quality 不应被硬拆成“只属于 L2”。在数据资产平台中，一条数据的最终训练价值必须同时考虑视觉可用性和动作标签质量。因此，L3 v2 输出的 Training Quality Report 应引用 L2 结果，但不重复实现 L2 的视觉判断。
+
+\section{Data Integrity and Synchronization 本体}
+
+\subsection{定义}
+
+\Term{Data Integrity and Synchronization} 评价 processed 数据是否完整、时间轴是否可信、跨传感器对齐是否可靠。它是训练数据准入中的硬门控维度之一。
+
+\subsection{二级节点}
+
+\begin{longtable}{L{3.4cm} L{5.1cm} L{5.2cm}}
+\toprule
+二级节点 & 关注点 & 主要数据源 \\
+\midrule
+File Completeness & telemetry、video、metadata、manifest 是否齐全 & MinIO object list, manifest \\
+Timestamp Regularity & dt 是否稳定、是否有跳变 & \Code{timestamps}, camera timestamps \\
+Cross-sensor Synchronization & 多模态是否在同一时间轴上 & \Code{sync\_validation\_*}, metadata alignment \\
+Conversion Validity & processed 是否由正确转换管线生成 & \Code{metadata.json}, \Code{manifest.json} \\
+Metadata Consistency & fps、frame count、duration 是否一致 & manifest, telemetry shape, videos \\
+\bottomrule
+\end{longtable}
+
+\begin{decisionbox}{设计决策 INT-1}
+Timestamp Jitter 和 Sync Error 应保留为训练数据准入的硬质量维度。它们不评价动作示范是否好，但直接决定 observation-action pair 是否可信。
+\end{decisionbox}
+
+\section{Dataset-Level Quality 本体}
+
+\subsection{定义}
+
+\Term{Dataset-Level Quality} 不评价单条 episode 是否好，而评价一组数据是否构成高质量训练集。它是 L3 v2 从单 episode QC 演进到数据资产平台的关键维度。
+
+\subsection{二级节点}
+
+\begin{longtable}{L{3.3cm} L{5cm} L{5.4cm}}
+\toprule
+二级节点 & 含义 & 训练影响 \\
+\midrule
+Diversity & 任务、物体、初始状态、轨迹风格是否多样 & 提升泛化能力。 \\
+Coverage & 是否覆盖任务所需的关键状态和动作空间 & 减少模型盲区。 \\
+Redundancy & 是否存在大量近重复 episode & 过度重复会降低训练效率。 \\
+Distribution Balance & 各任务、阶段、成功/失败分布是否均衡 & 避免模型偏向高频但低价值模式。 \\
+Outlierness & 是否存在显著偏离同类任务分布的样本 & 可用于异常检测或长尾样本挖掘。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{与 L3 的关系}
+
+Dataset-Level Quality 不能完全在单条 episode 打开时计算，需要批次级离线统计。它应进入 History Report、Batch Report 和 Dataset Release Report。L3 v2 的 episode 级指标应为 dataset-level 分析提供标准化输入。
+
+\section{Execution Diagnostics 本体}
+
+\subsection{定义}
+
+\Term{Execution Diagnostics} 评价机器人控制器、硬件或执行链路是否存在问题。它对系统运维和采集质量追溯很有价值，但与训练数据价值不是同一维度。
+
+\subsection{二级节点}
+
+\begin{longtable}{L{3.3cm} L{5cm} L{5.4cm}}
+\toprule
+二级节点 & 典型指标 & 角色定位 \\
+\midrule
+Command Tracking & \Code{|actions - qpos|} 的统计量 & 控制执行诊断，不作为主训练分。 \\
+Effort Load & \Code{effort} 的 P95 或异常峰值 & 硬件负载诊断。 \\
+IMU Shock & wrist/top IMU 冲击、震动 & 碰撞、震动、异常接触诊断。 \\
+Controller Lag & action 与 qpos 的延迟估计 & 控制链路诊断。 \\
+Hardware Health Signal & 长期趋势与设备异常 & 采集设备维护。 \\
+\bottomrule
+\end{longtable}
+
+\begin{decisionbox}{设计决策 EXE-1}
+Tracking Error 不再作为 L3 Training Quality 的核心指标。它保留为 Execution Diagnostics，用于提示控制器滞后、机械阻力、硬件异常或遥操作链路问题。只有当 Tracking Error 导致 observation-action pair 语义明显失真时，才进入训练数据质量惩罚。
+\end{decisionbox}
+
+\section{现有 L3 v1 指标到本体的迁移}
+
+\begin{longtable}{L{3cm} L{4cm} L{5.8cm}}
+\toprule
+现有指标 & 新本体挂载位置 & 建议处理 \\
+\midrule
+LDLJ & Demonstration Behavior / Smoothness；State Trajectory / Joint Smoothness & 保留，但应扩展到 EE Smoothness，并重新标定。 \\
+Dead Actions & Learnability / Information Density；Action Label / Dynamic Range & 与 Static 合并治理，避免重复惩罚。 \\
+Saturation & Action Label / Saturation Semantics & 从硬惩罚改为语义化判断。 \\
+Static & Learnability / Information Density；Behavior / Continuity & 保留为低学习信号证据，不再独立决定总分。 \\
+Timestamp Jitter & Data Integrity / Timestamp Regularity & 保留为硬门控或强惩罚。 \\
+Tracking Error & Execution Diagnostics / Command Tracking & 降级为辅助诊断。 \\
+Hand Chatter & Action Label / Finger Command Quality；Behavior / Dexterity & 保留，并减少碎片化 timeline。 \\
+Effort & Execution Diagnostics / Effort Load & 降级为诊断，不直接表示训练价值。 \\
+Q\_motion & 不再作为唯一根分 & 替换为多维 Training Quality Profile。 \\
+\bottomrule
+\end{longtable}
+
+\section{质量维度与数据字段映射}
+
+\begin{longtable}{L{3.4cm} L{6.1cm} L{4.5cm}}
+\toprule
+质量维度 & 主要依赖字段 & 备注 \\
+\midrule
+Learnability & \Code{actions}, \Code{qpos}, \Code{timestamps}, task phase & 需要区分低信息片段和合理等待。 \\
+Task-Semantic Quality & task prompt, video, L4 result, episode metadata & 需要 L4 或人工语义标签。 \\
+Demonstration Behavior & \Code{actions}, \Code{qpos}, \Code{ee\_poses\_*}, video & 未来重点升级方向。 \\
+Action Label Quality & \Code{actions}, hand/arm dimension split & 直接影响训练标签质量。 \\
+State and Trajectory Quality & \Code{qpos}, \Code{qvel}, \Code{ee\_poses\_qpos\_*} & 可扩展到 task space。 \\
+Observation Quality & RGB videos, depth, camera timestamps, L2 result & L2 主责，L3 汇总引用。 \\
+Data Integrity & \Code{timestamps}, \Code{sync\_validation\_*}, \Code{manifest.json}, \Code{metadata.json} & 硬门控。 \\
+Dataset-Level Quality & 批次内所有 episode metrics, task metadata & 离线统计。 \\
+Execution Diagnostics & \Code{actions}, \Code{qpos}, \Code{effort}, \Code{imu\_*} & 辅助诊断。 \\
+\bottomrule
+\end{longtable}
+
+\section{质量节点分级}
+
+\subsection{Core Training Quality}
+
+Core Training Quality 是直接影响模型学习的质量维度，包括 Learnability、Task-Semantic Quality、Demonstration Behavior Quality、Action Label Quality、State and Trajectory Quality、Observation Quality、Data Integrity。
+
+\subsection{Contextual Quality}
+
+Contextual Quality 需要结合任务类型、物体、阶段和采集目标解释。例如手部 0/255、短暂停顿、重复接近，在不同任务中含义不同。Contextual Quality 不应使用统一绝对阈值直接判坏。
+
+\subsection{Diagnostic Quality}
+
+Diagnostic Quality 用于解释数据异常来源，例如控制器跟踪误差、effort 过高、IMU 冲击。它可以影响人工复核优先级，但默认不应直接决定训练样本价值。
+
+\section{前端与报告展示原则}
+
+\subsection{从指标列表转向质量画像}
+
+L3 v1 的前端展示是指标卡片列表；L3 v2 应展示质量画像：
+\begin{itemize}
+  \item 根部不再只有一个 \Code{Q\_motion}，而是展示 Training Quality Profile。
+  \item 指标卡片按本体维度分组，例如 Learnability、Behavior、Action Label、Data Integrity。
+  \item Execution Diagnostics 单独折叠展示，避免让用户误以为 tracking error 就是训练质量。
+  \item Timeline 区分“异常片段”“低信息片段”“关键动作片段”“需复核片段”。
+\end{itemize}
+
+\subsection{人工 QC 的解释逻辑}
+
+每一个自动指标都应能解释为：
+\begin{quote}
+该指标影响哪个质量维度？该质量维度为什么会影响训练？当前 episode 的风险是什么？是否需要人工复核？
+\end{quote}
+
+\section{数据库与配置治理原则}
+
+\subsection{从 Metric 表转向 Ontology-Metric 表}
+
+建议后续数据库设计中引入以下概念：
+\begin{itemize}
+  \item \Code{quality\_dimension}: 本体节点，例如 \Code{learnability.information\_density}。
+  \item \Code{metric\_definition}: 指标定义，例如 \Code{low\_information\_ratio}。
+  \item \Code{metric\_algorithm}: 指标算法版本，例如 \Code{v1\_windowed\_action\_state\_activity}。
+  \item \Code{metric\_result}: episode 级或 batch 级结果。
+  \item \Code{threshold\_profile}: 按任务类型、数据版本或采集配置管理阈值。
+\end{itemize}
+
+\subsection{指标版本化}
+
+Ontology 节点应尽量稳定；Metric 和 Algorithm 可以版本化迭代。例如 Smoothness 节点长期存在，但算法可以从 LDLJ v1 升级为 SPARC v2 或 EE jerk v3。
+
+\section{后续文档接口}
+
+本文档直接服务于后续三类文档：
+
+\begin{enumerate}
+  \item \Term{Metric Specification}: 为每个本体节点选择候选指标，定义指标语义、输入、输出、解释和风险。
+  \item \Term{Algorithm Specification}: 为每个指标定义具体公式、窗口、归一化、Timeline 生成和复杂度。
+  \item \Term{Implementation Specification}: 定义后端代码结构、API schema、缓存策略、前端展示和数据库迁移。
+\end{enumerate}
+
+\section{结论}
+
+本文档建立了 L3 v2 的质量本体。其最核心的改变是将 L3 从“轨迹运动质量评分”重构为“机器人示范训练质量评价”。在这个框架下，指标不再按照能计算什么来组织，而是按照它们服务于哪个训练质量维度来组织。
+
+后续工作应从本体树出发，编写 Metric Specification，逐一确定哪些质量节点需要自动指标、哪些需要人工复核、哪些只能在批次级统计中计算。只有完成这一层设计后，才应进入公式、阈值和代码实现阶段。
+
+
+\newpage
+\section*{v1.1 本体同步附录：Camera Temporal Continuity}
+\addcontentsline{toc}{section}{v1.1 本体同步附录：Camera Temporal Continuity}
+
+实现阶段发现，Observation Quality 与 Data Integrity 之间存在一个交叉问题：相机画面在播放器时间上正常推进，但其真实采集时间可能落后主时间轴，或者画面内容长时间冻结后突然跳变。该问题应在本体中明确表达。
+
+\subsection*{新增或强化节点}
+
+\begin{itemize}
+\item Observation Quality / Camera Temporal Continuity：相机画面是否随时间正常更新；
+\item Observation Quality / Stale Frame Risk：是否存在旧帧复用；
+\item Data Integrity and Synchronization / Camera Frame Timestamp Integrity：相机帧真实采集时间是否可信；
+\item Data Integrity and Synchronization / Sensor-specific Desynchronization：同步异常是否能定位到具体传感器。
+\end{itemize}
+
+对于训练使用 wrist camera 的策略模型，wrist camera freeze 或 severe desynchronization 应视为高风险 observation-action temporal misalignment。若只使用 top camera，该问题可作为诊断和未来训练风险记录，而不一定直接废弃整条 episode。
+
+\end{document}

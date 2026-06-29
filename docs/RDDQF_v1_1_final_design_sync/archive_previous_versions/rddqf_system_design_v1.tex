@@ -1,0 +1,496 @@
+
+\documentclass[UTF8,zihao=-4]{ctexart}
+\usepackage[a4paper,top=2.3cm,bottom=2.3cm,left=2.35cm,right=2.35cm]{geometry}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setmainfont{DejaVu Sans}
+\setsansfont{DejaVu Sans}
+\setmonofont{Noto Sans Mono}
+\setCJKmainfont{Noto Sans CJK SC}
+\setCJKsansfont{Noto Sans CJK SC}
+\setCJKmonofont{Noto Sans CJK SC}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{lastpage}
+\usepackage{pifont}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{makecell}
+\hypersetup{colorlinks=true,linkcolor=black,urlcolor=blue,citecolor=black}
+\definecolor{RuleBlue}{RGB}{25,74,135}
+\definecolor{LightBlue}{RGB}{236,243,252}
+\definecolor{LightGray}{RGB}{247,247,247}
+\definecolor{DarkGray}{RGB}{80,80,80}
+\definecolor{WarnOrange}{RGB}{172,103,0}
+\definecolor{RejectRed}{RGB}{150,35,35}
+\definecolor{PassGreen}{RGB}{38,118,82}
+\titleformat{\section}{\Large\bfseries\color{RuleBlue}}{\thesection}{0.8em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.8em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{0.8em}{}
+\setlist[itemize]{topsep=3pt,itemsep=2pt,parsep=0pt,leftmargin=1.9em}
+\setlist[enumerate]{topsep=3pt,itemsep=2pt,parsep=0pt,leftmargin=2.2em}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcommand{\Pass}{\textcolor{PassGreen}{\ding{51}}}
+\newcommand{\Warn}{\textcolor{WarnOrange}{\ding{115}}}
+\newcommand{\Reject}{\textcolor{RejectRed}{\ding{55}}}
+\newcommand{\Code}[1]{\texttt{#1}}
+\newcommand{\Term}[1]{\textbf{#1}}
+\newenvironment{notebox}[1]{\vspace{0.5em}\noindent\colorbox{LightBlue}{\parbox{0.96\linewidth}{\textbf{#1}}}\par\vspace{-0.2em}\begin{quote}\small}{\end{quote}\vspace{0.3em}}
+\newenvironment{decisionbox}[1]{\vspace{0.5em}\noindent\colorbox{LightGray}{\parbox{0.96\linewidth}{\textbf{#1}}}\par\vspace{-0.2em}\begin{quote}\small}{\end{quote}\vspace{0.3em}}
+
+\hypersetup{pdftitle={Robot Demonstration Data Quality Framework System Design v1.0}, pdfauthor={ChatGPT for Lingji Qiwuzhi}}
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{RDDQF System Design v1.0}
+\rhead{L3 v2 Roadmap}
+\cfoot{第 \thepage\ 页}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+\vspace*{2.5cm}
+{\Huge\bfseries 机器人 Demonstration 数据质量框架系统设计\par}
+\vspace{0.35cm}
+{\Large Robot Demonstration Data Quality Framework System Design\par}
+\vspace{0.6cm}
+{\LARGE v1.0\par}
+\vspace{1.2cm}
+\begin{tabular}{rl}
+文档定位： & 覆盖 L3 v2 及后续文档体系的系统级设计说明 \\
+适用系统： & 灵机启物机器人数采质检平台 \\
+核心目标： & 从人工 QC 工具演进为机器人数据质量平台 \\
+覆盖范围： & 标准、本体、指标、算法、实现、UI、报告、数据资产 \\
+当前阶段： & 完成 Standard 与 Ontology 后的系统路线图 \\
+\end{tabular}
+\vfill
+\begin{minipage}{0.86\linewidth}
+\centering\large\bfseries
+本系统设计的核心思想是：先建立训练数据质量标准，再建立质量本体，然后将指标、算法、代码、前端和报告全部挂载到同一套质量语义上。
+\end{minipage}
+\vfill
+{\large 2026 年 6 月\par}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section*{执行摘要}
+\addcontentsline{toc}{section}{执行摘要}
+
+本文档描述“机器人 Demonstration 数据质量框架”（Robot Demonstration Data Quality Framework, RDDQF）的系统级设计思路。它不是单个指标文档，也不是后端实现说明，而是覆盖后续所有设计文档的总纲。
+
+系统目标是将当前 L3 从一个 episode 打开时临时计算的 Motion Score，升级为面向具身智能训练数据的数据质量平台能力。升级后的系统应具备：质量标准、质量本体、指标规范、算法规范、离线缓存、批次统计、前端质量画像、人工复核闭环、数据集发布报告和版本治理。
+
+本文档提前定义后续需要编写的核心文档：Metric Specification、Algorithm Specification、Threshold Calibration Report、L3 Engine Implementation Specification、Manual QC UI Specification、Batch Quality Report Specification、Database Schema and Cache Design、Dataset Release Quality Protocol。每份文档的职责、输入、输出和与现有系统的关系均在本文档中说明。
+
+\section{系统定位}
+
+\subsection{当前系统现状}
+
+当前平台已经具备完整的数据质检基本链路：MinIO 保存 raw 与 processed 文件，PostgreSQL 保存 episode 元数据和 QC 结果，FastAPI 后端提供 QC context 和 telemetry curve API，Vue 前端提供人工 QC 工作台。L3 v1 后端从 \Code{telemetry.npz} 读取 qpos、actions、qvel、effort、timestamps、sync validation 等字段，计算 8 个自动指标和一个 \Code{Q\_motion} 综合分。
+
+该系统已经可以支持人工审核，但其质量语义仍偏向“运动执行质量”。下一阶段需要将它升级为“训练数据质量评价系统”。
+
+\subsection{目标系统定位}
+
+目标系统定义为：
+\begin{quote}
+面向机器人策略学习数据集构建的多层质量评价、质量追溯和数据资产筛选系统。
+\end{quote}
+
+它不是单纯的 QC 页面，也不是单纯的指标计算脚本，而是连接采集、审核、数据筛选、训练集构建和数据发布的质量基础设施。
+
+\section{总体设计原则}
+
+\subsection{标准先于指标}
+
+系统不应从“能算哪些指标”出发，而应从“什么样的数据值得训练”出发。所有指标都必须能追溯到 Training Data Quality Standard 和 Quality Ontology。
+
+\subsection{本体先于算法}
+
+同一个质量节点可以有多个算法版本。例如 Smoothness 可以由 LDLJ、SPARC、EE jerk 或混合指标实现。本体稳定，算法可迭代。
+
+\subsection{训练价值优先于执行精度}
+
+L3 v2 的默认目标不是评价机器人是否精确执行遥操作命令，而是评价 demonstration 是否为模型提供高质量学习信号。Tracking Error 和 Effort 属于诊断类指标，而不是训练质量主指标。
+
+\subsection{单条质量与数据集质量分离}
+
+Episode 级指标回答“这条数据是否好”；Dataset 级指标回答“这一批数据是否覆盖充分、分布合理、冗余可控”。两者需要共享本体，但不能混成一个分数。
+
+\section{四层文档体系}
+
+\subsection{文档栈概览}
+
+\begin{verbatim}
+Layer 1: Training Data Quality Standard
+         -> defines what high-quality training data means
+
+Layer 2: Quality Ontology
+         -> defines the quality tree and semantic categories
+
+Layer 3: Metric Specification
+         -> defines metrics under each ontology node
+
+Layer 4: Algorithm and Implementation Specification
+         -> defines formulas, APIs, code, cache, UI, reports
+\end{verbatim}
+
+\subsection{已完成文档}
+
+\begin{longtable}{L{4cm} L{4cm} L{6cm}}
+\toprule
+文档 & 状态 & 作用 \\
+\midrule
+Training Data Quality Standard v1.0 & 已完成 & 定义训练数据质量的评价目标、哲学和准入原则。 \\
+Robot Demonstration Data Quality Ontology v1.0 & 本次完成 & 定义 L3 v2 指标体系的质量本体树。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{后续核心文档}
+
+\begin{longtable}{L{4.2cm} L{4.2cm} L{5.8cm}}
+\toprule
+文档 & 主要问题 & 产出 \\
+\midrule
+Metric Specification & 每个质量节点用什么指标表达 & 指标清单、定义、输入输出、解释逻辑。 \\
+Algorithm Specification & 每个指标怎么算 & 公式、窗口、归一化、评分、timeline 规则。 \\
+Threshold Calibration Report & Good/Warn/Bad 如何标定 & 分布统计、任务类型阈值、标注样本分析。 \\
+L3 Engine Implementation Specification & 后端如何实现 & 模块结构、类设计、缓存、异步任务、API。 \\
+Manual QC UI Specification & 前端如何展示质量画像 & 右侧面板、timeline、曲线联动、复核工作流。 \\
+Batch Quality Report Specification & 批次级如何分析 & 分布、异常聚类、同类对比、数据集准入建议。 \\
+Database Schema and Cache Design & 结果如何持久化 & quality dimension、metric、algorithm、result、版本表。 \\
+Dataset Release Quality Protocol & 如何发布训练数据集 & 数据集切分、质量报告、版本号、可追溯记录。 \\
+\bottomrule
+\end{longtable}
+
+\section{目标系统架构}
+
+\subsection{逻辑架构}
+
+\begin{verbatim}
+MinIO processed data
+      |
+      v
+Telemetry Loader / Metadata Loader
+      |
+      v
+Feature Extraction Layer
+      |
+      v
+Ontology-aware Metric Engine
+      |
+      +--> Episode Quality Profile
+      +--> Timeline Segments
+      +--> Diagnostic Signals
+      |
+      v
+Quality Result Store / Cache
+      |
+      +--> Manual QC UI
+      +--> Batch Quality Report
+      +--> Dataset Release Report
+      +--> Threshold Calibration Pipeline
+\end{verbatim}
+
+\subsection{核心模块}
+
+\begin{longtable}{L{4cm} L{5cm} L{5cm}}
+\toprule
+模块 & 职责 & 备注 \\
+\midrule
+Data Access Layer & 从 MinIO/PostgreSQL 读取 telemetry、manifest、metadata、视频索引 & 避免多个 API 重复读取同一对象。 \\
+Feature Extraction Layer & 生成 arm/hand/EE/time/sync 等基础特征 & 与具体指标解耦，可缓存。 \\
+Quality Ontology Registry & 保存质量维度、指标归属和版本关系 & 支持 UI 分组与报告生成。 \\
+Metric Engine & 计算 episode 级指标 & 按本体维度组织输出。 \\
+Timeline Generator & 生成异常、低信息、关键动作、复核片段 & 不再只输出异常段。 \\
+Quality Result Store & 持久化指标结果和算法版本 & 支持离线缓存和历史对比。 \\
+Calibration Pipeline & 基于 approved samples 做统计标定 & 从经验阈值升级为数据驱动阈值。 \\
+Report Generator & 生成 episode/batch/dataset 级报告 & 服务数据资产发布。 \\
+Manual QC UI & 人工复核、解释、确认和反馈 & 提供闭环标注。 \\
+\bottomrule
+\end{longtable}
+
+\section{从 L3 v1 到 L3 v2 的迁移路线}
+
+\subsection{保留但重解释的内容}
+
+L3 v1 中并非所有工作都需要推翻。已有的数据读取、关节维度识别、timeline 合并、前端曲线展示、settings 配置页等仍有价值。需要改变的是指标语义和评分结构。
+
+\begin{longtable}{L{3.5cm} L{4.6cm} L{5.5cm}}
+\toprule
+L3 v1 元素 & L3 v2 处理 & 原因 \\
+\midrule
+LDLJ & 保留并归入 Smoothness & 可表达示范平滑性。 \\
+Dead/Static & 合并为低信息/低活动片段证据 & 避免重复惩罚。 \\
+Saturation & 语义化处理 & 手部开合极限可能正常。 \\
+Jitter/Sync & 保留为 Data Integrity 硬门控 & 直接影响 observation-action 对齐。 \\
+Tracking Error & 降级为 Execution Diagnostics & 评价控制器，不直接评价训练价值。 \\
+Effort & 降级为 Execution Diagnostics & 辅助排查负载和碰撞风险。 \\
+Chatter & 保留并升级为 Finger Command Quality & 对灵巧手训练价值重要。 \\
+Q\_motion & 替换为 Quality Profile & 单一运动分不足以表达训练质量。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{新增能力}
+
+L3 v2 应新增以下能力：
+\begin{itemize}
+  \item EE pose 相关质量：末端轨迹平滑度、末端路径效率、末端稳定性。
+  \item 任务阶段感知：接近、抓取、移动、放置、完成等阶段片段。
+  \item 低信息片段识别：将无效等待、空转和真实关键停顿区分开。
+  \item 训练标签质量：action label 的平滑性、动态范围、跳变、手部协同。
+  \item 质量画像输出：不再只输出一个分数，而是输出多维 quality profile。
+  \item 离线缓存：避免每次打开 manual QC 都重新计算。
+  \item 批次对比：同类任务分布、离群样本、冗余样本、质量分布。
+\end{itemize}
+
+\section{Metric Specification 文档预案}
+
+\subsection{文档目标}
+
+Metric Specification 是下一份应编写的核心文档。它回答：对于 Ontology 中的每个质量节点，需要哪些指标表达？每个指标为什么存在？依赖哪些数据？输出什么？怎么解释？
+
+\subsection{建议结构}
+
+\begin{enumerate}
+  \item 指标命名规范。
+  \item 指标分层：core、contextual、diagnostic、dataset-level。
+  \item 每个质量维度下的候选指标表。
+  \item 现有指标迁移清单。
+  \item 新增指标优先级。
+  \item 指标输出 schema。
+  \item Timeline 支持规则。
+  \item UI 展示建议。
+\end{enumerate}
+
+\subsection{候选指标一级清单}
+
+\begin{longtable}{L{4cm} L{5.5cm} L{4.8cm}}
+\toprule
+质量维度 & 候选指标方向 & 优先级 \\
+\midrule
+Learnability & low information ratio, action-state activity, effective motion ratio & P0 \\
+Demonstration Behavior & joint smoothness, EE smoothness, trajectory efficiency, correction burden & P0/P1 \\
+Action Label Quality & action jump rate, command smoothness, hand chatter, saturation semantics & P0/P1 \\
+State Trajectory & qpos continuity, EE continuity, workspace path length, pose stability & P1 \\
+Data Integrity & timestamp jitter, sync invalid ratio, frame consistency, metadata consistency & P0 \\
+Execution Diagnostics & command tracking, effort p95, IMU shock & P1/P2 \\
+Dataset-Level & task distribution, embedding diversity, duplicate ratio, outlier score & P2 \\
+\bottomrule
+\end{longtable}
+
+\section{Algorithm Specification 文档预案}
+
+\subsection{文档目标}
+
+Algorithm Specification 在 Metric Specification 之后编写。它才开始给出公式、窗口、阈值映射和 timeline 生成规则。
+
+\subsection{每个算法条目应包含}
+
+\begin{itemize}
+  \item Metric ID 与所属 ontology node。
+  \item 输入字段和预处理逻辑。
+  \item 计算公式或伪代码。
+  \item 输出 value、score、severity、confidence。
+  \item 时间复杂度和内存复杂度。
+  \item Timeline segment 生成规则。
+  \item 已知误报场景和任务类型适配策略。
+  \item 标定所需样本和验证方法。
+\end{itemize}
+
+\section{Threshold Calibration 文档预案}
+
+\subsection{为什么需要单独文档}
+
+当前 L3 v1 的阈值主要是经验值。L3 v2 必须从 approved samples 和 failed samples 的实际分布中标定阈值。阈值不是算法的一部分，而是数据集和任务类型相关的配置资产。
+
+\subsection{标定流程}
+
+\begin{enumerate}
+  \item 收集每个任务类型至少 200 条已人工确认样本。
+  \item 计算候选指标分布。
+  \item 对 approved、warning、rejected 数据进行分布对比。
+  \item 选取 percentile 或 robust statistics 作为初始阈值。
+  \item 人工复核边界样本。
+  \item 建立任务类型阈值 profile。
+  \item 持续记录阈值版本与效果。
+\end{enumerate}
+
+\section{L3 Engine Implementation 文档预案}
+
+\subsection{后端模块建议}
+
+\begin{verbatim}
+backend/app/services/l3_v2/
+|-- loaders.py              # telemetry, manifest, metadata loading
+|-- features.py             # reusable feature extraction
+|-- ontology.py             # quality dimension registry
+|-- metrics/
+|   |-- learnability.py
+|   |-- behavior.py
+|   |-- action_label.py
+|   |-- trajectory.py
+|   |-- integrity.py
+|   `-- diagnostics.py
+|-- scoring.py              # quality profile aggregation
+|-- timeline.py             # segment generation
+|-- cache.py                # result cache
+`-- engine.py               # orchestration
+\end{verbatim}
+
+\subsection{API 输出建议}
+
+\begin{verbatim}
+{
+  "episodeId": "...",
+  "qualityProfile": {
+    "learnability": {...},
+    "demonstrationBehavior": {...},
+    "actionLabelQuality": {...},
+    "dataIntegrity": {...},
+    "executionDiagnostics": {...}
+  },
+  "metricCards": [...],
+  "timelineSegments": [...],
+  "diagnostics": [...],
+  "algorithmVersions": {...},
+  "confidence": {...}
+}
+\end{verbatim}
+
+\section{Manual QC UI 文档预案}
+
+\subsection{UI 目标}
+
+前端应从“展示一堆指标卡片”升级为“解释这条数据是否值得训练”。右侧边栏应展示 quality profile，曲线和 timeline 应围绕质量维度联动。
+
+\subsection{建议 UI 结构}
+
+\begin{itemize}
+  \item 顶部：episode 基本信息、任务类型、当前训练质量总览。
+  \item 主区：多视角视频、轨迹曲线、异常/关键片段 timeline。
+  \item 右侧：Training Quality Profile，不同维度独立展示。
+  \item 诊断区：Tracking、Effort、IMU 等辅助信息折叠展示。
+  \item 人工复核：Pass/Fail 之外增加“适合训练/仅供诊断/需人工裁剪/不进入训练集”等数据资产状态。
+\end{itemize}
+
+\section{Batch Quality Report 文档预案}
+
+\subsection{报告目标}
+
+批次报告不只是列出每条数据分数，而是回答：这一批数据能不能构成可用训练集？哪些任务覆盖不足？哪些 episode 是离群样本？哪些样本重复？哪些指标分布异常？
+
+\subsection{核心内容}
+
+\begin{itemize}
+  \item 任务类型分布与采集规模。
+  \item 各质量维度分布图。
+  \item 按任务类型的质量分位数。
+  \item 低质量原因聚类。
+  \item 高价值样本推荐。
+  \item 重复/冗余 episode 检测。
+  \item 数据集发布建议。
+\end{itemize}
+
+\section{Database Schema and Cache Design 文档预案}
+
+\subsection{核心表设计方向}
+
+\begin{longtable}{L{4cm} L{8.5cm}}
+\toprule
+表名 & 职责 \\
+\midrule
+\Code{quality\_dimensions} & 存储 ontology 节点。 \\
+\Code{metric\_definitions} & 存储指标语义、所属维度、核心/诊断/批次类型。 \\
+\Code{metric\_algorithms} & 存储算法版本、参数 schema 和实现版本。 \\
+\Code{episode\_metric\_results} & 存储 episode 级指标结果。 \\
+\Code{episode\_quality\_profiles} & 存储 episode 级多维质量画像。 \\
+\Code{quality\_segments} & 存储 timeline segments。 \\
+\Code{threshold\_profiles} & 存储任务类型阈值配置。 \\
+\Code{batch\_quality\_reports} & 存储批次级分析结果。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{缓存原则}
+
+同一 telemetry 文件、同一算法版本、同一阈值 profile 下的结果应可复用。缓存 key 至少应包含 episode id、processed object version、algorithm version、config version。
+
+\section{Dataset Release Quality Protocol 文档预案}
+
+\subsection{数据资产状态}
+
+建议为每条 episode 增加数据资产状态：
+\begin{itemize}
+  \item \Code{train\_ready}: 可直接进入训练集。
+  \item \Code{train\_with\_caution}: 可训练，但存在低风险提示。
+  \item \Code{needs\_trim}: 需要裁剪低质量片段后训练。
+  \item \Code{diagnostic\_only}: 不适合作为正样本，但可用于诊断或失败分析。
+  \item \Code{reject}: 不进入数据资产库。
+\end{itemize}
+
+\subsection{发布报告内容}
+
+每个训练数据集版本应附带质量报告，包括样本数量、任务分布、质量维度分布、剔除原因、阈值版本、指标算法版本、人工 QC 版本和可追溯链接。
+
+\section{实施路线图}
+
+\subsection{Phase 0：设计基线}
+
+\begin{itemize}
+  \item 已完成 Training Data Quality Standard。
+  \item 已完成 Quality Ontology。
+  \item 完成本系统设计文档。
+\end{itemize}
+
+\subsection{Phase 1：Metric Specification}
+
+产出完整指标体系，不写代码。目标是确定 P0/P1/P2 指标清单，以及每个指标的本体挂载位置。
+
+\subsection{Phase 2：Algorithm Specification}
+
+对 P0 指标给出公式、窗口、score 映射、timeline 规则和误报场景。
+
+\subsection{Phase 3：后端 L3 v2 原型}
+
+在不破坏 L3 v1 的前提下实现 L3 v2 engine，输出 quality profile。优先使用离线缓存。
+
+\subsection{Phase 4：前端质量画像改造}
+
+将 manual QC 页面从指标卡片列表升级为 quality profile，支持点击 timeline 跳转视频，支持曲线异常高亮。
+
+\subsection{Phase 5：批次统计与阈值标定}
+
+基于 200+ approved samples 开始任务类型阈值标定，并生成 batch quality report。
+
+\subsection{Phase 6：数据资产发布协议}
+
+将 QC 结果用于训练集筛选、数据集版本发布和训练前数据报告。
+
+\section{近期下一步建议}
+
+基于当前进度，下一步应立即进入 \Term{Metric Specification}。建议优先完成以下输出：
+
+\begin{enumerate}
+  \item P0 指标候选表：必须支持训练数据准入。
+  \item P1 指标候选表：提升质量解释能力。
+  \item Diagnostic 指标表：Tracking、Effort、IMU 等辅助诊断。
+  \item 现有 L3 v1 指标迁移表。
+  \item 新旧 API 输出对比。
+  \item 前端质量画像初稿。
+\end{enumerate}
+
+\section{结论}
+
+RDDQF 的核心不是增加更多指标，而是建立一条从质量标准到本体、从本体到指标、从指标到算法、从算法到平台能力的稳定链路。只有这样，L3 v2 才不会再次退化为经验指标堆叠，而能成为机器人数据资产平台的质量基础设施。
+
+\end{document}

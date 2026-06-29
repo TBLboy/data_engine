@@ -80,6 +80,56 @@
   - 后续 BatchAdjudicationService 将从 GeneralConfig 读取此阈值
   - 失败率分母已明确为"抽检数"（非批次总数），与设计文档一致
 
+## 2026-06-29 (RDDQF v1.2 平台增强完整落地)
+
+- Type: feature (major)
+- Status: backend compile + frontend build passed, Docker deployed + migration 0013 executed, APIs verified
+- Importance: high
+- Reusable: yes
+- Objective: 落地 v1.2 增强：导出字段扩展、导出历史、管理员任务池管理、任务操作日志
+- Work completed:
+
+  ### 数据库层 (migration 20260629_0013)
+  - 新表 dataset_export_jobs：记录每次导出 (task_type_id, export_format, episode_count, created_by, created_at)
+  - 新表 task_operation_log：记录任务管理操作 (task_id, episode_id, operation, from_reviewer, to_reviewer, operator_id, reason)
+
+  ### 后端服务
+  - dataset_service.py 增强：
+    - 导出字段从 11 个扩展到 14 个 (新增 final_decision_reason, reviewer, reason_code, updated_at)
+    - record_export() 写入导出历史
+    - export_history() 查询导出历史（支持按 task_type 筛选）
+  - reviewer_task_manager.py 新增：
+    - get_reviewer_tasks() 获取审核员任务池
+    - revoke_task() 撤回任务（status→new, assignee→未派发, lock clear）
+    - release_task() 释放任务回公共池
+    - bulk_revoke() 批量撤回
+    - 所有操作写入 TaskOperationLog
+
+  ### API 端点
+  - `GET /api/dataset/exports` — 导出历史
+  - `GET /api/admin/reviewers/{id}/tasks` — 审核员任务列表
+  - `POST /api/admin/qc-tasks/{id}/revoke` — 撤回任务
+  - `POST /api/admin/qc-tasks/{id}/release` — 释放任务
+  - `POST /api/admin/qc-tasks/bulk-revoke` — 批量撤回
+  - 导出端点增强：每次导出记录到 dataset_export_jobs
+
+  ### 前端
+  - dataset-management.vue：新增导出历史表格
+  - dashboard.vue：审核员工作量卡片增加"管理任务"按钮 → el-drawer 任务管理面板
+    - 任务列表：任务ID/Episode/任务类型/批次/状态
+    - 待处理任务支持撤回和释放操作
+    - 操作原因输入框
+    - done/in_review 任务标记为不可操作
+
+  ### API 验证结果
+  - GET /dataset/exports → 导出后记录正确 (createdBy=系统管理员, episode_count=0)
+  - GET /admin/reviewers/{id}/tasks → 正确返回任务列表
+  - 导出 CSV → 14 字段完整 (新增 final_decision_reason, reviewer, reason_code)
+
+- Affected files: 12 new/modified
+  - New: reviewer_task_manager.py, migration 0013
+  - Modified: dataset_service.py, routes/qc.py, qc.py (models), __init__.py, dashboard.vue, dataset-management.vue, client.ts, types/qc.ts
+
 ## 2026-06-29 (抽检随机化：百分比抽检改为随机抽取)
 
 - Type: fix

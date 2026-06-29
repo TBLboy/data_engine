@@ -1,0 +1,932 @@
+
+\documentclass[UTF8,zihao=-4]{ctexart}
+\usepackage[a4paper,top=2.3cm,bottom=2.3cm,left=2.35cm,right=2.35cm]{geometry}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setmainfont{DejaVu Sans}
+\setsansfont{DejaVu Sans}
+\setmonofont{Noto Sans Mono}
+\setCJKmainfont{Noto Sans CJK SC}
+\setCJKsansfont{Noto Sans CJK SC}
+\setCJKmonofont{Noto Sans CJK SC}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{lastpage}
+\usepackage{pifont}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{makecell}
+\usepackage{seqsplit}
+\hypersetup{colorlinks=true,linkcolor=black,urlcolor=blue,citecolor=black}
+\definecolor{RuleBlue}{RGB}{25,74,135}
+\definecolor{LightBlue}{RGB}{236,243,252}
+\definecolor{LightGray}{RGB}{247,247,247}
+\definecolor{LightYellow}{RGB}{255,249,230}
+\definecolor{DarkGray}{RGB}{80,80,80}
+\definecolor{WarnOrange}{RGB}{172,103,0}
+\definecolor{RejectRed}{RGB}{150,35,35}
+\definecolor{PassGreen}{RGB}{38,118,82}
+\titleformat{\section}{\Large\bfseries\color{RuleBlue}}{\thesection}{0.8em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.8em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{0.8em}{}
+\setlist[itemize]{topsep=3pt,itemsep=2pt,parsep=0pt,leftmargin=1.9em}
+\setlist[enumerate]{topsep=3pt,itemsep=2pt,parsep=0pt,leftmargin=2.2em}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcommand{\Pass}{\textcolor{PassGreen}{\ding{51}}}
+\newcommand{\Warn}{\textcolor{WarnOrange}{\ding{115}}}
+\newcommand{\Reject}{\textcolor{RejectRed}{\ding{55}}}
+\newcommand{\Code}[1]{\texttt{#1}}
+\newcommand{\EID}[1]{\texttt{\seqsplit{#1}}}
+\newcommand{\Term}[1]{\textbf{#1}}
+\newcommand{\PathNode}[1]{\textsf{#1}}
+\newenvironment{notebox}[1]{\vspace{0.5em}\noindent\colorbox{LightBlue}{\parbox{0.96\linewidth}{\textbf{#1}}}\par\vspace{-0.2em}\begin{quote}\small}{\end{quote}\vspace{0.3em}}
+\newenvironment{decisionbox}[1]{\vspace{0.5em}\noindent\colorbox{LightGray}{\parbox{0.96\linewidth}{\textbf{#1}}}\par\vspace{-0.2em}\begin{quote}\small}{\end{quote}\vspace{0.3em}}
+\newenvironment{warningbox}[1]{\vspace{0.5em}\noindent\colorbox{LightYellow}{\parbox{0.96\linewidth}{\textbf{#1}}}\par\vspace{-0.2em}\begin{quote}\small}{\end{quote}\vspace{0.3em}}
+
+\hypersetup{pdftitle={Robot Demonstration Quality Evidence Specification v1.0}, pdfauthor={ChatGPT for Lingji Qiwuzhi}}
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{RDQ Evidence Specification v1.0}
+\rhead{RDDQF / L3 v2}
+\cfoot{第 \thepage\ 页 / 共 \pageref{LastPage} 页}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+\vspace*{2.4cm}
+{\Huge\bfseries 机器人 Demonstration 数据质量证据规范\par}
+\vspace{0.35cm}
+{\Large Robot Demonstration Quality Evidence Specification\par}
+\vspace{0.6cm}
+{\LARGE v1.0\par}
+\vspace{1.2cm}
+\begin{tabular}{rl}
+文档定位： & RDDQF 证据层设计文档 \\
+适用系统： & 灵机启物机器人数采质检平台 / L3 v2 \\
+上游数据： & Linker Open TeleDex processed 数据与人工 QC 结果 \\
+核心目标： & 将质量本体转化为可解释、可计算、可复核的证据体系 \\
+承接文档： & Training Data Quality Standard v1.0；Quality Ontology v1.0 \\
+输出对象： & Metric Specification、Algorithm Specification、L3 Engine v2、UI 与报告系统 \\
+\end{tabular}
+\vfill
+\begin{minipage}{0.86\linewidth}
+\centering\large\bfseries
+本规范的核心结论是：L3 v2 不应从单个指标直接给出分数，而应先收集和组织质量证据。质量分数是证据的解释结果，不是证据本身。
+\end{minipage}
+\vfill
+{\large 2026 年 6 月\par}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section*{执行摘要}
+\addcontentsline{toc}{section}{执行摘要}
+
+本文档定义机器人 Demonstration 数据质量框架（Robot Demonstration Data Quality Framework, RDDQF）中的\Term{证据层}。在此前已经完成的 Training Data Quality Standard 中，系统明确了 L3 v2 的目标不是评价机器人控制器执行得是否精准，而是评价一条 demonstration 对下游策略学习是否有训练价值；在 Quality Ontology 中，系统进一步将训练数据质量拆解为 Learnability、Task-Semantic Quality、Demonstration Behavior Quality、Action Label Quality、State and Trajectory Quality、Observation Quality、Data Integrity and Synchronization、Dataset-Level Quality、Execution Diagnostics 等质量维度。
+
+本文档回答第三个问题：这些质量维度应当由哪些\Term{证据}支撑。证据不是最终指标，也不是公式，而是位于“质量本体”和“指标算法”之间的中间层。它描述：一个质量判断为什么成立、依赖哪些数据、能否定位到时间段、是否需要人工复核、是否可用于自动评分、是否只是辅助诊断。建立证据层的目的，是避免 L3 v1 中“指标直接等于质量”的设计问题，使后续的 Metric Specification、Algorithm Specification、L3 Engine v2 和前端 UI 都能围绕同一套可解释逻辑展开。
+
+本文档给出证据对象模型、证据类型、证据粒度、证据可信度、证据聚合原则，并为九个一级质量维度列出推荐证据清单。它同时给出当前 L3 v1 指标向证据体系的迁移方案，明确 Tracking Error 与 Effort 应属于 Execution Diagnostics，而不应作为训练价值主评分项；Dead、Static、Saturation、Chatter 等现有指标应被重新解释为低信息、动作标签质量、手部命令质量和示范行为质量的候选证据。
+
+\section{文档定位与设计目标}
+
+\subsection{为什么需要证据层}
+
+如果系统直接从质量本体进入指标公式，容易出现三个问题。
+
+第一，质量维度和指标之间会出现一对一误绑定。例如 Smoothness 被固定等同于 LDLJ，后续即便引入 SPARC、End-Effector Jerk 或 Finger Smoothness，也很难解释为什么多个算法都服务同一个质量节点。第二，分数缺乏可解释性。前端显示一个 Q 值或一个红黄绿卡片时，审核员并不知道该结论来自哪些时间段、哪些模态、哪些动作维度。第三，难以迭代。算法版本、阈值、数据源和 UI 展示都会变化，如果没有稳定的证据层，系统会在每次迭代中重写质量逻辑。
+
+证据层的作用，是把“质量语义”和“计算方法”解耦。质量本体定义要评价什么；证据层定义用什么现象来支持评价；指标层再定义如何计算这些现象。
+
+\begin{notebox}{核心定义}
+\Term{Evidence} 是支持某个质量判断的可观察事实或可计算信号。它可以来自 telemetry、video、depth、metadata、manifest、L2/L4 人工结果或批次统计。Evidence 不是最终分数，而是分数背后的解释单元。
+\end{notebox}
+
+\subsection{从 Metric Engine 到 Evidence Engine}
+
+L3 v1 的隐含结构是：
+
+\begin{verbatim}
+telemetry.npz -> metric -> score -> Q_motion
+\end{verbatim}
+
+L3 v2 推荐结构应当是：
+
+\begin{verbatim}
+Quality Ontology -> Evidence -> Metric -> Algorithm -> Result -> Explanation
+\end{verbatim}
+
+换句话说，系统不应首先问“我们可以计算哪些指标”，而应先问“为了判断这条 demonstration 是否值得训练，我们需要哪些证据”。这也是从 Motion QC 升级到 Training Data Quality Assessment 的关键转变。
+
+\subsection{证据层的输出}
+
+证据层不直接产出最终评分，而产出三类结构：
+
+\begin{itemize}
+  \item \Term{Evidence Registry}: 证据清单，描述每个证据的定义、数据源、作用范围和与本体节点的关系。
+  \item \Term{Evidence Graph}: 证据与质量维度之间的关系图，用于聚合、解释和 UI 展示。
+  \item \Term{Evidence Contract}: 指标算法必须满足的输入输出约束，用于后续实现。
+\end{itemize}
+
+\section{证据对象模型}
+
+\subsection{Evidence Object}
+
+每一个证据都应被定义为一个结构化对象，而不是散落在代码里的函数。推荐对象字段如下。
+
+\begin{longtable}{L{4.0cm} L{2.7cm} L{6.8cm}}
+\toprule
+字段 & 类型 & 说明 \\
+\midrule
+\Code{evidence\_id} & 字符串 & 全局唯一 ID，例如 \EID{LRN.IDENSITY.LOW\_ACTION}。 \\
+\Code{name} & 字符串 & 面向人类的证据名称，例如“低动作信息密度”。 \\
+\Code{ontology\_path} & 列表 & 所属质量路径，例如 Learnability / Information Density。 \\
+\Code{question} & 文本 & 该证据回答的问题。 \\
+\Code{data\_sources} & 列表 & 依赖字段，例如 \Code{actions}, \Code{qpos}, \Code{timestamps}。 \\
+\Code{temporal\_scope} & 枚举 & frame、window、segment、episode、batch、dataset。 \\
+\Code{polarity} & 枚举 & positive、negative、diagnostic、neutral。 \\
+\Code{role} & 枚举 & gate、score、review、explain、diagnostic、calibration。 \\
+\Code{phase\_sensitive} & 布尔 & 是否需要按任务阶段解释。 \\
+\Code{task\_sensitive} & 布尔 & 是否需要按任务类型标定。 \\
+\Code{confidence\_model} & 文本 & 该证据的可信度来源和限制。 \\
+\Code{timeline\_support} & 布尔 & 是否可以定位到时间段。 \\
+\Code{human\_review} & 枚举 & none、optional、recommended、required。 \\
+\Code{current\_readiness} & 枚举 & ready、partial、planned、research。 \\
+\Code{candidate\_metrics} & 列表 & 后续可实现的指标候选，不在本文件中规定公式。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{Evidence ID 命名规则}
+
+证据 ID 建议采用四段式命名：
+
+\begin{verbatim}
+<DOMAIN>.<SUBDOMAIN>.<EVIDENCE_NAME>.<VERSION>
+\end{verbatim}
+
+示例：
+
+\begin{verbatim}
+LRN.IDENSITY.LOW_ACTION_SIGNAL.v1
+BEH.SMOOTHNESS.EE_JERK.v1
+ACT.FINGER.CHATTER.v1
+DATA.SYNC.CROSS_SENSOR_DRIFT.v1
+EXEC.TRACKING.COMMAND_ERROR.v1
+\end{verbatim}
+
+其中 DOMAIN 推荐使用以下前缀：
+
+\begin{longtable}{L{2.5cm} L{4.2cm} L{6.5cm}}
+\toprule
+前缀 & 对应维度 & 说明 \\
+\midrule
+\Code{LRN} & Learnability & 可学习性证据。 \\
+\Code{TASK} & Task-Semantic Quality & 任务语义与完成度证据。 \\
+\Code{BEH} & Demonstration Behavior Quality & 示范行为质量证据。 \\
+\Code{ACT} & Action Label Quality & 动作标签质量证据。 \\
+\Code{STATE} & State and Trajectory Quality & 状态与轨迹质量证据。 \\
+\Code{OBS} & Observation Quality & 观测质量证据。 \\
+\Code{DATA} & Data Integrity and Synchronization & 文件、时间、同步、转换完整性证据。 \\
+\Code{DSET} & Dataset-Level Quality & 批次/数据集级证据。 \\
+\Code{EXEC} & Execution Diagnostics & 执行诊断证据。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{Evidence 与 Metric 的区别}
+
+\begin{longtable}{L{3.2cm} L{5.1cm} L{5.5cm}}
+\toprule
+对象 & 解决的问题 & 例子 \\
+\midrule
+Quality & 要评价什么 & Demonstration 是否流畅自然。 \\
+Evidence & 为什么可以这样判断 & 存在末端轨迹抖动、动作反复修正、手指颤振。 \\
+Metric & 用什么数字表达证据 & EE jerk、reversal rate、chatter rate。 \\
+Algorithm & 数字如何计算 & 滑窗、差分、滤波、归一化、分位数。 \\
+Result & 本条 episode 的输出 & score、severity、timeline segment。 \\
+Explanation & 给审核员看的解释 & “3.2s-4.7s 右腕末端出现高频抖动”。 \\
+\bottomrule
+\end{longtable}
+
+\begin{decisionbox}{设计决策 EVD-1}
+后续 L3 v2 代码中，Metric 不应直接挂在前端卡片上，而应通过 Evidence Registry 绑定到 Quality Ontology。前端展示的一级结构应是质量维度，指标只是证据实现。
+\end{decisionbox}
+
+\section{证据类型与粒度}
+
+\subsection{证据类型}
+
+\begin{longtable}{L{3cm} L{4.2cm} L{6.4cm}}
+\toprule
+类型 & 含义 & 典型用途 \\
+\midrule
+Positive Evidence & 支持高质量判断的证据 & 动作连续推进任务、关键交互阶段完整、状态变化清晰。 \\
+Negative Evidence & 支持低质量判断的证据 & 长时间低信息、异常跳变、无效动作、同步错误。 \\
+Diagnostic Evidence & 用于解释硬件或控制问题，但不直接决定训练价值 & command tracking error、effort spike、IMU shock。 \\
+Gate Evidence & 可以直接拒绝数据的硬门控证据 & 文件缺失、严重不同步、动作标签不可用、帧数严重不足。 \\
+Review Evidence & 需要人工复核的证据 & 疑似抓错物体、疑似中途失败但 L4 未标记。 \\
+Calibration Evidence & 用于阈值标定和分布统计的证据 & 同类任务的平滑度分布、动作范围分布。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{证据粒度}
+
+证据必须显式声明作用粒度，否则后续聚合会混乱。
+
+\begin{longtable}{L{3cm} L{4.3cm} L{6.3cm}}
+\toprule
+粒度 & 说明 & 示例 \\
+\midrule
+Frame-level & 单帧或相邻帧上的证据 & timestamp 异常、单帧跳变。 \\
+Window-level & 固定窗口内的证据 & 0.5s 内低信息、速度抖动。 \\
+Segment-level & 连续时间段上的证据 & 2s 的停顿、3s 的手部颤振。 \\
+Episode-level & 整条 episode 的证据 & 任务阶段完整性、整体动作效率。 \\
+Batch-level & 同批次多条 episode 的证据 & 该批次整体偏慢、某任务异常率升高。 \\
+Dataset-level & 训练集级证据 & 任务覆盖、场景多样性、冗余度。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{证据极性}
+
+同一个证据节点可以有正负两种解释。例如动作范围过低是负证据，但合理的静止等待可能不是负证据；手部 0/255 饱和在抓取或释放阶段可能是正证据，在长时间抖动中则是负证据。因此，证据极性必须结合任务阶段、动作上下文和持续时间解释。
+
+\begin{warningbox}{证据解释风险}
+不要把“观测到的现象”直接等同于“坏质量”。例如 saturation、static、large command tracking error 都可能在某些上下文中合理存在。证据层必须保留上下文解释能力。
+\end{warningbox}
+
+\section{数据源与证据能力映射}
+
+\subsection{TeleDex processed 数据能力}
+
+当前上游 processed 数据已经为证据层提供了多模态基础。特别是 \Code{telemetry.npz} 中包含统一时间轴、关节状态、动作命令、末端位姿、IMU、同步校验字段；\Code{manifest.json} 提供 fps、frame count、duration、sync error 等概要信息；\Code{metadata.json} 提供对齐配置、裁剪范围、sensor offsets、转换参数；视频与深度文件提供视觉观测。证据层不应只依赖 qpos/actions，而应充分使用这些信息。
+
+\begin{longtable}{L{3.4cm} L{3.8cm} L{6.5cm}}
+\toprule
+数据源 & 主要字段/文件 & 可支持的证据 \\
+\midrule
+Telemetry joint/action & \Code{qpos}, \Code{qvel}, \Code{actions}, \Code{effort} & 动作标签质量、状态连续性、信息密度、示范平滑性、手部命令质量、执行诊断。 \\
+Telemetry EE pose & \Code{ee\_poses\_qpos\_*}, \Code{ee\_poses\_actions\_*} & 末端轨迹平滑性、路径效率、workspace 轨迹质量、task-space tracking diagnostics。 \\
+Telemetry sync & \Code{sync\_validation\_is\_valid}, \Code{sync\_validation\_max\_diff} & 跨传感器同步证据、同步异常 timeline。 \\
+Telemetry IMU & \Code{imu\_cam\_top}, \Code{imu\_cam\_left\_wrist}, \Code{imu\_cam\_right\_wrist} & 冲击、震动、相机运动稳定性、接触异常诊断。 \\
+Manifest & fps、duration、frame count、sync error & 数据完整性、采样配置一致性、时长合理性。 \\
+Metadata & alignment、sensor offsets、trimmed range、device/recording summary & 转换有效性、对齐可信度、设备配置一致性。 \\
+RGB/Depth video & 三路 RGB、深度伪彩、深度 PNG & 视觉可用性、遮挡、目标可见性、任务阶段证据。 \\
+L2 人工结果 & visual pass/fail、原因码 & Observation Quality 的人工证据。 \\
+L4 人工结果 & task pass/fail、原因码 & Task-Semantic Quality 的人工证据。 \\
+Batch metadata & task、batch、operator、采集时间 & 数据集分布、任务类型阈值、同类 episode 对比。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{自动证据与人工证据}
+
+证据可以来自自动计算，也可以来自人工 QC。L3 v2 不应试图用自动证据完全替代 L2/L4，而应把 L2/L4 结果作为高优先级证据纳入统一质量画像。比如 L4 fail 是 Task-Semantic Quality 的强负证据；L2 pass 是 Observation Quality 的强正证据；L3 自动检测到的异常段则用于解释和复核。
+
+\section{总体证据图}
+
+\subsection{Evidence Graph 概览}
+
+推荐的证据图结构如下：
+
+\begin{verbatim}
+Robot Demonstration Training Quality
+|
+|-- Learnability
+|   |-- Information Density Evidence
+|   |-- Action Effectiveness Evidence
+|   |-- State-Action Causality Evidence
+|   |-- Temporal Learnability Evidence
+|
+|-- Task-Semantic Quality
+|   |-- Prompt Alignment Evidence
+|   |-- Goal Completeness Evidence
+|   |-- Phase Integrity Evidence
+|   |-- Object Interaction Evidence
+|
+|-- Demonstration Behavior Quality
+|   |-- Smoothness Evidence
+|   |-- Continuity Evidence
+|   |-- Efficiency Evidence
+|   |-- Naturalness Evidence
+|   |-- Correction Burden Evidence
+|
+|-- Action Label Quality
+|   |-- Validity Evidence
+|   |-- Dynamic Range Evidence
+|   |-- Smoothness Evidence
+|   |-- Saturation Semantics Evidence
+|   |-- Finger Command Evidence
+|
+|-- State and Trajectory Quality
+|   |-- Joint Plausibility Evidence
+|   |-- EE Trajectory Evidence
+|   |-- Kinematic Continuity Evidence
+|   |-- Workspace Efficiency Evidence
+|
+|-- Observation Quality
+|   |-- Visual Availability Evidence
+|   |-- Multi-view Evidence
+|   |-- Depth Evidence
+|   |-- Observation-Action Alignment Evidence
+|
+|-- Data Integrity and Synchronization
+|   |-- File Completeness Evidence
+|   |-- Timestamp Regularity Evidence
+|   |-- Sync Evidence
+|   |-- Metadata Consistency Evidence
+|
+|-- Dataset-Level Quality
+|   |-- Diversity Evidence
+|   |-- Coverage Evidence
+|   |-- Redundancy Evidence
+|   |-- Distribution Balance Evidence
+|
+`-- Execution Diagnostics
+    |-- Command Tracking Evidence
+    |-- Effort Evidence
+    |-- IMU Shock Evidence
+    `-- Hardware Health Evidence
+\end{verbatim}
+
+\subsection{证据优先级}
+
+在训练数据质量判断中，证据优先级建议分为四级。
+
+\begin{longtable}{L{2.6cm} L{4.2cm} L{6.7cm}}
+\toprule
+优先级 & 类型 & 说明 \\
+\midrule
+P0 & Hard Gate Evidence & 直接决定数据不可训练，例如动作标签缺失、严重不同步、关键文件缺失。 \\
+P1 & Core Training Evidence & 强烈影响训练价值，例如任务失败、动作标签异常、低信息密度、关键阶段缺失。 \\
+P2 & Quality Shaping Evidence & 影响训练质量但通常不单独拒绝，例如轨迹效率、自然性、轻微停顿。 \\
+P3 & Diagnostic Evidence & 用于解释设备或控制问题，例如 tracking error、effort、IMU shock。 \\
+\bottomrule
+\end{longtable}
+
+\section{Learnability 证据规范}
+
+\subsection{设计目标}
+
+Learnability 证据回答：模型能否从该 episode 中学到有效的观测到动作映射。它是 L3 v2 的核心训练价值维度之一。Learnability 不要求机器人执行完美，但要求 episode 中存在足够的状态变化、动作变化、时序连续性和可区分的学习信号。
+
+\begin{longtable}{L{4.1cm} L{4.0cm} L{3.2cm} L{2.6cm}}
+\toprule
+Evidence ID & 证据问题 & 数据源 & 角色 \\
+\midrule
+\EID{LRN.IDENSITY.LOW\_SIGNAL} & 是否存在长时间低学习信号片段 & \Code{actions}, \Code{qpos}, \Code{timestamps} & negative, score, timeline \\
+\EID{LRN.IDENSITY.KEY\_CHANGE} & episode 是否包含足够关键状态变化 & \Code{qpos}, EE pose, video & positive, score \\
+\EID{LRN.ACTEFF.ACTION\_CAUSES\_STATE} & action 是否导致状态或场景变化 & \Code{actions}, \Code{qpos}, EE pose, video & positive/negative \\
+\EID{LRN.CAUSALITY.STATE\_ACTION\_PAIR} & state 与 action 是否在时间上合理配对 & \Code{qpos}, \Code{actions}, sync & score, review \\
+\EID{LRN.TEMPORAL.SEQUENCE\_CONTINUITY} & 序列是否适合时序模型学习 & timestamps, frame count, qpos/actions & gate/score \\
+\EID{LRN.LABEL.DISCRIMINABILITY} & action label 是否有可区分性 & \Code{actions} & score \\
+\bottomrule
+\end{longtable}
+
+\subsection{低信息密度证据}
+
+低信息密度不是简单的“静止”或“动作小”。它的核心含义是：在某个时间段内，模型几乎无法从 observation-state-action 关系中学习到任务推进规律。合理等待、短暂停留、抓稳后的保持动作不应被直接视为低质量；长时间无任务进展、空转、无效重复动作才是负证据。
+
+\begin{decisionbox}{设计决策 LRN-E1}
+Dead Actions 与 Static 在证据层合并为 Low Learning Signal Evidence。后续算法可以分别利用 action change、state change、EE change、video change 等多个信号，但质量解释只能归入一个低信息密度证据，避免重复惩罚。
+\end{decisionbox}
+
+\subsection{状态-动作因果证据}
+
+对于 VLA 或语言条件策略模型，action label 必须与当前 observation 和 robot state 存在可解释关系。如果 action 在视觉上不可见的阶段发生，或 action 与 state 之间存在明显错位，模型会学习到错误或模糊的条件映射。该证据在初期可以由同步质量、动作变化与状态变化延迟、末端运动与视频变化一致性等弱信号支撑；后期可以引入视觉目标跟踪和任务阶段识别。
+
+\section{Task-Semantic Quality 证据规范}
+
+\subsection{设计目标}
+
+Task-Semantic Quality 证据回答：episode 是否与任务 prompt、目标物体、操作阶段和任务结果一致。它与 L4 人工质检关系最密切。L3 v2 的目标不是完全自动判定任务成功，而是为 L4 提供过程证据，并将 L4 结果纳入训练数据质量画像。
+
+\begin{longtable}{L{4.1cm} L{4.0cm} L{3.2cm} L{2.6cm}}
+\toprule
+Evidence ID & 证据问题 & 数据源 & 角色 \\
+\midrule
+\EID{TASK.PROMPT.ALIGNMENT} & 动作过程是否与 task prompt 一致 & task prompt, video, actions & review, planned \\
+\EID{TASK.GOAL.COMPLETION} & 目标状态是否达成 & L4 result, video, task metadata & gate/score \\
+\EID{TASK.PHASE.INTEGRITY} & 接近、交互、移动、释放等阶段是否完整 & actions, EE pose, video & score/review \\
+\EID{TASK.OBJECT.INTERACTION} & 是否与正确目标物体发生交互 & video, depth, EE pose & review/research \\
+\EID{TASK.SUCCESS.COMPATIBILITY} & L4 结论是否与 L3 过程证据一致 & L4, L3 evidence & review \\
+\EID{TASK.FAILURE.LOCALIZATION} & 若失败，是否能定位失败阶段 & L4 reason, timeline evidence & explain \\
+\bottomrule
+\end{longtable}
+
+\subsection{阶段完整性证据}
+
+多数遥操作任务都可以拆成若干阶段，例如 approach、pre-grasp、grasp/contact、transport、place/release、retreat。即使没有显式任务阶段标签，也可以利用动作强度、末端速度、手部闭合、目标交互时间等弱信号估计阶段。阶段完整性证据的价值在于：它比单个全局分数更能解释一条数据是否值得训练。
+
+\subsection{L4 结果作为强证据}
+
+L4 人工任务完成度应被视为 Task-Semantic Quality 的强证据。对于模型训练而言，任务失败数据不一定完全无用，但应与成功 demonstration 分开治理。第一阶段建议将 L4 fail 作为训练集准入的强负证据，除非后续明确构建失败恢复、纠错或负样本训练集。
+
+\section{Demonstration Behavior Quality 证据规范}
+
+\subsection{设计目标}
+
+Demonstration Behavior Quality 证据回答：这条示范是否值得模型模仿。它不是评价机器人控制器，也不是评价硬件健康，而是评价示范行为风格、节奏、效率和稳定性。该维度直接决定模型是否会学习到平滑、自然、高效的行为模式。
+
+\begin{longtable}{L{4.1cm} L{4.0cm} L{3.2cm} L{2.6cm}}
+\toprule
+Evidence ID & 证据问题 & 数据源 & 角色 \\
+\midrule
+\EID{BEH.SMOOTH.JOINT} & 关节空间动作是否平滑 & \Code{qpos}, \Code{actions} & score, ready \\
+\EID{BEH.SMOOTH.EE} & 末端轨迹是否平滑 & \Code{ee\_poses\_*} & score, planned \\
+\EID{BEH.CONTINUITY.PAUSE} & 是否存在不合理停顿 & actions, qpos, EE pose & negative, timeline \\
+\EID{BEH.EFFICIENCY.PATH} & 轨迹是否过度绕行 & EE pose, task phase & score, planned \\
+\EID{BEH.STABILITY.OSCILLATION} & 是否存在持续震荡 & qpos, actions, EE, IMU & negative, timeline \\
+\EID{BEH.NATURALNESS.RHYTHM} & 示范节奏是否自然 & velocity profiles, phase duration & score, research \\
+\EID{BEH.CORRECTION.RETRY} & 是否存在大量纠错、回退、重试 & action reversals, EE path, video & negative/review \\
+\EID{BEH.DEXTERITY.COORDINATION} & 手部和末端操作是否协调 & hand actions, EE pose, video & score/review \\
+\bottomrule
+\end{longtable}
+
+\subsection{Smoothness 证据}
+
+Smoothness 不应只由一个指标定义。Joint Smoothness 适合发现关节层面的抖动；Action Smoothness 直接影响模型标签；EE Smoothness 更接近任务空间质量；Finger Smoothness 对抓取类任务非常关键。因此 Smoothness 应作为证据组，而不是单一指标。
+
+\begin{decisionbox}{设计决策 BEH-E1}
+原 LDLJ 指标保留为 Joint Smoothness 的一个候选 metric，但不再直接等于“运动质量”。后续应增加 EE Smoothness 和 Action Smoothness，并在本体层统一归入 Behavior/Smoothness 与 Action Label/Smoothness。
+\end{decisionbox}
+
+\subsection{Correction Burden 证据}
+
+Correction Burden 是 L3 v2 的新增重点证据。大量纠错、回退和重复尝试会让模型学习到不必要的探索行为。与传统控制指标相比，它更接近训练数据价值。可观测信号包括 action reversal、EE path backtracking、gripper open-close retry、phase duration outlier 等。
+
+\section{Action Label Quality 证据规范}
+
+\subsection{设计目标}
+
+Action Label Quality 证据回答：\Code{actions} 是否是一组可靠、清晰、可学习的监督标签。由于 TeleDex 中 \Code{actions} 来源于遥操作控制命令，它在训练中通常会成为 policy 的输出标签。因此它比 qpos-action tracking 更直接影响训练质量。
+
+\begin{longtable}{L{4.1cm} L{4.0cm} L{3.2cm} L{2.6cm}}
+\toprule
+Evidence ID & 证据问题 & 数据源 & 角色 \\
+\midrule
+\EID{ACT.VALIDITY.MISSING} & action 是否缺失、NaN、维度异常 & \Code{actions} & gate \\
+\EID{ACT.RANGE.LOW} & action 是否长期变化过低 & \Code{actions} & negative/score \\
+\EID{ACT.RANGE.OUTLIER} & action 是否存在异常大跳变 & \Code{actions}, timestamps & gate/score/timeline \\
+\EID{ACT.SMOOTHNESS.ARM} & 机械臂 action 是否平滑 & arm actions & score \\
+\EID{ACT.SMOOTHNESS.HAND} & 手部 action 是否平滑 & hand actions & score \\
+\EID{ACT.SATURATION.SEMANTIC} & 饱和是否有任务语义 & hand/arm actions, phase & review/score \\
+\EID{ACT.FINGER.CHATTER} & 手指命令是否高频反向 & hand actions & negative/timeline \\
+\EID{ACT.FINGER.COORDINATION} & 多指命令是否协调 & hand actions, video & score/research \\
+\EID{ACT.SEGMENT.CLARITY} & 动作片段是否有清晰起止 & actions, phase & explain \\
+\bottomrule
+\end{longtable}
+
+\subsection{Action 是训练标签，不是执行结果}
+
+在当前数据结构中，\Code{actions} 代表遥操作设备发送的目标关节位置。它不是模型预测结果，也不是 qpos 的后验估计。因此，Action Label Quality 的核心问题不是“机器人是否跟上了 action”，而是“action 本身是否能作为模型要学习的标签”。这一区分决定了 Tracking Error 不应作为训练质量主指标。
+
+\subsection{Saturation 语义证据}
+
+手部 0/255 可能代表完全张开或完全闭合，是抓取任务中的合法动作状态。简单把 0/255 计为 saturation error 会产生误报。证据层应把 saturation 分为三种情况：合法阶段性饱和、长时间卡死饱和、伴随高频抖动的异常饱和。只有后两者应作为负证据。
+
+\begin{decisionbox}{设计决策 ACT-E1}
+Hand Saturation 不再作为独立硬惩罚证据。它必须和持续时间、任务阶段、动作变化、手指颤振和任务结果共同解释。
+\end{decisionbox}
+
+\section{State and Trajectory Quality 证据规范}
+
+\subsection{设计目标}
+
+State and Trajectory Quality 证据回答：机器人状态轨迹是否可信、连续、几何合理，并能支持模型学习。它与 Demonstration Behavior Quality 有交叉，但关注点不同：Behavior 更关注示范风格，State and Trajectory 更关注状态序列本身是否可靠。
+
+\begin{longtable}{L{4.1cm} L{4.0cm} L{3.2cm} L{2.6cm}}
+\toprule
+Evidence ID & 证据问题 & 数据源 & 角色 \\
+\midrule
+\EID{STATE.JOINT.PLAUSIBILITY} & qpos/qvel 是否合理连续 & \Code{qpos}, \Code{qvel} & gate/score \\
+\EID{STATE.JOINT.JUMP} & 是否存在关节不可能跳变 & \Code{qpos}, timestamps & negative/timeline \\
+\EID{STATE.EE.PLAUSIBILITY} & EE pose 是否连续可信 & \Code{ee\_poses\_*} & score/planned \\
+\EID{STATE.EE.PATH\_QUALITY} & 末端路径是否适合任务学习 & EE pose, task phase & score \\
+\EID{STATE.KIN.CONTINUITY} & joint 与 EE 运动是否一致 & qpos, EE pose & diagnostic/review \\
+\EID{STATE.WORKSPACE.EFFICIENCY} & 工作空间路径是否过度绕行 & EE pose, task goal & score/planned \\
+\EID{STATE.COVERAGE.CHANGE} & episode 是否包含有效状态覆盖 & qpos, EE pose, video & positive/score \\
+\bottomrule
+\end{longtable}
+
+\subsection{Joint 与 EE 双空间证据}
+
+L3 v1 主要在 joint space 计算指标。L3 v2 应采用 joint space 与 task space 双证据。Joint space 对维度异常、机械臂抖动、手部命令有效性很敏感；EE space 更接近任务学习，适合评价路径效率、末端平滑性、接触前稳定性和操作阶段完整性。
+
+\subsection{状态可信度证据}
+
+State evidence 还应用于发现数据转换或传感器问题，例如 qpos 某些维度长期为零、qvel 与 qpos 差分不一致、EE pose 与 qpos 推导关系异常等。这类证据可能属于 Data Integrity 或 Execution Diagnostics，需要根据上下文归属。
+
+\section{Observation Quality 证据规范}
+
+\subsection{设计目标}
+
+Observation Quality 证据回答：模型输入是否可用于学习。当前 L2 已经负责视觉质量人工判断，但对于训练数据质量系统而言，观测质量仍需要被纳入统一证据图。未来如果训练模型使用 RGB、Depth、state、language prompt，则任何输入模态的问题都会影响训练。
+
+\begin{longtable}{L{4.1cm} L{4.0cm} L{3.2cm} L{2.6cm}}
+\toprule
+Evidence ID & 证据问题 & 数据源 & 角色 \\
+\midrule
+\EID{OBS.VISUAL.AVAILABLE} & 三路 RGB 是否可用 & video files, manifest & gate \\
+\EID{OBS.VISUAL.L2\_PASS} & 人工视觉质检是否通过 & L2 result & gate/score \\
+\EID{OBS.MULTIVIEW.USABILITY} & 多视角是否共同覆盖关键区域 & three RGB videos & review/planned \\
+\EID{OBS.DEPTH.AVAILABLE} & 深度是否可用 & depth files, manifest & optional/gate \\
+\EID{OBS.OCCLUSION.TARGET} & 目标或末端是否长期不可见 & video/depth & review/research \\
+\EID{OBS.ALIGNMENT.ACTION} & 观测与动作是否时间对齐 & timestamps, sync, video/action & gate/score \\
+\EID{OBS.IMU.VIDEO.STABILITY} & 相机是否发生异常抖动 & IMU, video & diagnostic/score \\
+\bottomrule
+\end{longtable}
+
+\subsection{L2 与 L3 的边界}
+
+L2 负责人工判断视觉质量，L3 v2 不应重复建设完整视觉质检系统。但 L3 应消费 L2 结果，并把它与动作证据、任务证据统一聚合。例如一条动作非常优秀但关键目标长期遮挡的数据，对视觉策略模型而言仍然训练价值有限。
+
+\section{Data Integrity and Synchronization 证据规范}
+
+\subsection{设计目标}
+
+Data Integrity and Synchronization 证据回答：数据文件是否完整、时间轴是否可信、转换结果是否一致。该维度通常具有最高硬门控优先级，因为严重的数据完整性问题会直接破坏训练样本。
+
+\begin{longtable}{L{4.1cm} L{4.0cm} L{3.2cm} L{2.6cm}}
+\toprule
+Evidence ID & 证据问题 & 数据源 & 角色 \\
+\midrule
+\EID{DATA.FILE.COMPLETE} & 必要 processed 文件是否齐全 & MinIO manifest/files & gate \\
+\EID{DATA.TELEMETRY.SCHEMA} & telemetry 字段和 shape 是否符合预期 & \Code{telemetry.npz} & gate \\
+\EID{DATA.TIME.REGULARITY} & timestamp 是否均匀稳定 & timestamps, manifest fps & gate/score \\
+\EID{DATA.SYNC.VALIDATION} & 跨传感器同步是否有效 & sync validation fields & gate/timeline \\
+\EID{DATA.META.ALIGNMENT} & metadata 对齐配置是否可信 & \Code{metadata.json} & gate/review \\
+\EID{DATA.MANIFEST.CONSISTENCY} & manifest 与实际文件是否一致 & manifest, MinIO list & gate \\
+\EID{DATA.CONVERSION.TRIM} & 裁剪区间是否合理 & metadata trim ranges & review/score \\
+\EID{DATA.VERSION.COMPATIBILITY} & 数据格式版本是否兼容 & manifest format version & gate \\
+\bottomrule
+\end{longtable}
+
+\subsection{同步异常证据}
+
+当前 L3 v1 已经使用 \Code{sync\_validation\_max\_diff} 生成同步异常 timeline。L3 v2 应保留该证据，但需要将其归入 Data Integrity，而不是 Motion Quality。同步异常影响的是 observation-state-action 配对可信度，因此它是训练数据硬门控或强负证据。
+
+\section{Dataset-Level Quality 证据规范}
+
+\subsection{设计目标}
+
+Dataset-Level Quality 证据回答：一组 episode 是否适合构成训练集。单条 demonstration 的质量高，并不代表数据集质量高。模型训练还依赖覆盖、多样性、分布平衡和低冗余。该维度主要服务批次报告、数据集发布和主动采集改进。
+
+\begin{longtable}{L{4.1cm} L{4.0cm} L{3.2cm} L{2.6cm}}
+\toprule
+Evidence ID & 证据问题 & 数据源 & 角色 \\
+\midrule
+\EID{DSET.DIVERSITY.SCENE} & 场景和物体是否多样 & metadata, video embedding & dataset/research \\
+\EID{DSET.DIVERSITY.ACTION} & 动作分布是否多样 & actions, qpos, EE pose & dataset/score \\
+\EID{DSET.COVERAGE.TASK} & 任务类型覆盖是否充分 & task metadata, prompt & dataset \\
+\EID{DSET.BALANCE.SUCCESS} & 成功/失败或任务类别是否失衡 & L4, task labels & dataset \\
+\EID{DSET.REDUNDANCY.NEAR\_DUP} & 是否存在大量近重复 episode & trajectories, embeddings & dataset \\
+\EID{DSET.OUTLIER.QUALITY} & 是否存在异常离群样本 & all quality profiles & dataset/review \\
+\EID{DSET.CALIBRATION.BASELINE} & 是否可建立同类任务基线 & approved samples & calibration \\
+\bottomrule
+\end{longtable}
+
+\subsection{与 Episode 证据的区别}
+
+Episode evidence 主要判断单条数据是否可训练；Dataset evidence 判断数据集是否值得发布。一个数据集需要高质量 episode，也需要足够覆盖。未来批次报告应将这两类证据分开展示：先列出单条异常率，再列出分布覆盖和冗余问题。
+
+\section{Execution Diagnostics 证据规范}
+
+\subsection{设计目标}
+
+Execution Diagnostics 证据回答：机器人执行侧是否存在控制、硬件或负载异常。它对排查采集质量和设备问题很有价值，但默认不直接决定训练数据价值，除非它已经导致任务失败、动作标签不可用或观测-动作关系严重扭曲。
+
+\begin{longtable}{L{4.1cm} L{4.0cm} L{3.2cm} L{2.6cm}}
+\toprule
+Evidence ID & 证据问题 & 数据源 & 角色 \\
+\midrule
+\EID{EXEC.TRACKING.COMMAND\_ERROR} & qpos 是否跟上 actions & actions, qpos & diagnostic \\
+\EID{EXEC.TRACKING.LAG} & 是否存在明显控制延迟 & actions, qpos, timestamps & diagnostic/review \\
+\EID{EXEC.EFFORT.LOAD} & effort 是否异常偏高 & effort & diagnostic \\
+\EID{EXEC.IMU.SHOCK} & 是否存在冲击或剧烈震动 & IMU & diagnostic/timeline \\
+\EID{EXEC.HARDWARE.STUCK} & 某些关节或手指疑似卡住 & qpos, actions, effort & diagnostic/review \\
+\EID{EXEC.CONTROLLER.OSCILLATION} & 控制执行是否震荡 & actions, qpos, effort & diagnostic \\
+\bottomrule
+\end{longtable}
+
+\subsection{Tracking Error 的重新定位}
+
+Command Tracking Error 衡量机器人实际状态 \Code{qpos} 与遥操作目标 \Code{actions} 的差异。它可以说明控制器响应、负载或硬件状态，但不等同于训练标签质量。对于模仿学习而言，\Code{actions} 通常是监督标签，\Code{qpos} 是 observation 中的状态。因此 Tracking Error 应作为诊断证据保留，但不应作为训练价值主评分项。
+
+\begin{decisionbox}{设计决策 EXEC-E1}
+Tracking Error 从 Core L3 Score 中降级为 Execution Diagnostics。只有当 tracking 异常导致任务失败、状态-动作配对不可解释或动作标签不可信时，才通过其他证据间接影响训练质量。
+\end{decisionbox}
+
+\section{证据聚合原则}
+
+\subsection{避免重复惩罚}
+
+同一个低质量现象可能被多个 metric 检测到。例如长时间无动作可能同时导致 Dead、Static、Low Dynamic Range、Low Information Density。证据层必须先合并语义，再聚合分数，避免重复惩罚。
+
+\begin{decisionbox}{设计决策 AGG-E1}
+聚合顺序必须是：metric result -> evidence state -> ontology dimension score -> overall quality。禁止直接把所有 metric score 加权平均成总分。
+\end{decisionbox}
+
+\subsection{证据冲突处理}
+
+证据可能冲突。例如 L4 判定任务成功，但自动证据显示阶段缺失；动作饱和证据为负，但手部闭合阶段本来就需要饱和；tracking error 很高，但视频任务完成良好。系统应提供冲突标记，而不是强行平均。
+
+\begin{longtable}{L{3.5cm} L{5cm} L{5.4cm}}
+\toprule
+冲突类型 & 示例 & 推荐处理 \\
+\midrule
+人工-自动冲突 & L4 pass 但自动阶段证据缺失 & 标记为 review required，进入复核。 \\
+证据语义冲突 & saturation 与 grasp phase 同时出现 & 降低 saturation 负权重，要求阶段解释。 \\
+诊断-训练冲突 & tracking 差但 demonstration 好 & 保留诊断，不降低训练主分。 \\
+模态冲突 & action 显示关键动作，但视频遮挡 & 标记 observation risk。 \\
+统计冲突 & 单条分数高但同类分布离群 & 进入 outlier review，不直接拒绝。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{证据可信度}
+
+每个证据应输出 confidence。初期可以采用规则 confidence，例如数据字段存在性、窗口长度、同步状态、是否有人工结果；后期可以采用统计置信度或模型不确定性。低 confidence 的证据不应直接硬拒绝数据，而应触发人工复核或作为弱证据参与聚合。
+
+\section{Timeline Evidence 设计}
+
+\subsection{Timeline 不只是异常段}
+
+L3 v1 的 timeline 主要输出异常段。L3 v2 的 timeline 应升级为 Evidence Timeline，包括四类片段。
+
+\begin{longtable}{L{3cm} L{4.8cm} L{5.9cm}}
+\toprule
+片段类型 & 含义 & 示例 \\
+\midrule
+Anomaly Segment & 明确负质量片段 & 同步异常、动作跳变、手指颤振。 \\
+Low-value Segment & 学习信号较低但不一定错误 & 长时间无任务进展、重复等待。 \\
+Key-action Segment & 对训练有价值的关键动作片段 & 抓取、接触、放置、释放。 \\
+Review Segment & 需要人工确认的片段 & 疑似失败、疑似抓错、阶段缺失。 \\
+Diagnostic Segment & 设备或控制诊断片段 & effort spike、IMU shock、tracking lag。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{Timeline 输出规范}
+
+每个 timeline segment 推荐包含以下字段：
+
+\begin{verbatim}
+{
+  "segment_id": "seg_0001",
+  "start_sec": 3.20,
+  "end_sec": 4.75,
+  "evidence_id": "ACT.FINGER.CHATTER.v1",
+  "ontology_path": ["Action Label Quality", "Finger Command Quality"],
+  "segment_type": "anomaly",
+  "severity": "warn",
+  "confidence": 0.82,
+  "human_label": "右手指令高频反向",
+  "review_required": false,
+  "linked_metrics": ["hand_chatter_rate"],
+  "data_sources": ["actions", "timestamps"]
+}
+\end{verbatim}
+
+\section{从 L3 v1 到 Evidence Layer 的迁移}
+
+\subsection{现有指标迁移表}
+
+\begin{longtable}{L{3.2cm} L{5.0cm} L{5.0cm}}
+\toprule
+L3 v1 指标 & 新证据归属 & 迁移建议 \\
+\midrule
+LDLJ & \EID{BEH.SMOOTH.JOINT}；\EID{ACT.SMOOTHNESS.ARM} & 保留为 joint/action 平滑性的候选 metric，后续扩展 EE Smoothness。 \\
+Dead Actions & \EID{LRN.IDENSITY.LOW\_SIGNAL}；\EID{ACT.RANGE.LOW} & 与 Static 合并为低信息证据，不再独立重复扣分。 \\
+Saturation & \EID{ACT.SATURATION.SEMANTIC} & 从硬惩罚改为语义证据，需结合任务阶段和持续时间。 \\
+Static & \EID{LRN.IDENSITY.LOW\_SIGNAL}；\EID{BEH.CONTINUITY.PAUSE} & 区分合理等待与无意义停顿。 \\
+Timestamp Jitter & \EID{DATA.TIME.REGULARITY} & 保留为数据完整性证据。 \\
+Tracking Error & \EID{EXEC.TRACKING.COMMAND\_ERROR} & 降级为诊断证据，不作为训练主评分。 \\
+Hand Chatter & \EID{ACT.FINGER.CHATTER}；\EID{BEH.DEXTERITY.COORDINATION} & 保留并优化 timeline 片段质量。 \\
+Effort & \EID{EXEC.EFFORT.LOAD} & 降级为诊断证据，结合任务和硬件状态解释。 \\
+Q\_motion & Ontology dimension aggregation & 废弃“单一 motion score”语义，替换为多维质量画像。 \\
+\bottomrule
+\end{longtable}
+
+\subsection{第一阶段可落地证据}
+
+基于当前数据，不依赖新增视觉模型，第一阶段建议落地以下证据：
+
+\begin{itemize}
+  \item \EID{DATA.FILE.COMPLETE}, \EID{DATA.TELEMETRY.SCHEMA}, \EID{DATA.TIME.REGULARITY}, \EID{DATA.SYNC.VALIDATION}
+  \item \EID{LRN.IDENSITY.LOW\_SIGNAL}, \EID{LRN.LABEL.DISCRIMINABILITY}
+  \item \EID{ACT.VALIDITY.MISSING}, \EID{ACT.RANGE.LOW}, \EID{ACT.RANGE.OUTLIER}, \EID{ACT.FINGER.CHATTER}
+  \item \EID{BEH.SMOOTH.JOINT}, \EID{BEH.CONTINUITY.PAUSE}, \EID{BEH.STABILITY.OSCILLATION}
+  \item \EID{STATE.JOINT.PLAUSIBILITY}, \EID{STATE.JOINT.JUMP}
+  \item \EID{EXEC.TRACKING.COMMAND\_ERROR}, \EID{EXEC.EFFORT.LOAD}
+\end{itemize}
+
+第二阶段再加入 EE pose 轨迹质量、trajectory efficiency、correction burden、task phase integrity；第三阶段加入视觉目标交互、VLM prompt alignment、dataset diversity embedding 等高级证据。
+
+\section{Evidence Registry 实现建议}
+
+\subsection{Registry 数据结构}
+
+后端建议引入 Evidence Registry，使用 YAML/JSON 或数据库表定义证据元信息。示例：
+
+\begin{verbatim}
+evidence_id: LRN.IDENSITY.LOW_SIGNAL.v1
+name_zh: 低学习信号片段
+ontology_path:
+  - Learnability
+  - Information Density
+question: 是否存在长时间缺乏有效动作和状态变化的片段
+data_sources:
+  - actions
+  - qpos
+  - timestamps
+temporal_scope: segment
+polarity: negative
+role:
+  - score
+  - timeline
+phase_sensitive: true
+task_sensitive: true
+human_review: optional
+current_readiness: ready
+candidate_metrics:
+  - action_activity_ratio
+  - state_activity_ratio
+  - low_signal_duration_ratio
+ui_group: Learnability
+default_severity_policy: warn
+\end{verbatim}
+
+\subsection{数据库建议}
+
+未来可以建立四类表：
+
+\begin{longtable}{L{3.5cm} L{4.5cm} L{5.6cm}}
+\toprule
+表 & 作用 & 关键字段 \\
+\midrule
+\Code{quality\_dimensions} & 保存本体节点 & id、parent、name、version、scope。 \\
+\Code{evidence\_registry} & 保存证据定义 & evidence id、ontology path、data sources、role。 \\
+\Code{metric\_registry} & 保存 metric 定义 & metric id、evidence id、algorithm id。 \\
+\Code{episode\_evidence\_results} & 保存 episode 证据结果 & episode id、evidence id、score、severity、confidence、segments。 \\
+\bottomrule
+\end{longtable}
+
+\section{前端 UI 对证据层的要求}
+
+\subsection{质量维度优先}
+
+前端不应继续简单显示 LDLJ、Dead、Sat、Static 等算法卡片，而应按质量维度组织。例如：Learnability、Action Label Quality、Behavior Quality、Data Integrity、Execution Diagnostics。每个维度下显示证据摘要，再展开到具体 metric。
+
+\subsection{证据解释面板}
+
+推荐前端右侧质量面板显示：
+
+\begin{itemize}
+  \item 维度分数：例如 Learnability 7.8。
+  \item 证据摘要：例如“存在 2 段低学习信号，共 3.4s”。
+  \item 关键正证据：例如“包含明显抓取与放置阶段”。
+  \item 关键负证据：例如“右手指令在 5.1s-6.0s 高频反向”。
+  \item 诊断证据：例如“command tracking 偏高，但未影响任务过程”。
+\end{itemize}
+
+\subsection{Timeline 联动}
+
+点击 evidence segment 后，前端应同步跳转视频、曲线图和证据说明。曲线图上不再只标异常，而应显示证据类型：异常、低价值、关键动作、诊断、复核。
+
+\section{后续文档接口}
+
+\subsection{Metric Mapping Specification}
+
+下一份建议文档是 Metric Mapping Specification。它应回答：每个 evidence 应由哪些 metrics 实现，每个 metric 依赖哪些字段，metric 的输出结构是什么。该文档仍不需要规定所有公式，但必须完成从 Evidence 到 Metric 的映射。
+
+\subsection{Algorithm Specification}
+
+Algorithm Specification 应在 Metric Mapping 之后编写。它才开始规定具体计算方法、窗口长度、滤波、归一化、阈值、timeline segment 合并规则和复杂度。
+
+\subsection{Implementation Specification}
+
+Implementation Specification 应描述后端类结构、API、缓存、异步任务、数据库表、版本控制和前端接口。此时才适合开始重构 \Code{l3\_metrics.py}。
+
+\section{结论}
+
+本文档将 RDDQF 从“质量本体”推进到“质量证据”。它确立了 L3 v2 的核心实现逻辑：不是直接计算一组孤立指标，而是为每个训练数据质量判断收集可解释证据。证据层使系统能够区分训练价值、动作标签质量、示范行为质量、数据完整性和执行诊断，避免把 Tracking Error、Effort、Saturation 等现象误解释为训练质量主判据。
+
+完成证据层之后，L3 v2 的后续工作应进入 Metric Mapping：为每个证据选择候选指标，明确输入字段、输出结构和实现优先级。只有在证据和指标映射稳定之后，才应进入算法公式与代码实现阶段。
+
+\appendix
+\section{附录 A：推荐 Evidence Registry 总表}
+
+\begin{longtable}{L{5.0cm} L{4.0cm} L{2.0cm} L{2.0cm}}
+\toprule
+Evidence ID & 中文名称 & 优先级 & 阶段 \\
+\midrule
+\EID{DATA.FILE.COMPLETE} & 必要文件完整性 & P0 & v2.0 \\
+\EID{DATA.TELEMETRY.SCHEMA} & telemetry 结构有效性 & P0 & v2.0 \\
+\EID{DATA.TIME.REGULARITY} & 时间戳规则性 & P0/P1 & v2.0 \\
+\EID{DATA.SYNC.VALIDATION} & 跨传感器同步有效性 & P0/P1 & v2.0 \\
+\EID{ACT.VALIDITY.MISSING} & 动作标签缺失/异常 & P0 & v2.0 \\
+\EID{ACT.RANGE.OUTLIER} & 动作异常跳变 & P1 & v2.0 \\
+\EID{ACT.RANGE.LOW} & 动作变化过低 & P1 & v2.0 \\
+\EID{ACT.FINGER.CHATTER} & 手指命令高频反向 & P1 & v2.0 \\
+\EID{LRN.IDENSITY.LOW\_SIGNAL} & 低学习信号片段 & P1 & v2.0 \\
+\EID{LRN.LABEL.DISCRIMINABILITY} & 标签可区分性 & P1 & v2.0 \\
+\EID{BEH.SMOOTH.JOINT} & 关节运动平滑性 & P1 & v2.0 \\
+\EID{BEH.CONTINUITY.PAUSE} & 不合理停顿 & P1/P2 & v2.0 \\
+\EID{BEH.STABILITY.OSCILLATION} & 运动震荡 & P1/P2 & v2.0 \\
+\EID{STATE.JOINT.PLAUSIBILITY} & 关节状态合理性 & P1 & v2.0 \\
+\EID{STATE.JOINT.JUMP} & 关节跳变 & P1 & v2.0 \\
+\EID{EXEC.TRACKING.COMMAND\_ERROR} & 命令跟踪误差 & P3 & v2.0 \\
+\EID{EXEC.EFFORT.LOAD} & effort 负载异常 & P3 & v2.0 \\
+\EID{BEH.SMOOTH.EE} & 末端轨迹平滑性 & P1/P2 & v2.1 \\
+\EID{STATE.EE.PATH\_QUALITY} & 末端路径质量 & P2 & v2.1 \\
+\EID{BEH.EFFICIENCY.PATH} & 路径效率 & P2 & v2.1 \\
+\EID{BEH.CORRECTION.RETRY} & 纠错/重试负担 & P2 & v2.1 \\
+\EID{TASK.PHASE.INTEGRITY} & 任务阶段完整性 & P1 & v2.1 \\
+\EID{TASK.GOAL.COMPLETION} & 任务目标完成证据 & P0/P1 & v2.1 \\
+\EID{OBS.VISUAL.L2\_PASS} & L2 视觉质检结果 & P0/P1 & v2.1 \\
+\EID{OBS.ALIGNMENT.ACTION} & 观测-动作对齐 & P0/P1 & v2.1 \\
+\EID{DSET.COVERAGE.TASK} & 任务覆盖度 & dataset & v2.2 \\
+\EID{DSET.REDUNDANCY.NEAR\_DUP} & 近重复数据 & dataset & v2.2 \\
+\EID{DSET.DIVERSITY.ACTION} & 动作多样性 & dataset & v2.2 \\
+\bottomrule
+\end{longtable}
+
+\section{附录 B：证据到 UI 的默认显示策略}
+
+\begin{longtable}{L{3.5cm} L{4.5cm} L{5.5cm}}
+\toprule
+证据类型 & UI 位置 & 交互方式 \\
+\midrule
+Hard Gate Evidence & 顶部风险条和右侧质量摘要 & 显示为必须复核或不可训练。 \\
+Core Training Evidence & 质量维度卡片 & 可展开查看 metric 和 timeline。 \\
+Timeline Evidence & 播放进度条、曲线图背景、异常清单 & 点击跳转视频和曲线。 \\
+Diagnostic Evidence & 折叠诊断面板 & 默认不影响主分，供排查使用。 \\
+Dataset Evidence & 批次报告和数据集发布页 & 显示分布、覆盖、异常任务。 \\
+\bottomrule
+\end{longtable}
+
+\section{附录 C：术语表}
+
+\begin{longtable}{L{3.2cm} L{10.5cm}}
+\toprule
+术语 & 定义 \\
+\midrule
+Quality Ontology & 训练数据质量的语义树，定义评价什么。 \\
+Evidence & 支持质量判断的可观察事实或可计算信号。 \\
+Metric & 用数值表达某个 evidence 的测量方式。 \\
+Algorithm & metric 的具体计算方法。 \\
+Evidence Registry & 系统中所有 evidence 的结构化注册表。 \\
+Evidence Graph & evidence 与 quality dimension 的关系图。 \\
+Core Training Evidence & 直接影响训练价值的证据。 \\
+Diagnostic Evidence & 主要用于解释设备或执行异常的证据。 \\
+Timeline Evidence & 可以定位到时间段的证据。 \\
+Low Learning Signal & 对模型学习贡献较低的动作/状态/观测片段。 \\
+\bottomrule
+\end{longtable}
+
+
+\newpage
+\section*{v1.1 实现同步附录：证据层解释性增强}
+\addcontentsline{toc}{section}{v1.1 实现同步附录：证据层解释性增强}
+
+实现阶段发现，仅给出 metric score 不足以指导人工复核。每条证据必须能够回答：哪个数据流、哪段时间、偏离多少、可能原因是什么、训练风险是什么。
+
+\subsection*{Sensor-specific Evidence}
+
+DI-02 和 DI-03 必须输出 sensor-specific evidence。推荐字段包括：
+
+\begin{itemize}
+\item \Code{sourceSensor}: 例如 \Code{wrist\_left\_camera}, \Code{top\_camera}, \Code{qpos}, \Code{actions};
+\item \Code{syncDiffMs}: 当前帧或片段最大同步偏差；
+\item \Code{captureTimeSec}: 相机真实采集时刻；
+\item \Code{episodeSec}: 主时间轴时刻；
+\item \Code{durationSec}: 异常持续时间；
+\item \Code{possibleCause}: frame drop, stale frame reuse, stream freeze, sync algorithm error, video conversion issue；
+\item \Code{trainingRisk}: observation-action temporal misalignment。
+\end{itemize}
+
+\subsection*{Camera Frame Index Sidecar}
+
+建议 processed 阶段新增 \Code{camera\_frame\_index.json}，为前端和 L3 提供每帧相机真实采集时间：
+
+\begin{quote}\small
+\Code{cameraId}, \Code{frameIndex}, \Code{videoPtsSec}, \Code{cameraCaptureSec}, \Code{episodeSec}, \Code{matchedTelemetrySec}, \Code{syncDiffMs}, \Code{isStale}, \Code{isDuplicate}, \Code{sourceFrameId}
+\end{quote}
+
+这样严重同步错位可以解释为：当前播放器时间虽然是 12.0s，但 wrist camera 的真实采集时间可能是 10.8s，因此该帧视觉 observation 已经落后主时间轴 1.2s。
+
+\subsection*{Reliability Warning}
+
+若 DI-01、DI-02 或 DI-03 为 bad，或存在 \Code{sync\_metadata\_missing=true}、hard sync violation、timestamp invalid，则必须输出 reliability warning：
+
+\begin{quote}
+检测到时间完整性问题，运动质量与学习价值相关指标的可信度可能下降。
+\end{quote}
+
+\end{document}

@@ -532,3 +532,50 @@ export async function recomputeBatchDecision(batchId: string) {
     { method: 'POST' }
   )
 }
+
+// v1.2: Export history
+export async function fetchExportHistory(taskTypeId?: string) {
+  const qs = taskTypeId ? `?task_type_id=${taskTypeId}` : ''
+  return request<import('../types/qc').DatasetExportJob[]>(`/dataset/exports${qs}`)
+}
+
+// v1.2: Reviewer task manager
+export async function fetchReviewerTasks(reviewerId: string, status?: string) {
+  const qs = status ? `?status=${status}` : ''
+  return request<import('../types/qc').ReviewerTask[]>(`/admin/reviewers/${reviewerId}/tasks${qs}`)
+}
+
+export async function revokeTask(taskId: string, reason: string = '') {
+  return request<{ success: boolean }>(`/admin/qc-tasks/${taskId}/revoke`, {
+    method: 'POST',
+    body: JSON.stringify({ reason })
+  })
+}
+
+export async function reassignTask(taskId: string, toReviewerId: string, reason: string = '') {
+  return request<{ success: boolean }>(`/admin/qc-tasks/${taskId}/reassign`, {
+    method: 'POST',
+    body: JSON.stringify({ toReviewerId, reason })
+  })
+}
+
+export async function releaseTask(taskId: string, reason: string = '') {
+  return request<{ success: boolean }>(`/admin/qc-tasks/${taskId}/release`, {
+    method: 'POST',
+    body: JSON.stringify({ reason })
+  })
+}
+
+export async function bulkRevokeTasks(taskIds: string[], reason: string = '') {
+  return request<{ success: boolean; results: any[] }>('/admin/qc-tasks/bulk-revoke', {
+    method: 'POST',
+    body: JSON.stringify({ taskIds, reason })
+  })
+}
+
+export async function bulkReassignTasks(taskIds: string[], toReviewerId: string, reason: string = '') {
+  return request<{ success: boolean; results: any[] }>('/admin/qc-tasks/bulk-reassign', {
+    method: 'POST',
+    body: JSON.stringify({ taskIds, toReviewerId, reason })
+  })
+}

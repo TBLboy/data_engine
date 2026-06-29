@@ -1,0 +1,510 @@
+
+\documentclass[UTF8,zihao=-4]{ctexart}
+\usepackage[a4paper,top=2.3cm,bottom=2.3cm,left=2.35cm,right=2.35cm]{geometry}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setmainfont{DejaVu Sans}
+\setsansfont{DejaVu Sans}
+\setmonofont{Noto Sans Mono}
+\setCJKmainfont{Noto Sans CJK SC}
+\setCJKsansfont{Noto Sans CJK SC}
+\setCJKmonofont{Noto Sans CJK SC}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{lastpage}
+\usepackage{pifont}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{makecell}
+\usepackage{seqsplit}
+\hypersetup{colorlinks=true,linkcolor=black,urlcolor=blue,citecolor=black}
+\definecolor{RuleBlue}{RGB}{25,74,135}
+\definecolor{LightBlue}{RGB}{236,243,252}
+\definecolor{LightGray}{RGB}{247,247,247}
+\definecolor{LightYellow}{RGB}{255,249,230}
+\definecolor{DarkGray}{RGB}{80,80,80}
+\definecolor{WarnOrange}{RGB}{172,103,0}
+\definecolor{RejectRed}{RGB}{150,35,35}
+\definecolor{PassGreen}{RGB}{38,118,82}
+\definecolor{DiagnosticPurple}{RGB}{105,72,145}
+\titleformat{\section}{\Large\bfseries\color{RuleBlue}}{\thesection}{0.8em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.8em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{0.8em}{}
+\setlist[itemize]{topsep=3pt,itemsep=2pt,parsep=0pt,leftmargin=1.9em}
+\setlist[enumerate]{topsep=3pt,itemsep=2pt,parsep=0pt,leftmargin=2.2em}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcommand{\Pass}{\textcolor{PassGreen}{\ding{51}}}
+\newcommand{\Warn}{\textcolor{WarnOrange}{\ding{115}}}
+\newcommand{\Reject}{\textcolor{RejectRed}{\ding{55}}}
+\newcommand{\Diag}{\textcolor{DiagnosticPurple}{\ding{72}}}
+\newcommand{\Code}[1]{\texttt{#1}}
+\newcommand{\MID}[1]{\texttt{\seqsplit{#1}}}
+\newcommand{\Term}[1]{\textbf{#1}}
+\newenvironment{notebox}[1]{\vspace{0.5em}\noindent\colorbox{LightBlue}{\parbox{0.96\linewidth}{\textbf{#1}}}\par\vspace{-0.2em}\begin{quote}\small}{\end{quote}\vspace{0.3em}}
+\newenvironment{decisionbox}[1]{\vspace{0.5em}\noindent\colorbox{LightGray}{\parbox{0.96\linewidth}{\textbf{#1}}}\par\vspace{-0.2em}\begin{quote}\small}{\end{quote}\vspace{0.3em}}
+\newenvironment{warningbox}[1]{\vspace{0.5em}\noindent\colorbox{LightYellow}{\parbox{0.96\linewidth}{\textbf{#1}}}\par\vspace{-0.2em}\begin{quote}\small}{\end{quote}\vspace{0.3em}}
+\hypersetup{pdftitle={L3 v2 Metric Revision Update v1.1}, pdfauthor={ChatGPT for Lingji Qiwuzhi}}
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{L3 v2 Metric Revision Update v1.1}
+\rhead{RDDQF / Implementation Sync}
+\cfoot{第 \thepage\ 页 / 共 \pageref{LastPage} 页}
+\begin{document}
+
+\begin{titlepage}
+\centering
+\vspace*{2.2cm}
+{\Huge\bfseries L3 v2 指标修订与实现同步说明\par}
+\vspace{0.35cm}
+{\Large Metric Revision and Implementation Synchronization\par}
+\vspace{0.6cm}
+{\LARGE v1.1\par}
+\vspace{1.15cm}
+\begin{tabular}{rl}
+文档定位： & RDDQF v1.0 设计包的实现同步补丁文档 \\
+适用系统： & 灵机启物机器人数采质检平台 / L3 v2 \\
+覆盖范围： & MQ、LQ、DI、DX、Fusion、Camera Temporal Continuity \\
+输入依据： & 代码集成后的指标审查、真实 wrist camera 卡顿案例、同步错位检测结果 \\
+输出对象： & Agent 修改任务、后端指标实现、前端解释性 UI、报告系统 \\
+核心原则： & Training Quality 与 Execution Diagnostic 严格分离；Data Integrity 具备可靠性门控作用 \\
+\end{tabular}
+\vfill
+\begin{minipage}{0.88\linewidth}
+\centering\large\bfseries
+本文件不是重写 RDDQF 理论，而是把实现阶段发现的指标定义问题、时间同步问题和相机卡顿案例同步回设计文档，形成 v1.1 可执行版本。
+\end{minipage}
+\vfill
+{\large 2026 年 6 月\par}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+\section{v1.1 同步更新摘要}
+
+本次同步修改主要解决六类问题：
+
+\begin{enumerate}
+\item 修正 MQ-01 将二阶差分误称为 jerk 的问题，明确 Trajectory Smoothness 应使用三阶差分或时间归一化 jerk；
+\item 将 MQ-02 从 action step magnitude 修改为 action second difference continuity；
+\item 将 MQ-03 从简单 sign flip P95 修改为带幅度门控的持续震荡与 hand chatter 比例；
+\item 将 LQ 系列重新组织为 Coverage、Intensity、Low-value Duration 三个互补学习价值指标；
+\item 将 DI 系列从单一 timestamp CV / 固定 700ms sync 阈值升级为鲁棒时间完整性与自适应同步诊断；
+\item 将 DX-01 从主分数中移出，仅作为 Execution Diagnostic，并增加 lag alignment、persistent error 与 diagnostic timeline。
+\end{enumerate}
+
+同时，真实数据中出现的 wrist camera 卡顿案例说明：现有 DI-02 能捕获严重同步错位，但还需要新增 camera temporal continuity 证据，用于区分 sync offset、frame drop、stale frame reuse 和 freeze-after-jump 现象。
+
+\section{MQ 指标修订}
+
+\subsection{MQ-01 Trajectory Smoothness}
+
+MQ-01 的语义目标是评价轨迹是否平滑，重点不是惩罚速度变化，而是惩罚加速度变化的突兀性。因此：
+
+\[
+jerk_t = q_t - 3q_{t-1} + 3q_{t-2} - q_{t-3}
+\]
+
+推荐主统计量为：
+
+\[
+MQ01_{raw}=P_{95}(\|jerk_t^{arm}\|_{RMS})
+\]
+
+实现要求：
+
+\begin{itemize}
+\item 旧版 \Code{np.diff(qpos, n=2)} 只能表示 acceleration-like roughness，不应再命名为 jerk；
+\item MQ-01 应使用 \Code{np.diff(qpos\_arm, n=3)}，并将 timeline offset 改为 3；
+\item 若未来使用非均匀 timestamp，应升级为时间归一化 jerk 或 \Code{np.gradient} 方案；
+\item 原二阶差分可保留为 diagnostic feature，例如 \Code{joint\_acc\_norm}，但不再作为 smoothness 主依据。
+\end{itemize}
+
+临时评分阈值需要重新标定。初始可使用：
+
+\[
+\begin{aligned}
+good &= 0.006\\
+warn &= 0.018\\
+bad &= 0.045
+\end{aligned}
+\]
+
+\subsection{MQ-02 Motion Continuity}
+
+MQ-02 不应评价 action 每一步走得多远，而应评价 action step 是否突然变化。新定义为：
+
+\[
+C_t=a_t-2a_{t-1}+a_{t-2}
+\]
+
+\[
+MQ02_{raw}=P_{95}(\|C_t\|_{RMS})
+\]
+
+实现要求：
+
+\begin{itemize}
+\item 保留 \Code{action\_step\_norm} 给 LQ-01/LQ-02 使用；
+\item 新增 \Code{action\_delta2\_norm} 给 MQ-02 使用；
+\item MQ-02 timeline 使用 action second difference 异常段，不再使用一阶 action step；
+\item 算法 ID 建议为 \Code{action\_second\_difference\_p95}。
+\end{itemize}
+
+初始阈值：
+
+\[
+\begin{aligned}
+good &= 0.010\\
+warn &= 0.030\\
+bad &= 0.080
+\end{aligned}
+\]
+
+\subsection{MQ-03 Motion Stability}
+
+MQ-03 的目标是检测持续性反复修正、震荡和 hand chatter，而不是检测所有方向反转。新逻辑应加入幅度门控和 segment 持续性。
+
+Action 有效方向反转：
+
+\[
+Rev_{t,i}=\mathbf1(|\Delta a_{t,i}|>\epsilon_i \land |\Delta a_{t-1,i}|>\epsilon_i \land sign(\Delta a_{t,i})sign(\Delta a_{t-1,i})<0)
+\]
+
+每帧反转比例：
+
+\[
+Rev_t=\frac{1}{D}\sum_i Rev_{t,i}
+\]
+
+手部 chatter 同样必须基于有效方向反转，而不是简单使用 \(|\Delta h|>2/255\)。
+
+推荐最终定义：
+
+\[
+MQ03_{raw}=0.6R_{osc}+0.4R_{chat}
+\]
+
+其中 \(R_{osc}\) 和 \(R_{chat}\) 均为持续异常时间占比。
+
+初始阈值：
+
+\[
+\begin{aligned}
+good &= 0.05\\
+warn &= 0.15\\
+bad &= 0.35
+\end{aligned}
+\]
+
+\section{LQ 指标修订}
+
+\subsection{LQ-01 Effective Action Ratio}
+
+LQ-01 应评价有效 action supervision 覆盖率。旧版只使用 episode 内部 \(P_{35}\) 容易导致整体低动态 episode 也获得较高得分。新版使用绝对阈值与动态阈值组合，并区分 arm / hand。
+
+\[
+E_t^{arm}=\mathbf1(A_t^{arm}>\max(\epsilon_{arm},P_{20}(A^{arm})))
+\]
+
+\[
+E_t^{hand}=\mathbf1(A_t^{hand}>\max(\epsilon_{hand},P_{20}(A^{hand})))
+\]
+
+\[
+E_t=E_t^{arm}\lor E_t^{hand}
+\]
+
+\[
+LQ01=R_{eff}=\frac{1}{N}\sum_t E_t
+\]
+
+推荐 \(\epsilon_{arm}=0.003\sim0.005\) rad，\(\epsilon_{hand}=2/255\sim4/255\)。
+
+\subsection{LQ-02 Information Density}
+
+LQ-02 不再只是 \(P_{75}(\|\Delta a\|)+P_{75}(\|\Delta q\|)\)，而是 Coverage 与 Intensity 的组合：
+
+\[
+LQ02=0.7(R_{eff}I_a)+0.3I_q
+\]
+
+其中：
+
+\[
+I_a=P_{75}(A_t \mid E_t=1),\quad A_t=\max(A_t^{arm},A_t^{hand})
+\]
+
+\[
+I_q=P_{75}(Q_t),\quad Q_t=\max(Q_t^{arm},Q_t^{hand})
+\]
+
+初始阈值：
+
+\[
+\begin{aligned}
+good &= 0.030\\
+warn &= 0.012\\
+bad &= 0.003
+\end{aligned}
+\]
+
+\subsection{LQ-03 Low-value Segment Ratio}
+
+LQ-03 从帧级低变化比例改为连续低学习价值片段总时长占比。复用 LQ-01 的 \(E_t\)，不再重新定义 action 有效性。
+
+\[
+L_t=\mathbf1(E_t=0 \land Q_t\le \tau_Q)
+\]
+
+连续 \(L_t=1\) 的片段集合为 \(\mathcal{S}\)，每段持续时间为 \(d_k\)。
+
+\[
+LQ03=\frac{\sum_k d_k\mathbf1(d_k\ge d_{min})}{T_{episode}}
+\]
+
+推荐：
+
+\[
+d_{min}=1.0s,\quad merge\_gap=0.3s
+\]
+
+\section{DI 指标修订}
+
+\subsection{DI-01 Timestamp Regularity}
+
+DI-01 从 \(CV=std(dt)/mean(dt)\) 改为鲁棒时间完整性指标：
+
+\[
+DI01_{raw}=0.5J_{95}+0.3R_{gap}+0.2R_{invalid}
+\]
+
+其中：
+
+\[
+J_{95}=P_{95}\left(\frac{|dt_t-median(dt)|}{median(dt)+\epsilon}\right)
+\]
+
+\[
+R_{gap}=mean(dt_t>2.0\cdot median(dt)),\quad R_{invalid}=mean(dt_t\le0)
+\]
+
+旧 timestamp CV 保留为 diagnostic evidence，不再作为主评分依据。
+
+\subsection{DI-02 Sensor Synchronization Validity}
+
+DI-02 从固定 700ms 阈值改为自适应同步诊断。复用 \(dt_{med}\)：
+
+\[
+\tau_{warn}=\max(0.05,2.0dt_{med})
+\]
+
+\[
+\tau_{bad}=\max(0.20,6.0dt_{med})
+\]
+
+定义：
+
+\[
+R_{flag}=mean(sync\_valid=false)
+\]
+
+\[
+R_{soft}=mean(sync\_diff>\tau_{warn}),\quad R_{hard}=mean(sync\_diff>\tau_{bad})
+\]
+
+\[
+M_{sync}=clip(P_{95}(sync\_diff)/\tau_{bad},0,1)
+\]
+
+持续同步异常片段占比为 \(R_{seg}\)。最终：
+
+\[
+DI02_{raw}=0.30R_{flag}+0.25R_{hard}+0.20R_{soft}+0.15M_{sync}+0.10R_{seg}
+\]
+
+如果 sync metadata 缺失，不允许静默通过，应输出 \Code{sync\_metadata\_missing=true} 并至少给 warn。
+
+\subsection{DI-03 Camera Temporal Continuity}
+
+真实案例中，top camera 正常运动，但 wrist camera 卡在 A 点，随后突然跳到 B 点。此类问题不一定等于丢帧，更准确地说是 camera temporal discontinuity，可能来源于 frame drop、stale frame reuse、stream freeze、sync algorithm error 或 video conversion error。
+
+建议新增 DI-03，或作为 Observation Quality 下的 OQ-01。MVP 阶段推荐归入 Data Integrity：
+
+\[
+DI03=Camera\ Temporal\ Continuity
+\]
+
+每个 camera stream 应输出：
+
+\begin{itemize}
+\item \Code{cameraId}
+\item \Code{frameCount}
+\item \Code{medianFps}
+\item \Code{timestampGapRatio}
+\item \Code{duplicateFrameRatio}
+\item \Code{freezeDuringMotionRatio}
+\item \Code{maxFreezeDurationSec}
+\item \Code{jumpAfterFreezeCount}
+\item \Code{staleFrameSegments}
+\end{itemize}
+
+推荐 raw value：
+
+\[
+DI03_{raw}=0.35R_{freeze}+0.25R_{gap}+0.20R_{duplicate}+0.20R_{jump}
+\]
+
+其中 \(R_{freeze}\) 应在机器人运动或 top camera 画面变化时检测 wrist camera 内容长期不变。若训练输入使用 wrist camera，严重 DI-03 异常应触发 reliability warning，并可参与 Data Integrity cap。
+
+\section{DX-01 与 Fusion 修订}
+
+\subsection{DX-01 Execution Tracking Diagnostic}
+
+DX-01 不再进入 Training Quality Score。它用于诊断机器人执行侧是否长期偏离遥操作目标。应增加 lag alignment：
+
+\[
+k^*=\arg\min_k P_{50}(\|a_{t-k}-q_t\|),\quad k\in[0,K]
+\]
+
+推荐 \(K=5\) frames 或 150ms 至 200ms。
+
+输出 evidence：
+
+\[
+E_{mean}=mean(E_t),\quad E_{95}=P_{95}(E_t),\quad R_{persist}=mean(E_t>\tau_{warn})
+\]
+
+Diagnostic severity：
+
+\[
+Severity_{DX01}=0.5clip(E_{95}/\tau_{bad},0,1)+0.3clip(E_{mean}/\tau_{warn},0,1)+0.2R_{persist}
+\]
+
+\[
+Score_{DX01}=10(1-Severity_{DX01})
+\]
+
+并明确：
+
+\[
+DX01\notin TrainingQualityScore
+\]
+
+\subsection{Training Quality Score Fusion}
+
+维度内部使用 mean + soft-min，避免严重短板被平均数掩盖。
+
+\[
+S_{motion}=0.8(0.35MQ01+0.35MQ02+0.30MQ03)+0.2\min(MQ01,MQ02,MQ03)
+\]
+
+\[
+S_{learn}=0.8(0.25LQ01+0.35LQ02+0.40LQ03)+0.2\min(LQ01,LQ02,LQ03)
+\]
+
+\[
+S_{data}=0.6(0.4DI01+0.6DI02)+0.4\min(DI01,DI02)
+\]
+
+如果纳入 DI-03，则推荐：
+
+\[
+S_{data}=0.55(0.30DI01+0.45DI02+0.25DI03)+0.45\min(DI01,DI02,DI03)
+\]
+
+主分：
+
+\[
+S_{weighted}=0.4S_{motion}+0.4S_{learn}+0.2S_{data}
+\]
+
+Data Integrity cap：
+
+\[
+S_{data}<5.0\Rightarrow S_{total}=\min(S_{weighted},6.0)
+\]
+
+\[
+S_{data}<3.0\Rightarrow S_{total}=\min(S_{weighted},4.5)
+\]
+
+\section{严重同步错位的解释性输出}
+
+严重同步错位表示同一帧质量报告中，不同数据流并不对应同一个真实物理时刻。例如：
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+数据流 & 主时间轴显示 & 真实采集时间 \\
+\midrule
+top camera & 12.0s & 12.0s \\
+wrist camera & 12.0s & 10.8s \\
+qpos/action & 12.0s & 12.0s \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+这意味着训练样本可能变为旧 wrist 画面对应当前 action，属于 observation-action temporal misalignment。
+
+前端应增加 debug overlay：
+
+\begin{itemize}
+\item \Code{camera}: wrist\_left
+\item \Code{videoTimeSec}: 12.03
+\item \Code{captureTimeSec}: 10.82
+\item \Code{syncDiffMs}: 1210
+\item \Code{status}: severe desync
+\end{itemize}
+
+建议新增 sidecar 文件 \Code{camera\_frame\_index.json}：
+
+\begin{quote}\small
+\Code{cameraId}, \Code{frameIndex}, \Code{videoPtsSec}, \Code{cameraCaptureSec}, \Code{episodeSec}, \Code{matchedTelemetrySec}, \Code{syncDiffMs}, \Code{isStale}, \Code{isDuplicate}, \Code{sourceFrameId}
+\end{quote}
+
+这样严重同步错位不再只是一个抽象告警，而可以解释为：哪一路相机、落后多少毫秒、从第几秒开始、持续多久、是否可能是旧帧复用。
+
+\section{Agent 修改任务总清单}
+
+\begin{enumerate}
+\item 更新 Feature Layer：新增 joint jerk、action second difference、effective action mask、robust timestamp features、adaptive sync features、camera frame temporal features；
+\item 更新 Evidence Layer：输出 evidence 中必须包含 source sensor、source metric、raw values、thresholds、affected duration、timeline range；
+\item 更新 Metric Layer：按本文修订 MQ-01 至 MQ-03、LQ-01 至 LQ-03、DI-01 至 DI-02、DX-01；
+\item 新增 DI-03 或 OQ-01：检测 camera timestamp gap、duplicate frame、freeze during motion、jump after freeze；
+\item 更新 Quality Layer：DX-01 移出主分数；DI 作为可靠性 gate；总分使用 soft-min 与 cap；
+\item 更新 Timeline Engine：支持 sensor-specific timeline，例如 wrist camera severe desync、camera freeze、low-value segment、execution diagnostic segment；
+\item 更新 API：增加 \Code{reliabilityWarnings}、\Code{diagnosticWarnings}、\Code{executionDiagnosticScore}、\Code{cameraFrameDiagnostics}；
+\item 更新 UI：主分与执行诊断分开显示，严重同步错位需要解释受影响 sensor、offset、duration 和 training risk；
+\item 保持旧 \Code{qc-context} 兼容，但新增字段应优先服务 L3 v2 页面。
+\end{enumerate}
+
+\section{最终原则}
+
+\[
+TrainingQualityScore=f(MQ,LQ,DI)
+\]
+
+\[
+ExecutionDiagnosticScore=f(DX)
+\]
+
+\[
+DX\notin TrainingQualityScore
+\]
+
+\[
+Severe\ Temporal\ Integrity\ Issue\Rightarrow Reliability\ Warning\ and\ Score\ Cap
+\]
+
+此版本完成后，L3 v2 不再是单纯运动分数，也不是机器人控制器评分，而是面向机器人训练数据资产的可解释质量评估系统。
+
+\end{document}

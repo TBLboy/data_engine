@@ -5,6 +5,7 @@ import {
   FolderOpened,
   Monitor,
   Setting,
+  User,
   VideoCamera,
   CollectionTag
 } from '@element-plus/icons-vue'
@@ -25,7 +26,7 @@ const menuItems = [
   { path: '/task-pool', label: '人工质检入口', icon: VideoCamera },
   { path: '/qc-history', label: '历史审计', icon: Finished, roles: ['admin', 'qc_manager'] },
   { path: '/dataset-management', label: '训练数据集', icon: FolderOpened },
-  { path: '/accounts', label: '账号管理', icon: Setting, roles: ['admin', 'qc_manager'] }
+  { path: '/accounts', label: '账号管理', icon: User, roles: ['admin', 'qc_manager'] }
 ]
 
 const isAdmin = computed(() => session.user?.role === 'admin')
