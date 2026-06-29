@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
@@ -22,6 +22,18 @@ class Batch(Base):
     top_reason: Mapped[str] = mapped_column(String(128), default='-', nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
+    # ── Batch adjudication fields ──
+    manual_pass_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    manual_fail_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failure_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reject_threshold: Mapped[float] = mapped_column(Float, default=0.10, nullable=False)
+    failure_rate_denominator: Mapped[str] = mapped_column(String(32), default='SAMPLED_COUNT', nullable=False)
+    batch_decision: Mapped[str] = mapped_column(String(32), default='PENDING', nullable=False)
+    batch_decision_reason: Mapped[str] = mapped_column(Text, default='', nullable=False)
+    decision_policy_version: Mapped[str] = mapped_column(String(64), default='batch-reject-v1', nullable=False)
+    adjudicated_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+
     task_type = relationship('TaskType', back_populates='batches')
     episodes = relationship('Episode', back_populates='batch')
     qc_tasks = relationship('QcTask', back_populates='batch')
+    decision_logs = relationship('BatchDecisionLog', back_populates='batch')

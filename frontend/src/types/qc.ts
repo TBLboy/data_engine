@@ -366,3 +366,57 @@ export interface ManualQcSubmitResponse {
   remainingCount: number
   nextEpisodeId: string | null
 }
+
+// Dataset management types
+export interface DatasetTaskSummary {
+  taskId: string
+  taskName: string
+  qualifiedEpisodeCount: number
+  totalEpisodeCount: number
+  batchCount: number
+  acceptedBatchCount: number
+  rejectedBatchCount: number
+  pendingBatchCount: number
+  manualPassCount: number
+  manualFailCount: number
+  inferredPassCount: number
+  propagatedFailCount: number
+  overrideManualPassFailCount: number
+  exportableEpisodeCount: number
+}
+
+export interface DatasetBatchRow {
+  batchId: string
+  batchName: string
+  totalCount: number
+  sampledCount: number
+  reviewedCount: number
+  manualFailCount: number
+  manualPassCount: number
+  failureRate: number | null
+  batchDecision: string
+  batchDecisionReason: string
+  adjudicatedAt: string | null
+  availableEpisodeCount: number
+}
+
+export interface DatasetEpisodeRow {
+  episodeId: string
+  taskName: string
+  batchId: string
+  batchName: string
+  finalDatasetStatus: string
+  finalDecisionSource: string
+  manualQcStatus: string
+  durationSec: number
+  frameCount: number
+  reasonCode: string
+  finalDecidedAt: string | null
+}
+
+export interface DatasetEpisodeListPayload {
+  items: DatasetEpisodeRow[]
+  total: number
+  page: number
+  pageSize: number
+}

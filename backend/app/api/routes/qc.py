@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import random
 from datetime import datetime, timedelta
 from urllib.parse import quote
@@ -1201,6 +1202,7 @@ def submit_manual_qc(
     episode.reviewer = current_user.name
     episode.reason_code = payload.primaryReason or '-'
     episode.updated_at = now
+    episode.manual_qc_status = 'MANUAL_PASS' if payload.result == 'pass' else 'MANUAL_FAIL'
 
     if task:
         task.status = 'done'
@@ -1212,7 +1214,7 @@ def submit_manual_qc(
         batch = db.query(Batch).filter(Batch.id == episode.batch_id).one()
 
     revision_count = db.query(QcReviewRevision).filter(QcReviewRevision.episode_id == episode_id).count()
-    db.add(QcReviewRevision(
+    rev = QcReviewRevision(
         episode_id=episode_id,
         revision_no=revision_count + 1,
         result=payload.result,
@@ -1220,7 +1222,9 @@ def submit_manual_qc(
         operator=current_user.name,
         note=payload.note,
         time=now,
-    ))
+    )
+    db.add(rev)
+    episode.manual_qc_result_id = str(rev.id) if rev.id else None
     sync_batch_metrics(db, batch)
     db.add(AuditEvent(
         id=f'audit_submit_{episode_id}_{int(now.timestamp())}',
@@ -1231,6 +1235,10 @@ def submit_manual_qc(
         time=now,
     ))
     db.commit()
+
+    # Trigger batch adjudication after QC submit
+    from app.services.batch_adjudication import adjudicate_batch_if_ready
+    adjudicate_batch_if_ready(db, episode.batch_id)
 
     # pipeline: remaining tasks for this reviewer
     remaining_count = 0
@@ -1295,3 +1303,132 @@ def update_general_config(
     require_roles(current_user, 'admin')
     GeneralConfig.save_params(db, payload, updated_by=current_user.name)
     return {'success': True, 'message': '通用配置已保存'}
+
+
+# ── 训练数据集管理 API ──
+
+
+@router.get('/dataset/tasks')
+def list_dataset_tasks(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """列出可供下游查看的任务列表."""
+    task_types = db.query(TaskType).filter(TaskType.is_active == True).order_by(TaskType.name.asc()).all()
+    return [serialize_task_type(tt) for tt in task_types]
+
+
+@router.get('/dataset/tasks/{task_type_id}/summary')
+def dataset_task_summary(
+    task_type_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """任务级统计."""
+    from app.services.dataset_service import DatasetSummaryService
+    result = DatasetSummaryService.task_summary(db, task_type_id)
+    if not result:
+        raise HTTPException(status_code=404, detail='Task type not found')
+    return result
+
+
+@router.get('/dataset/tasks/{task_type_id}/batches')
+def dataset_task_batches(
+    task_type_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """任务下批次列表."""
+    from app.services.dataset_service import DatasetSummaryService
+    return DatasetSummaryService.task_batches(db, task_type_id)
+
+
+@router.get('/dataset/tasks/{task_type_id}/episodes')
+def dataset_task_episodes(
+    task_type_id: str,
+    status: str = Query(None),
+    batch_id: str = Query(None),
+    final_decision_source: str = Query(None),
+    manual_qc_status: str = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """任务下 Episode 列表，支持筛选与分页."""
+    query = db.query(Episode).filter(
+        Episode.batch.has((Batch.task_type_id == task_type_id) & (Batch.is_active == True)),
+    )
+    if status:
+        query = query.filter(Episode.final_dataset_status == status)
+    if batch_id:
+        query = query.filter(Episode.batch_id == batch_id)
+    if final_decision_source:
+        query = query.filter(Episode.final_decision_source == final_decision_source)
+    if manual_qc_status:
+        query = query.filter(Episode.manual_qc_status == manual_qc_status)
+
+    total = query.count()
+    items = query.order_by(Episode.id).offset((page - 1) * page_size).limit(page_size).all()
+
+    def _serialize(e: Episode) -> dict:
+        return {
+            'episodeId': e.id,
+            'taskName': e.task_name,
+            'batchId': e.batch_id,
+            'batchName': e.batch.name if e.batch else '',
+            'finalDatasetStatus': e.final_dataset_status,
+            'finalDecisionSource': e.final_decision_source,
+            'manualQcStatus': e.manual_qc_status,
+            'durationSec': e.duration_sec,
+            'frameCount': e.frame_count,
+            'reasonCode': e.reason_code,
+            'finalDecidedAt': e.final_decided_at.isoformat() if e.final_decided_at else None,
+        }
+
+    return {
+        'items': [_serialize(e) for e in items],
+        'total': total,
+        'page': page,
+        'pageSize': page_size,
+    }
+
+
+@router.post('/dataset/tasks/{task_type_id}/exports')
+def dataset_export_episodes(
+    task_type_id: str,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """导出合格 episode 清单."""
+    from app.services.dataset_service import DatasetExportService
+    fmt = payload.get('format', 'csv')
+    content, mime_type, count = DatasetExportService.export_episodes(db, task_type_id, fmt)
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type=mime_type,
+        headers={
+            'Content-Disposition': f'attachment; filename="qualified_episodes_{task_type_id}.{fmt}"',
+        },
+    )
+
+
+@router.post('/batches/{batch_id}/recompute-decision')
+def recompute_batch_decision(
+    batch_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """手动重算批次判定."""
+    require_roles(current_user, 'admin', 'qc_manager')
+    from app.services.batch_adjudication import adjudicate_batch
+    log = adjudicate_batch(db, batch_id, actor=current_user.name)
+    if not log:
+        raise HTTPException(status_code=400, detail='Batch not ready for adjudication or empty')
+    return {
+        'success': True,
+        'batchDecision': log.batch_decision,
+        'failureRate': log.failure_rate,
+        'reason': log.decision_reason,
+    }

@@ -14,7 +14,8 @@ const router = createRouter({
     { path: '/task-pool', name: 'task-pool', component: () => import('../pages/task-pool.vue') },
     { path: '/qc-history', name: 'qc-history', component: () => import('../pages/qc-history.vue'), meta: { roles: ['admin', 'qc_manager'] } },
     { path: '/accounts', name: 'accounts', component: () => import('../pages/accounts.vue'), meta: { roles: ['admin', 'qc_manager'] } },
-    { path: '/settings', name: 'settings', component: () => import('../pages/settings.vue'), meta: { roles: ['admin'] } }
+    { path: '/settings', name: 'settings', component: () => import('../pages/settings.vue'), meta: { roles: ['admin'] } },
+    { path: '/dataset-management', name: 'dataset-management', component: () => import('../pages/dataset-management.vue') }
   ]
 })
 

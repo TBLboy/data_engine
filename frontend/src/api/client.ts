@@ -2,6 +2,9 @@ import type {
   Account,
   AuditRecord,
   BatchSummary,
+  DatasetBatchRow,
+  DatasetEpisodeListPayload,
+  DatasetTaskSummary,
   DispatchPreview,
   EpisodeRow,
   HistoryExportPayload,
@@ -469,4 +472,63 @@ export async function updateGeneralConfig(params: GeneralConfig) {
     method: 'PUT',
     body: JSON.stringify(params)
   })
+}
+
+// Dataset management
+export async function fetchDatasetTasks() {
+  return request<TaskType[]>('/dataset/tasks')
+}
+
+export async function fetchDatasetTaskSummary(taskTypeId: string) {
+  return request<DatasetTaskSummary>(`/dataset/tasks/${taskTypeId}/summary`)
+}
+
+export async function fetchDatasetTaskBatches(taskTypeId: string) {
+  return request<DatasetBatchRow[]>(`/dataset/tasks/${taskTypeId}/batches`)
+}
+
+export async function fetchDatasetTaskEpisodes(
+  taskTypeId: string,
+  params: {
+    status?: string
+    batchId?: string
+    finalDecisionSource?: string
+    manualQcStatus?: string
+    page?: number
+    pageSize?: number
+  } = {}
+) {
+  const searchParams = new URLSearchParams()
+  if (params.status) searchParams.set('status', params.status)
+  if (params.batchId) searchParams.set('batch_id', params.batchId)
+  if (params.finalDecisionSource) searchParams.set('final_decision_source', params.finalDecisionSource)
+  if (params.manualQcStatus) searchParams.set('manual_qc_status', params.manualQcStatus)
+  if (params.page) searchParams.set('page', String(params.page))
+  if (params.pageSize) searchParams.set('page_size', String(params.pageSize))
+  const qs = searchParams.toString()
+  return request<DatasetEpisodeListPayload>(`/dataset/tasks/${taskTypeId}/episodes${qs ? `?${qs}` : ''}`)
+}
+
+export function datasetExportUrl(taskTypeId: string) {
+  return `${API_BASE}/dataset/tasks/${taskTypeId}/exports`
+}
+
+export async function exportDatasetEpisodes(taskTypeId: string, format: string = 'csv') {
+  const response = await fetch(datasetExportUrl(taskTypeId), {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ format })
+  })
+  if (!response.ok) {
+    throw new ApiError(response.status, await response.text())
+  }
+  return response
+}
+
+export async function recomputeBatchDecision(batchId: string) {
+  return request<{ success: boolean; batchDecision: string; failureRate: number; reason: string }>(
+    `/batches/${batchId}/recompute-decision`,
+    { method: 'POST' }
+  )
 }

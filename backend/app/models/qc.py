@@ -1,4 +1,4 @@
-from sqlalchemy import DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Float, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
@@ -45,3 +45,25 @@ class QcReviewRevision(Base):
     time: Mapped[DateTime] = mapped_column(DateTime(timezone=False), nullable=False)
 
     episode = relationship('Episode', back_populates='revisions')
+
+
+class BatchDecisionLog(Base):
+    __tablename__ = 'batch_decision_log'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    batch_id: Mapped[str] = mapped_column(ForeignKey('batches.id'), nullable=False, index=True)
+    policy_version: Mapped[str] = mapped_column(String(64), default='batch-reject-v1', nullable=False)
+    reject_threshold: Mapped[float] = mapped_column(Float, nullable=False)
+    failure_rate_denominator: Mapped[str] = mapped_column(String(32), nullable=False)
+    total_episode_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    sampled_episode_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    reviewed_episode_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    manual_pass_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    manual_fail_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    failure_rate: Mapped[float] = mapped_column(Float, nullable=False)
+    batch_decision: Mapped[str] = mapped_column(String(32), nullable=False)
+    decision_reason: Mapped[str] = mapped_column(Text, default='', nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), server_default=func.now())
+
+    batch = relationship('Batch', back_populates='decision_logs')

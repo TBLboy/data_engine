@@ -1,3 +1,65 @@
+## 2026-06-29 (训练数据消费与批次驳回模块完整落地)
+
+- Type: feature (major)
+- Status: backend compile + frontend build passed, Docker deployed + migration 0012 executed, API verified
+- Importance: high
+- Reusable: yes
+- Objective: 完整落地批次驳回判定 + 训练数据集管理与导出功能，实现 LaTeX 设计文档全部内容
+- Work completed:
+
+  ### 数据库层 (migration 20260629_0012)
+  - Batch 表新增 9 字段：manual_pass_count, manual_fail_count, failure_rate, reject_threshold (默认0.10), failure_rate_denominator ('SAMPLED_COUNT'), batch_decision (PENDING/ACCEPTED/REJECTED), batch_decision_reason, decision_policy_version, adjudicated_at
+  - Episode 表新增 9 字段：manual_qc_status (NOT_REVIEWED/MANUAL_PASS/MANUAL_FAIL), manual_qc_result_id, final_dataset_status (PENDING/QUALIFIED/UNQUALIFIED), final_decision_source, final_decision_reason, final_decided_at, is_exportable, final_decision_policy_version, batch_decision_log_id
+  - 新表 batch_decision_log：完整审计日志，包含判定快照
+
+  ### 后端服务
+  - `batch_adjudication.py` — BatchAdjudicationService：
+    - 失败率 = N_fail_manual / N_sampled (分母=抽检数)
+    - 从 GeneralConfig 读取驳回阈值
+    - 幂等判定：重复执行不产生不一致
+    - 三层状态模型完整实现 (6 种 FinalDecisionSource)
+    - adjudicate_batch_if_ready() 自动触发判定
+  - `dataset_service.py` — DatasetSummaryService + DatasetExportService：
+    - 任务级统计 (qualified/total/batch/accepted/rejected/source breakdown)
+    - 批次汇总列表
+    - CSV/JSON 导出 (仅 QUALIFIED episode)
+  - QC 提交联动：submit_manual_qc 自动设置 manual_qc_status (MANUAL_PASS/MANUAL_FAIL) + 触发 adjudicate_batch_if_ready
+  - sync_batch_metrics 补全 manual_pass/fail 计数
+
+  ### API 端点
+  - `GET /api/dataset/tasks` — 任务列表
+  - `GET /api/dataset/tasks/{id}/summary` — 任务统计
+  - `GET /api/dataset/tasks/{id}/batches` — 批次列表
+  - `GET /api/dataset/tasks/{id}/episodes` — Episode 列表 (分页+筛选)
+  - `POST /api/dataset/tasks/{id}/exports` — 导出 CSV/JSON
+  - `POST /api/batches/{batch_id}/recompute-decision` — 手动重判
+
+  ### 前端
+  - 新页面 `dataset-management.vue` — 训练数据集管理：
+    - 任务选择器 + 统计卡片 (合格/总数/批次判定/人工结果)
+    - 判定来源分布面板
+    - 批次汇总表 (失败率 + 判定状态 + 重判按钮)
+    - Episode 列表 (最终状态/判定来源/人工结果 筛选 + 分页)
+    - CSV/JSON 导出按钮
+  - 路由 `/dataset-management` 已注册
+  - 菜单项 "训练数据集" (FolderOpened icon) 已添加
+
+  ### API 验证结果
+  - GET /dataset/tasks → 返回 8 个任务类型
+  - GET /dataset/tasks/task_type:tudou/summary → 1506 total, 15 batches, all PENDING
+  - GET /dataset/tasks/task_type:tudou/episodes → 正确分页，字段完整
+  - POST /dataset/tasks/task_type:tudou/exports (CSV) → BOM + 11 字段表头
+
+- Business logic impact:
+  - 每次质检员提交 QC 结果后，系统自动更新 episode.manual_qc_status
+  - 批次完成抽检后自动执行 adjudicate_batch() 判定
+  - 驳回阈值从设置页"通用"tab 读取 (默认 0.10)
+  - 下游训练团队可通过 /dataset-management 查看合格数据量和导出清单
+
+- Affected files: 16 new/modified
+  - New: batch_adjudication.py, dataset_service.py, dataset-management.vue, migration 0012
+  - Modified: batch.py, episode.py, qc.py (model+routes), __init__.py, payloads.py, client.ts, types/qc.ts, router/index.ts, AppLayout.vue
+
 ## 2026-06-29 (设置页"通用"tab + 批次驳回阈值参数)
 
 - Type: feature

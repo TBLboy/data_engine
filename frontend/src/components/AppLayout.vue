@@ -2,6 +2,7 @@
 import {
   Files,
   Finished,
+  FolderOpened,
   Monitor,
   Setting,
   VideoCamera,
@@ -23,6 +24,7 @@ const menuItems = [
   { path: '/task-types', label: '任务类型管理', icon: CollectionTag, roles: ['admin', 'qc_manager'] },
   { path: '/task-pool', label: '人工质检入口', icon: VideoCamera },
   { path: '/qc-history', label: '历史审计', icon: Finished, roles: ['admin', 'qc_manager'] },
+  { path: '/dataset-management', label: '训练数据集', icon: FolderOpened },
   { path: '/accounts', label: '账号管理', icon: Setting, roles: ['admin', 'qc_manager'] }
 ]
 
