@@ -66,6 +66,8 @@ export interface EpisodeRow {
   reviewer: string
   reasonCode: string
   updatedAt: string
+  finalDatasetStatus: string
+  finalDecisionSource: string
 }
 
 export interface ReviewLock {

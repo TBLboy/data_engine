@@ -99,13 +99,6 @@ const reasonStats = computed(() => payload.value?.reasonStats ?? [])
 const ingestJobs = computed(() => payload.value?.ingestJobs ?? [])
 const totalEpisodes = computed(() => payload.value?.totalEpisodes ?? 0)
 
-const statusType = (statusValue: string) => {
-  if (statusValue === 'done') return 'success'
-  if (statusValue === 'new') return 'info'
-  if (statusValue === 'assigned') return 'warning'
-  return 'primary'
-}
-
 const ingestStatusType = (statusValue: string) => {
   if (statusValue === 'done') return 'success'
   if (statusValue === 'failed') return 'danger'
@@ -198,12 +191,21 @@ const ingestStatusType = (statusValue: string) => {
             <el-table-column prop="batchName" label="批次" min-width="180" />
             <el-table-column prop="durationSec" label="时长(s)" width="100" />
             <el-table-column prop="frameCount" label="帧数" width="100" />
-            <el-table-column label="QC状态" width="120"><template #default="{ row }"><el-tag :type="statusType(row.qcStatus)">{{ row.qcStatus }}</el-tag></template></el-table-column>
-            <el-table-column label="结果" width="110">
+            <el-table-column label="最终状态" width="120">
               <template #default="{ row }">
-                <el-tag v-if="row.qcResult === 'pass'" type="success">pass</el-tag>
-                <el-tag v-else-if="row.qcResult === 'fail'" type="danger">fail</el-tag>
-                <el-tag v-else type="info">pending</el-tag>
+                <el-tag v-if="row.finalDatasetStatus === 'QUALIFIED'" type="success">合格</el-tag>
+                <el-tag v-else-if="row.finalDatasetStatus === 'UNQUALIFIED'" type="danger">不合格</el-tag>
+                <el-tag v-else type="info">待定</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="判定来源" min-width="140">
+              <template #default="{ row }">
+                <span v-if="row.finalDecisionSource === 'MANUAL_PASS'">人工合格</span>
+                <span v-else-if="row.finalDecisionSource === 'MANUAL_FAIL'">人工不合格</span>
+                <span v-else-if="row.finalDecisionSource === 'BATCH_ACCEPT_INFERRED_PASS'">自动合格</span>
+                <span v-else-if="row.finalDecisionSource === 'BATCH_REJECT_PROPAGATED_FAIL'">自动不合格</span>
+                <span v-else-if="row.finalDecisionSource === 'BATCH_REJECT_OVERRIDE_MANUAL_PASS'">人工合格(批次驳回)</span>
+                <span v-else>-</span>
               </template>
             </el-table-column>
             <el-table-column prop="reasonCode" label="原因码" min-width="160" />

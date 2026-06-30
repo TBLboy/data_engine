@@ -117,6 +117,8 @@ class EpisodeRowSchema(BaseModel):
     reviewer: str
     reasonCode: str
     updatedAt: str
+    finalDatasetStatus: str = 'PENDING'
+    finalDecisionSource: str = ''
 
 
 class ReviewLockSchema(BaseModel):

@@ -221,6 +221,8 @@ def serialize_episode(episode: Episode) -> dict:
         'reviewer': episode.reviewer,
         'reasonCode': episode.reason_code,
         'updatedAt': format_time(episode.updated_at),
+        'finalDatasetStatus': episode.final_dataset_status,
+        'finalDecisionSource': episode.final_decision_source,
     }
 
 
