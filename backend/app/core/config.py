@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     minio_secure: bool = Field(default=False, alias='MINIO_SECURE')
     minio_region: str = Field(default='', alias='MINIO_REGION')
     minio_default_bucket: str = Field(default='yaocao', alias='MINIO_DEFAULT_BUCKET')
+    scan_cron_hour: int = Field(default=0, alias='SCAN_CRON_HOUR')
+    scan_cron_minute: int = Field(default=0, alias='SCAN_CRON_MINUTE')
     database_url: str = Field(
         default=f'sqlite:///{DEFAULT_SQLITE_PATH}',
         alias='DATABASE_URL'

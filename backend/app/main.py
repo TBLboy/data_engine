@@ -23,6 +23,25 @@ app.add_middleware(
 app.include_router(router)
 
 
+@app.on_event('startup')
+async def _startup():
+    from app.services.scan_scheduler import start_scheduler
+    try:
+        start_scheduler()
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception('scan cron scheduler failed to start')
+
+
+@app.on_event('shutdown')
+async def _shutdown():
+    from app.services.scan_scheduler import stop_scheduler
+    try:
+        stop_scheduler()
+    except Exception:
+        pass
+
+
 @app.exception_handler(PermissionError)
 async def permission_error_handler(_request: Request, exc: PermissionError):
     return JSONResponse(status_code=403, content={'detail': str(exc)})
