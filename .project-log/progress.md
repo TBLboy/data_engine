@@ -1,3 +1,24 @@
+## 2026-06-30 (修复派发重生成数量不稳定 + 旧 QC 痕迹残留)
+
+- Type: bugfix (high)
+- Status: backend compile passed, Docker deployed, API verified
+- Importance: high
+- Reusable: no
+- Objective: 修复 apply_dispatch_plan 重生成时抽样数量不稳定（同样是 15% 有时 5 条有时 8 条），以及进度条不归零的问题
+- Root cause: 旧代码 random.sample 从所有 episode 池抽样后，对已 done 的 episode 跳过（continue），导致实际任务数 = 目标数 - 随机抽中 done 的数量。同时旧任务不退役、旧手动 QC 状态不清零
+- Work completed:
+  - **全部归零**：重生成前先重置该批次所有 episode 的 QC 字段（qc_status/qc_result/reviewer/reason_code/manual_qc_status/manual_qc_result_id/sampled_for_qc/final_dataset_status/final_decision_source/is_exportable）为初始值
+  - **_supersede_pending_batch_tasks 增强**：改为退役所有旧任务（包括 done），不再跳过
+  - **in_review 检查增强**：增加锁过期判断（lock_expires_at > now），避免过期锁永久阻塞重派发
+  - **dispatch_preview_payload 加固**：改用 .get() 取值避免 KeyError
+  - **db.flush() 补位**：抽样和任务创建后 flush 确保 sync_batch_metrics 查询可见
+  - **返回计数修正**：apply_dispatch_plan 返回时传入 new_task_count 和 superseded 数
+- Verification: 3 次连续 15% 抽样均返回 sampled=10, created=10, superseded=10；Full 模式 sampled=70, created=70；DB 确认 done_count=0, manual_qc_status 全部 NOT_REVIEWED
+- Files changed:
+  - `backend/app/api/routes/qc.py` — apply_dispatch_plan 核心重写 + _supersede_pending_batch_tasks 增强
+  - `backend/app/services/payloads.py` — dispatch_preview_payload 加固
+- Commit: 7837de6 → main
+
 ## 2026-06-30 (修复 manual_qc_status 历史未回填 + 批次判定抽检过滤 + 数据库页面显示)
 
 - Type: bugfix (medium)
