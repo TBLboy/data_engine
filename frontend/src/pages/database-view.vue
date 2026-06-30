@@ -205,7 +205,15 @@ const ingestStatusType = (statusValue: string) => {
                 <span v-else-if="row.finalDecisionSource === 'BATCH_ACCEPT_INFERRED_PASS'">自动合格</span>
                 <span v-else-if="row.finalDecisionSource === 'BATCH_REJECT_PROPAGATED_FAIL'">自动不合格</span>
                 <span v-else-if="row.finalDecisionSource === 'BATCH_REJECT_OVERRIDE_MANUAL_PASS'">人工合格(批次驳回)</span>
+                <span v-else-if="row.finalDecisionSource === 'PENDING_NOT_ADJUDICATED'">待批次判定</span>
                 <span v-else>-</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="人工质检" width="100">
+              <template #default="{ row }">
+                <el-tag v-if="row.qcResult === 'pass'" type="success" size="small">通过</el-tag>
+                <el-tag v-else-if="row.qcResult === 'fail'" type="danger" size="small">不通过</el-tag>
+                <span v-else class="text-muted">-</span>
               </template>
             </el-table-column>
             <el-table-column prop="reasonCode" label="原因码" min-width="160" />

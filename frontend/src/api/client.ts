@@ -540,9 +540,12 @@ export async function fetchExportHistory(taskTypeId?: string) {
 }
 
 // v1.2: Reviewer task manager
-export async function fetchReviewerTasks(reviewerId: string, status?: string) {
-  const qs = status ? `?status=${status}` : ''
-  return request<import('../types/qc').ReviewerTask[]>(`/admin/reviewers/${reviewerId}/tasks${qs}`)
+export async function fetchReviewerTasks(reviewerId: string, reviewerName?: string, status?: string) {
+  const params = new URLSearchParams()
+  if (reviewerName) params.set('name', reviewerName)
+  if (status) params.set('status', status)
+  const qs = params.toString()
+  return request<import('../types/qc').ReviewerTask[]>(`/admin/reviewers/${reviewerId}/tasks${qs ? `?${qs}` : ''}`)
 }
 
 export async function revokeTask(taskId: string, reason: string = '') {

@@ -199,7 +199,7 @@ async function openTaskDrawer(reviewerName: string) {
   taskLoading.value = true
   taskDrawerVisible.value = true
   try {
-    reviewerTasks.value = await fetchReviewerTasks(reviewer.id)
+    reviewerTasks.value = await fetchReviewerTasks(reviewer.id, reviewer.name)
   } catch {
     ElMessage.error('加载任务列表失败')
   } finally {

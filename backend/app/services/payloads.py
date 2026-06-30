@@ -185,8 +185,8 @@ def sync_batch_metrics(db: Session, batch: Batch) -> None:
     sampled_count = db.query(func.count(Episode.id)).filter(Episode.batch_id == batch.id, Episode.sampled_for_qc == 1).scalar() or 0
     completed_count = db.query(func.count(Episode.id)).filter(Episode.batch_id == batch.id, Episode.sampled_for_qc == 1, Episode.qc_status == 'done').scalar() or 0
     passed_count = db.query(func.count(Episode.id)).filter(Episode.batch_id == batch.id, Episode.sampled_for_qc == 1, Episode.qc_result == 'pass').scalar() or 0
-    manual_pass_count = db.query(func.count(Episode.id)).filter(Episode.batch_id == batch.id, Episode.manual_qc_status == 'MANUAL_PASS').scalar() or 0
-    manual_fail_count = db.query(func.count(Episode.id)).filter(Episode.batch_id == batch.id, Episode.manual_qc_status == 'MANUAL_FAIL').scalar() or 0
+    manual_pass_count = db.query(func.count(Episode.id)).filter(Episode.batch_id == batch.id, Episode.sampled_for_qc == 1, Episode.manual_qc_status == 'MANUAL_PASS').scalar() or 0
+    manual_fail_count = db.query(func.count(Episode.id)).filter(Episode.batch_id == batch.id, Episode.sampled_for_qc == 1, Episode.manual_qc_status == 'MANUAL_FAIL').scalar() or 0
     top_reason = db.query(Episode.reason_code, func.count(Episode.id).label('count')).filter(
         Episode.batch_id == batch.id,
         Episode.sampled_for_qc == 1,

@@ -24,8 +24,9 @@ def adjudicate_batch(db: Session, batch_id: str, actor: str = 'system') -> Batch
         db.commit()
         return None
 
-    sampled_count = sum(1 for e in episodes if e.sampled_for_qc)
-    reviewed = [e for e in episodes if e.manual_qc_status in ('MANUAL_PASS', 'MANUAL_FAIL')]
+    sampled_episodes = [e for e in episodes if e.sampled_for_qc]
+    sampled_count = len(sampled_episodes)
+    reviewed = [e for e in sampled_episodes if e.manual_qc_status in ('MANUAL_PASS', 'MANUAL_FAIL')]
     reviewed_count = len(reviewed)
     manual_pass_count = sum(1 for e in reviewed if e.manual_qc_status == 'MANUAL_PASS')
     manual_fail_count = sum(1 for e in reviewed if e.manual_qc_status == 'MANUAL_FAIL')
