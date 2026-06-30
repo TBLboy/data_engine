@@ -145,6 +145,10 @@
   background: #cbd5e1;
 }
 
+.qc-table .el-checkbox__inner {
+  border-color: #909399;
+}
+
 /* ---- Progress 进度条（独立使用） ---- */
 
 .qc-progress .el-progress-bar__outer {

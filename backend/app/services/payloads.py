@@ -407,6 +407,17 @@ def _read_minio_npz(bucket: str, object_key: str):
     return np.load(io.BytesIO(payload), allow_pickle=False)
 
 
+def _read_minio_npy(bucket: str, object_key: str) -> npt.NDArray[np.float64] | None:
+    response = get_minio_service().get_object(bucket, object_key)
+    try:
+        payload = response.read()
+    finally:
+        response.close()
+        response.release_conn()
+    arr = np.load(io.BytesIO(payload), allow_pickle=False)
+    return np.asarray(arr, dtype=np.float64).ravel() if arr.size else None
+
+
 def _build_real_manual_qc_context(db: Session, episode_id: str) -> dict | None:
     inventory_row = _lookup_inventory_for_episode(db, episode_id)
     if not inventory_row:
@@ -424,6 +435,15 @@ def _build_real_manual_qc_context(db: Session, episode_id: str) -> dict | None:
     if not manifest_key or not metadata_key or not telemetry_key:
         return None
 
+    depth_ts_key: str | None = None
+    for item in object_rows:
+        if item.object_role == 'timestamp_npy' and 'cam_top_depth' in item.object_key.lower():
+            depth_ts_key = item.object_key
+            break
+    depth_timestamps: npt.NDArray[np.float64] | None = None
+    if depth_ts_key:
+        depth_timestamps = _read_minio_npy(bucket, depth_ts_key)
+
     manifest = _read_minio_json(bucket, manifest_key)
     metadata = _read_minio_json(bucket, metadata_key)
 
@@ -432,7 +452,7 @@ def _build_real_manual_qc_context(db: Session, episode_id: str) -> dict | None:
         from app.services.l3_v2 import L3V2Engine
         from app.models.l3_v2_config import L3V2Config
         l3_params = L3V2Config.get_params(db)
-        l3_v2 = L3V2Engine(telemetry_dict, l3_params).compute()
+        l3_v2 = L3V2Engine(telemetry_dict, l3_params, depth_timestamps=depth_timestamps).compute()
 
     return {
         'durationSec': float(manifest.get('duration', 0.0)),
@@ -500,7 +520,7 @@ def database_payload(
     if qc_status:
         episode_query = episode_query.filter(Episode.qc_status == qc_status)
     if qc_result:
-        episode_query = episode_query.filter(Episode.qc_result == qc_result)
+        episode_query = episode_query.filter(Episode.final_dataset_status == qc_result)
     if normalized_keyword:
         like_term = f'%{normalized_keyword}%'
         episode_query = episode_query.filter(

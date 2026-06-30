@@ -100,15 +100,18 @@ class DatasetExportService:
     ]
 
     @classmethod
-    def _get_episodes(cls, db: Session, task_type_id: str):
-        return db.query(Episode).filter(
+    def _get_episodes(cls, db: Session, task_type_id: str, batch_ids: list[str] | None = None):
+        query = db.query(Episode).filter(
             Episode.batch.has((Batch.task_type_id == task_type_id) & (Batch.is_active == True)),
             Episode.final_dataset_status == 'QUALIFIED',
-        ).order_by(Episode.id).all()
+        )
+        if batch_ids:
+            query = query.filter(Episode.batch_id.in_(batch_ids))
+        return query.order_by(Episode.id).all()
 
     @classmethod
-    def export_episodes(cls, db: Session, task_type_id: str, fmt: str = 'csv') -> tuple[bytes, str, int]:
-        episodes = cls._get_episodes(db, task_type_id)
+    def export_episodes(cls, db: Session, task_type_id: str, fmt: str = 'csv', batch_ids: list[str] | None = None) -> tuple[bytes, str, int]:
+        episodes = cls._get_episodes(db, task_type_id, batch_ids=batch_ids)
 
         if fmt == 'json':
             data = []

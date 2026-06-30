@@ -487,6 +487,20 @@ export async function fetchDatasetTaskBatches(taskTypeId: string) {
   return request<DatasetBatchRow[]>(`/dataset/tasks/${taskTypeId}/batches`)
 }
 
+export async function recomputeTaskBatchDecisions(taskTypeId: string) {
+  return request<{
+    success: boolean
+    taskTypeId: string
+    taskName: string
+    refreshedBatchCount: number
+    acceptedBatchCount: number
+    rejectedBatchCount: number
+    pendingBatchCount: number
+  }>(`/dataset/tasks/${taskTypeId}/recompute-decisions`, {
+    method: 'POST'
+  })
+}
+
 export async function fetchDatasetTaskEpisodes(
   taskTypeId: string,
   params: {
@@ -513,12 +527,16 @@ export function datasetExportUrl(taskTypeId: string) {
   return `${API_BASE}/dataset/tasks/${taskTypeId}/exports`
 }
 
-export async function exportDatasetEpisodes(taskTypeId: string, format: string = 'csv') {
+export async function exportDatasetEpisodes(taskTypeId: string, format: string = 'csv', batchIds?: string[]) {
+  const body: Record<string, unknown> = { format }
+  if (batchIds && batchIds.length) {
+    body.batchIds = batchIds
+  }
   const response = await fetch(datasetExportUrl(taskTypeId), {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ format })
+    body: JSON.stringify(body)
   })
   if (!response.ok) {
     throw new ApiError(response.status, await response.text())

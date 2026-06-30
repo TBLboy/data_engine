@@ -359,9 +359,14 @@ class MetricEngine:
         )
 
     def _timestamp_regularity(self, timeline: list[dict]) -> MetricResult:
+        w_di01 = self.p.get('di01_weight', 0.45)
+        depth_dt = self.f.depth_dt
+
+        if depth_dt is not None and depth_dt.size > 0:
+            return self._timestamp_regularity_depth(depth_dt, w_di01)
+
         dt = self.f.dt
         n_dt = dt.size
-        w_di01 = self.p.get('di01_weight', 0.45)
         if n_dt == 0:
             return MetricResult(
                 metricId='DI-01', name='Timestamp Regularity', qualityDimension='data_integrity',
@@ -403,6 +408,38 @@ class MetricEngine:
             evidenceId='EV-DATA-TIMESTAMP', value=raw, valueText=f'{raw:.4f}', unit='index',
             score=score, level=self._level(score),
             description='鲁棒时间戳规则性：J_95(dt偏离中位数) + R_gap(长间隔比例) + R_invalid(非单调比例)。保留 dt CV 为诊断参考。',
+            weight=w_di01,
+        )
+
+    def _timestamp_regularity_depth(self, depth_dt: np.ndarray, w_di01: float) -> MetricResult:
+        n_dt = depth_dt.size
+        if n_dt == 0:
+            return MetricResult(
+                metricId='DI-01', name='Timestamp Regularity', qualityDimension='data_integrity',
+                evidenceId='EV-DATA-TIMESTAMP', value=1.0, valueText='1.0000', unit='index',
+                score=0.0, level='bad',
+                description='深度相机无有效时间戳数据。', weight=w_di01,
+            )
+        valid_dt = depth_dt[depth_dt > 0]
+        r_invalid = 1.0 - valid_dt.size / max(n_dt, 1)
+        dt_med = float(np.median(valid_dt)) if valid_dt.size else 1.0
+        jitter = np.abs(depth_dt - dt_med) / (dt_med + 1e-6)
+        j_95 = float(np.nanpercentile(jitter, 95)) if jitter.size else 0.0
+        gap_mult = self.p.get('di01_gap_multiplier', 2.0)
+        r_gap = float(np.mean(depth_dt > gap_mult * dt_med)) if depth_dt.size else 0.0
+        w_j = self.p.get('di01_jitter_weight', 0.5)
+        w_g = self.p.get('di01_gap_weight', 0.3)
+        w_i = self.p.get('di01_invalid_weight', 0.2)
+        raw = w_j * j_95 + w_g * r_gap + w_i * r_invalid
+        good = self.p.get('di01_good', 0.05)
+        warn = self.p.get('di01_warn', 0.15)
+        bad = self.p.get('di01_bad', 0.35)
+        score = clamp(score_inverse(raw, good=good, warn=warn, bad=bad))
+        return MetricResult(
+            metricId='DI-01', name='Timestamp Regularity', qualityDimension='data_integrity',
+            evidenceId='EV-DATA-TIMESTAMP', value=raw, valueText=f'{raw:.4f}', unit='index',
+            score=score, level=self._level(score),
+            description='深度相机时间戳规则性（非合成轴）：J_95 + R_gap + R_invalid。仅评分，不输出时间轴警告。',
             weight=w_di01,
         )
 

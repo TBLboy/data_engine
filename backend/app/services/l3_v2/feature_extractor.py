@@ -30,19 +30,26 @@ class L3V2Features:
     sync_valid: np.ndarray
     sync_diff_sec: np.ndarray
     dt_jitter_cv: float
+    depth_dt: np.ndarray | None = None
 
 
 class FeatureExtractor:
     """Feature layer: derive reusable numeric features from parsed telemetry."""
 
-    def __init__(self, telemetry: ParsedTelemetry, params: dict[str, Any] | None = None):
+    def __init__(self, telemetry: ParsedTelemetry, params: dict[str, Any] | None = None, *, depth_timestamps: np.ndarray | None = None):
         self.t = telemetry
         self.p = params or {}
+        self.depth_timestamps = depth_timestamps
 
     def extract(self) -> L3V2Features:
         t_rel = self.t.t_rel
         n = self.t.n
         dt = np.diff(t_rel)
+        depth_dt: np.ndarray | None = None
+        if self.depth_timestamps is not None and self.depth_timestamps.size >= 2:
+            depth_dt = np.diff(self.depth_timestamps)
+            if depth_dt.size == 0:
+                depth_dt = None
         valid_dt = dt[dt > 0]
         fps = self.t.fps
         duration = self.t.duration
@@ -98,6 +105,7 @@ class FeatureExtractor:
             sync_valid=sync_valid_arr,
             sync_diff_sec=sync_diff_sec_arr,
             dt_jitter_cv=jitter_cv,
+            depth_dt=depth_dt,
         )
 
     @staticmethod

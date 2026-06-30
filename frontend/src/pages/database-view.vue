@@ -176,10 +176,10 @@ const ingestStatusType = (statusValue: string) => {
             <el-option v-for="item in batches" :key="item.id" :label="item.name" :value="item.id" />
           </el-select>
           <el-select v-model="status" placeholder="QC 状态" class="qc-select" clearable filterable>
-            <el-option label="new" value="new" /><el-option label="assigned" value="assigned" /><el-option label="in_review" value="in_review" /><el-option label="done" value="done" />
+            <el-option label="未派发" value="new" /><el-option label="已派发" value="assigned" /><el-option label="审核中" value="in_review" /><el-option label="已完成" value="done" />
           </el-select>
-          <el-select v-model="result" placeholder="QC 结果" class="qc-select" clearable filterable>
-            <el-option label="pass" value="pass" /><el-option label="fail" value="fail" /><el-option label="pending" value="pending" />
+          <el-select v-model="result" placeholder="最终状态" class="qc-select" clearable filterable>
+            <el-option label="可用于训练" value="QUALIFIED" /><el-option label="不可用于训练" value="UNQUALIFIED" /><el-option label="待最终判定" value="PENDING" />
           </el-select>
         </div>
       </el-card>

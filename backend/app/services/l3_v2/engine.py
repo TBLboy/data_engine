@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
+
 from .feature_extractor import FeatureExtractor
 from .metric_engine import MetricEngine
 from .quality_engine import QualityEngine
@@ -16,13 +18,14 @@ class L3V2Engine:
     without changing the computation contract.
     """
 
-    def __init__(self, telemetry: dict[str, Any], params: dict[str, Any] | None = None):
+    def __init__(self, telemetry: dict[str, Any], params: dict[str, Any] | None = None, *, depth_timestamps: np.ndarray | None = None):
         self.telemetry = telemetry
         self.params = params or {}
+        self.depth_timestamps = depth_timestamps
 
     def compute(self) -> dict:
         parsed = TelemetryParser(self.telemetry).parse()
-        features = FeatureExtractor(parsed, self.params).extract()
+        features = FeatureExtractor(parsed, self.params, depth_timestamps=self.depth_timestamps).extract()
         metrics, timeline, diagnostics = MetricEngine(features, self.params).compute()
         report = QualityEngine(metrics, diagnostics, self.params).build_report()
         report.update({

@@ -1354,6 +1354,48 @@ def dataset_task_batches(
     return DatasetSummaryService.task_batches(db, task_type_id)
 
 
+@router.post('/dataset/tasks/{task_type_id}/recompute-decisions')
+def recompute_task_batch_decisions(
+    task_type_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """按任务重判全部批次，确保训练数据集页状态与最新 QC 结果一致."""
+    require_roles(current_user, 'admin', 'qc_manager')
+    task_type = db.query(TaskType).filter(TaskType.id == task_type_id, TaskType.is_active == True).first()
+    if not task_type:
+        raise HTTPException(status_code=404, detail='Task type not found')
+
+    from app.services.batch_adjudication import adjudicate_batch
+
+    batches = db.query(Batch).filter(Batch.task_type_id == task_type_id, Batch.is_active == True).all()
+    refreshed = 0
+    accepted = 0
+    rejected = 0
+    pending = 0
+
+    for batch in batches:
+        adjudicate_batch(db, batch.id, actor=current_user.name)
+        db.refresh(batch)
+        refreshed += 1
+        if batch.batch_decision == 'ACCEPTED':
+            accepted += 1
+        elif batch.batch_decision == 'REJECTED':
+            rejected += 1
+        else:
+            pending += 1
+
+    return {
+        'success': True,
+        'taskTypeId': task_type_id,
+        'taskName': task_type.name,
+        'refreshedBatchCount': refreshed,
+        'acceptedBatchCount': accepted,
+        'rejectedBatchCount': rejected,
+        'pendingBatchCount': pending,
+    }
+
+
 @router.get('/dataset/tasks/{task_type_id}/episodes')
 def dataset_task_episodes(
     task_type_id: str,
@@ -1415,13 +1457,14 @@ def dataset_export_episodes(
     """导出合格 episode 清单."""
     from app.services.dataset_service import DatasetExportService
     fmt = payload.get('format', 'csv')
-    content, mime_type, count = DatasetExportService.export_episodes(db, task_type_id, fmt)
+    batch_ids = payload.get('batchIds') or None
+    content, mime_type, count = DatasetExportService.export_episodes(db, task_type_id, fmt, batch_ids=batch_ids)
     DatasetExportService.record_export(db, task_type_id, fmt, count, created_by=current_user.name)
     return StreamingResponse(
         io.BytesIO(content),
         media_type=mime_type,
         headers={
-            'Content-Disposition': f'attachment; filename="qualified_episodes_{task_type_id}.{fmt}"',
+            'Content-Disposition': f"attachment; filename*=UTF-8''{quote(f'qualified_episodes_{task_type_id}.{fmt}')}",
         },
     )
 

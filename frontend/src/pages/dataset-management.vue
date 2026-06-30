@@ -16,6 +16,7 @@ import {
   fetchDatasetTaskEpisodes,
   exportDatasetEpisodes,
   recomputeBatchDecision,
+  recomputeTaskBatchDecisions,
   fetchExportHistory,
 } from '../api/client'
 
@@ -29,6 +30,8 @@ const episodePage = ref(1)
 const episodePageSize = 50
 const loading = ref(true)
 const exportLoading = ref(false)
+const recomputingTask = ref(false)
+const selectedBatches = ref<DatasetBatchRow[]>([])
 const exportHistory = ref<DatasetExportJob[]>([])
 
 const statusFilter = ref('')
@@ -68,6 +71,29 @@ async function loadData() {
   await loadEpisodes()
 }
 
+async function recomputeCurrentTaskBatches(options: { silent?: boolean } = {}) {
+  if (!selectedTaskId.value) return false
+  recomputingTask.value = true
+  try {
+    const result = await recomputeTaskBatchDecisions(selectedTaskId.value)
+    if (!options.silent) {
+      ElMessage.success(`已自动重判 ${result.refreshedBatchCount} 个批次`)
+    }
+    return true
+  } catch {
+    ElMessage.error('自动重判失败')
+    return false
+  } finally {
+    recomputingTask.value = false
+  }
+}
+
+async function loadTaskDataWithRecompute(options: { silent?: boolean } = {}) {
+  if (!selectedTaskId.value) return
+  await recomputeCurrentTaskBatches(options)
+  await loadData()
+}
+
 async function loadEpisodes() {
   if (!selectedTaskId.value) return
   try {
@@ -88,7 +114,8 @@ async function loadEpisodes() {
 
 async function onTaskChange() {
   episodePage.value = 1
-  await loadData()
+  selectedBatches.value = []
+  await loadTaskDataWithRecompute()
 }
 
 async function onFilterChange() {
@@ -105,7 +132,10 @@ async function doExport(format: string) {
   if (!selectedTaskId.value) return
   exportLoading.value = true
   try {
-    const resp = await exportDatasetEpisodes(selectedTaskId.value, format)
+    const batchIds = selectedBatches.value.length
+      ? selectedBatches.value.map(b => b.batchId)
+      : undefined
+    const resp = await exportDatasetEpisodes(selectedTaskId.value, format, batchIds)
     const blob = await resp.blob()
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -176,7 +206,7 @@ const manualQcLabel = (s: string) => {
 onMounted(async () => {
   await loadTasks()
   if (selectedTaskId.value) {
-    await loadData()
+    await loadTaskDataWithRecompute({ silent: true })
   }
 })
 </script>
@@ -194,6 +224,7 @@ onMounted(async () => {
           <el-select v-model="selectedTaskId" style="width: 240px" class="qc-select" @change="onTaskChange">
             <el-option v-for="t in tasks" :key="t.id" :label="t.name" :value="t.id" />
           </el-select>
+          <el-tag v-if="recomputingTask" type="warning" effect="light">正在自动重判</el-tag>
         </div>
       </section>
 
@@ -233,6 +264,7 @@ onMounted(async () => {
               <div class="card-header">
                 <span>判定来源分布</span>
                 <div class="toolbar-actions">
+                  <span v-if="selectedBatches.length" style="color:#909399;font-size:13px;margin-right:8px">已选 {{ selectedBatches.length }} 个批次</span>
                   <el-button :loading="exportLoading" @click="doExport('csv')">导出 CSV</el-button>
                   <el-button :loading="exportLoading" @click="doExport('json')">导出 JSON</el-button>
                 </div>
@@ -257,7 +289,8 @@ onMounted(async () => {
               <span>批次汇总</span>
               <small style="color: #909399; margin-left: 12px">失败率 = 人工不合格数 / 抽检数</small>
             </template>
-            <el-table :data="batches" stripe class="qc-table" height="320">
+            <el-table :data="batches" stripe class="qc-table" height="320" @selection-change="(rows: DatasetBatchRow[]) => selectedBatches = rows">
+              <el-table-column type="selection" width="40" />
               <el-table-column prop="batchName" label="批次" min-width="160" />
               <el-table-column prop="totalCount" label="总数" width="80" />
               <el-table-column prop="sampledCount" label="抽检" width="70" />
