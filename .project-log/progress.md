@@ -1,3 +1,24 @@
+## 2026-06-30 (修复 manual_qc_status 历史未回填 + 批次判定抽检过滤 + 数据库页面显示)
+
+- Type: bugfix (medium)
+- Status: backend compile + frontend build passed, Docker deployed, DB backfill + API verified
+- Importance: high
+- Reusable: no
+- Objective: 修复 RDDQF 迁移后历史 episode 的 manual_qc_status 字段未回填导致的批次判定阻塞，以及判定逻辑的抽检计数 bug
+- Work completed:
+  - **DB 回填**：32 条 episodes (qc_status='done' 但 manual_qc_status='NOT_REVIEWED') 的 manual_qc_status 从 qc_result 回填 (pass→MANUAL_PASS, fail→MANUAL_FAIL)，涉及 9 个批次
+  - **adjudicate_batch 修复**：reviewed/manual_pass/manual_fail 统计改为只考虑 sampled_for_qc=1 的 episode，修复非抽检 episode 被错误计入导致 reviewed_count vs sampled_count 永远无法对齐的问题
+  - **sync_batch_metrics 修复**：manual_pass_count/manual_fail_count 增加 sampled_for_qc=1 过滤条件
+  - **database-view 修复**：PENDING_NOT_ADJUDICATED 映射为"待批次判定"（原显示"-"），新增"人工质检"列（显示 pass/fail 标签）
+  - **重判验证**：3 个批次成功重判（2 ACCEPTED + 1 REJECTED），其余 5 个批次因抽检未完成保持 PENDING（正确）
+- Root cause: RDDQF 新增 manual_qc_status 字段时 migration 未回填旧 qc_status/qc_result 数据
+- Verification: DB 查询确认 32 条 backfill 成功；API 重判 3 批次成功返回 correct batchDecision + failureRate；前端 database-view JS 已部署含新列和新映射
+- Files changed:
+  - `backend/app/services/batch_adjudication.py` — 抽检过滤修复
+  - `backend/app/services/payloads.py` — sync_batch_metrics 抽检过滤
+  - `frontend/src/pages/database-view.vue` — 新列 + PENDING_NOT_ADJUDICATED 映射
+- Commit: 9a3e076 → main
+
 ## 2026-06-29 (训练数据消费与批次驳回模块完整落地)
 
 - Type: feature (major)
