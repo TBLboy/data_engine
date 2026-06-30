@@ -240,6 +240,11 @@ def _reassign_batch_task_type(db: Session, *, batch: Batch, task_type: TaskType)
     for task in batch.qc_tasks:
         task.task_name = task_type.name
         task.batch_name = batch.name
+    # Bulk update any episodes that might not be in the loaded relationship
+    db.query(Episode).filter(
+        Episode.batch_id == batch.id,
+        Episode.task_name != task_type.name,
+    ).update({Episode.task_name: task_type.name}, synchronize_session=False)
 
 
 def _refresh_task_type_stats(db: Session, *task_type_ids: str) -> None:
