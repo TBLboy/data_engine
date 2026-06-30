@@ -246,6 +246,16 @@ def review_lock_payload(task: QcTask, current_user: User | None = None) -> dict:
 
 
 def serialize_task(task: QcTask, current_user: User | None = None) -> dict:
+    # Fix stale in_review state from expired locks
+    now = datetime.utcnow()
+    if task.status == 'in_review':
+        has_active_lock = task.lock_owner_user_id and task.lock_expires_at and task.lock_expires_at > now
+        if not has_active_lock:
+            task.status = 'assigned' if task.assignee != '未派发' else 'new'
+            task.lock_owner_user_id = ''
+            task.lock_owner_name = ''
+            task.lock_acquired_at = None
+            task.lock_expires_at = None
     return {
         'id': task.id,
         'episodeId': task.episode_id,
