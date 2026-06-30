@@ -1229,6 +1229,7 @@ def submit_manual_qc(
         time=now,
     )
     db.add(rev)
+    db.flush()  # Ensure rev.id is available and episode changes are visible to sync_batch_metrics
     episode.manual_qc_result_id = str(rev.id) if rev.id else None
     sync_batch_metrics(db, batch)
     db.add(AuditEvent(

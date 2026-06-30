@@ -80,6 +80,15 @@
   - 后续 BatchAdjudicationService 将从 GeneralConfig 读取此阈值
   - 失败率分母已明确为"抽检数"（非批次总数），与设计文档一致
 
+## 2026-06-29 (修复批次计数 BUG：completed_sample_count 与实际差 1)
+
+- Type: bugfix
+- Status: fixed + deployed, verified — test submit shows completed_count == live done_count
+- Issue: 批次页面显示已完成数比实际少 1（如 24/25 实际全部 25 已完成，5/6 实际全部 6 已完成）
+- Root cause: submit handler 中 `db.add(rev)` 后直接调用 `sync_batch_metrics`，但 rev 未 flush 导致 episode.manual_qc_result_id 未正确赋值，同时 episode 的 qc_status='done' 变更在 sync 查询时可能未被 flush
+- Fix: 在 `sync_batch_metrics` 前增加 `db.flush()` 确保所有 pending changes 对后续查询可见
+- Verified: 模拟 submit 测试 confirmed completed_count == live done count
+
 ## 2026-06-29 (并发登录保护：同账号多人登录互踢)
 
 - Type: feature
