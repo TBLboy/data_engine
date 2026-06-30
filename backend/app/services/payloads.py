@@ -842,18 +842,22 @@ def _superseded_task_counts_by_batch(db: Session, batch_ids: Iterable[str]) -> d
 
 
 def dispatch_preview_payload(batch: Batch, counts: dict[str, int] | None = None, superseded_count: int = 0) -> dict:
-    counts = counts or {'new': 0, 'assigned': 0, 'in_review': 0, 'done': 0}
+    counts = counts or {}
+    new_count = counts.get('new', 0)
+    assigned_count = counts.get('assigned', 0)
+    in_review_count = counts.get('in_review', 0)
+    done_count = counts.get('done', 0)
     return {
         'batchId': batch.id,
         'candidateEpisodeCount': batch.episode_count,
         'sampledEpisodeCount': batch.sampled_episode_count,
         'unsampledEpisodeCount': max(batch.episode_count - batch.sampled_episode_count, 0),
-        'createdTaskCount': counts['new'] + counts['assigned'] + counts['in_review'] + counts['done'],
-        'assignedTaskCount': counts['assigned'],
-        'inReviewTaskCount': counts['in_review'],
-        'doneTaskCount': counts['done'],
+        'createdTaskCount': new_count + assigned_count + in_review_count + done_count,
+        'assignedTaskCount': assigned_count,
+        'inReviewTaskCount': in_review_count,
+        'doneTaskCount': done_count,
         'supersededTaskCount': superseded_count,
-        'pendingAssignCount': counts['new'],
+        'pendingAssignCount': new_count,
         'dispatchMode': batch.dispatch_mode,
         'samplingRatio': batch.sampling_ratio,
         'activeDispatchGeneration': batch.active_dispatch_generation,

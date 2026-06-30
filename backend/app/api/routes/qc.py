@@ -114,11 +114,10 @@ def _active_batch_tasks(db: Session, batch_id: str):
 
 
 def _supersede_pending_batch_tasks(db: Session, batch_id: str, *, next_generation: int) -> list[QcTask]:
+    """退役该批次所有旧任务（包括 done），为新派发版本让路。"""
     tasks = _active_batch_tasks(db, batch_id).all()
     superseded = []
     for task in tasks:
-        if task.status in {'in_review', 'done'}:
-            continue
         _clear_task_lock(task)
         task.is_active = 0
         task.dispatch_generation = max(task.dispatch_generation, next_generation - 1)
@@ -936,7 +935,8 @@ def apply_dispatch_plan(
         raise HTTPException(status_code=404, detail='Batch not found')
 
     active_tasks = _active_batch_tasks(db, batch_id).all()
-    if any(task.status == 'in_review' for task in active_tasks):
+    now = datetime.utcnow()
+    if any(task.status == 'in_review' and task.lock_expires_at and task.lock_expires_at > now for task in active_tasks):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='当前批次存在审核中的任务，不能重生成派发任务')
 
     batch.dispatch_mode = payload.dispatchMode
@@ -946,36 +946,37 @@ def apply_dispatch_plan(
 
     episodes = db.query(Episode).filter(Episode.batch_id == batch_id).order_by(Episode.id).all()
     target_count = batch.episode_count if payload.dispatchMode == 'full' else max(1, round(batch.episode_count * batch.sampling_ratio / 100))
+
+    # 清理所有 episode 的上一轮 QC 痕迹，归零为干净数据
+    for episode in episodes:
+        episode.qc_status = 'new'
+        episode.qc_result = 'pending'
+        episode.reviewer = '-'
+        episode.reason_code = '-'
+        episode.manual_qc_status = 'NOT_REVIEWED'
+        episode.manual_qc_result_id = None
+        episode.sampled_for_qc = 0
+        episode.final_dataset_status = 'PENDING'
+        episode.final_decision_source = ''
+        episode.is_exportable = False
+        episode.updated_at = now
+    db.flush()
+
+    # 退役该批次所有旧任务，为新派发版本让路
+    superseded = _supersede_pending_batch_tasks(db, batch_id, next_generation=next_generation)
+
+    # 随机抽样
     if payload.dispatchMode == 'full':
         target_episode_ids = {episode.id for episode in episodes}
     else:
         target_episode_ids = {episode.id for episode in random.sample(episodes, min(target_count, len(episodes)))}
 
-    _supersede_pending_batch_tasks(db, batch_id, next_generation=next_generation)
-
+    new_task_count = 0
     for episode in episodes:
-        episode.sampled_for_qc = 1 if episode.id in target_episode_ids else 0
-        # 已质检完成的 episode 不重新派发：保留 done 状态与 qc_result，
-        # 避免被拉回 new/assigned 却残留旧 qc_result，形成 (assigned+fail) 矛盾态黑洞
-        if episode.qc_status == 'done':
-            continue
         if episode.id not in target_episode_ids:
-            episode.qc_status = 'new'
-            episode.reviewer = '-'
-            episode.updated_at = datetime.utcnow()
             continue
+        episode.sampled_for_qc = 1
         task_id = f'task_{batch_id[-6:]}_{next_generation:03d}_{episode.id[-6:]}'
-        existing_task = db.query(QcTask).filter(QcTask.id == task_id).first()
-        if existing_task:
-            existing_task.is_active = 1
-            existing_task.dispatch_generation = next_generation
-            existing_task.dispatch_mode = batch.dispatch_mode
-            existing_task.sampling_ratio = batch.sampling_ratio
-            existing_task.assignment_mode = 'unassigned'
-            existing_task.assignee = '未派发'
-            existing_task.status = 'new'
-            _clear_task_lock(existing_task)
-            continue
         db.add(QcTask(
             id=task_id,
             episode_id=episode.id,
@@ -990,12 +991,11 @@ def apply_dispatch_plan(
             dispatch_generation=next_generation,
             is_active=1,
             assignment_mode='unassigned',
-            created_at=datetime.utcnow(),
+            created_at=now,
         ))
-        episode.qc_status = 'new'
-        episode.reviewer = '-'
-        episode.updated_at = datetime.utcnow()
+        new_task_count += 1
 
+    db.flush()  # 确保 sampled_for_qc 和新任务对 sync 查询可见
     sync_batch_metrics(db, batch)
     db.add(AuditEvent(
         id=f'audit_dispatch_{batch_id}_{next_generation}_{int(datetime.utcnow().timestamp())}',
@@ -1007,7 +1007,7 @@ def apply_dispatch_plan(
     ))
     db.commit()
     db.refresh(batch)
-    return dispatch_preview_payload(batch)
+    return dispatch_preview_payload(batch, {'new': new_task_count, 'assigned': 0, 'in_review': 0, 'done': 0}, len(superseded))
 
 
 @router.post('/qc/batches/{batch_id}/dispatch-assign', response_model=DispatchPreviewSchema)
