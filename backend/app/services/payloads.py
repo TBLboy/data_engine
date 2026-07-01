@@ -299,6 +299,12 @@ def serialize_audit(audit: AuditEvent) -> dict:
         'target': audit.target,
         'time': format_time(audit.time),
         'detail': audit.detail,
+        'eventType': audit.event_type,
+        'severity': audit.severity,
+        'operatorId': audit.operator_id,
+        'ipAddress': audit.ip_address,
+        'userAgent': audit.user_agent,
+        'durationMs': audit.duration_ms,
     }
 
 

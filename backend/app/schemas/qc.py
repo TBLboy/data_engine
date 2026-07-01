@@ -256,6 +256,12 @@ class AuditRecordSchema(BaseModel):
     target: str
     time: str
     detail: str
+    eventType: str | None = None
+    severity: str | None = None
+    operatorId: str | None = None
+    ipAddress: str | None = None
+    userAgent: str | None = None
+    durationMs: int | None = None
 
 
 class ReasonStatSchema(BaseModel):

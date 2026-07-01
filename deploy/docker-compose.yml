@@ -22,6 +22,11 @@ services:
       timeout: 5s
       retries: 12
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: 5
 
   frontend:
     build:

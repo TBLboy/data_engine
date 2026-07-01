@@ -1,10 +1,24 @@
 """Reviewer task manager service — admin operations on reviewer task pools."""
 
 from datetime import datetime
-
 from sqlalchemy.orm import Session
 
-from app.models import QcTask, TaskOperationLog, User, Episode
+from app.models import QcTask, TaskOperationLog, User, Episode, AuditEvent
+
+
+def _audit(db: Session, operator_id: str, operator_name: str, action: str, target: str, detail: str) -> None:
+    ts = int(datetime.utcnow().timestamp())
+    db.add(AuditEvent(
+        id=f'audit_rm_{target}_{ts}',
+        operator=operator_name,
+        action=action,
+        target=target,
+        detail=detail,
+        time=datetime.utcnow(),
+        event_type='business_action',
+        severity='info',
+        operator_id=operator_id,
+    ))
 
 
 class ReviewerTaskManager:
@@ -62,6 +76,8 @@ class ReviewerTaskManager:
             reason=reason,
         )
         db.add(log)
+        operator_user = db.query(User).filter(User.id == operator_id).first()
+        _audit(db, operator_id, operator_user.name if operator_user else operator_id, '撤回任务', task_id, f'撤销审核员 {prev_reviewer}，原因: {reason or "无"}')
         db.commit()
         return {'success': True, 'taskId': task_id, 'operation': 'revoke'}
 
@@ -95,6 +111,8 @@ class ReviewerTaskManager:
             reason=reason,
         )
         db.add(log)
+        operator_user = db.query(User).filter(User.id == operator_id).first()
+        _audit(db, operator_id, operator_user.name if operator_user else operator_id, '转派任务', task_id, f'{prev_reviewer} → {reviewer.name}，原因: {reason or "无"}')
         db.commit()
         return {'success': True, 'taskId': task_id, 'operation': 'reassign', 'toReviewer': reviewer.name}
 
@@ -124,6 +142,8 @@ class ReviewerTaskManager:
             reason=reason,
         )
         db.add(log)
+        operator_user = db.query(User).filter(User.id == operator_id).first()
+        _audit(db, operator_id, operator_user.name if operator_user else operator_id, '释放任务', task_id, f'释放审核员 {prev_reviewer}，原因: {reason or "无"}')
         db.commit()
         return {'success': True, 'taskId': task_id, 'operation': 'release'}
 

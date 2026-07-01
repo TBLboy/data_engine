@@ -3,7 +3,7 @@
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-from app.models import Batch, BatchDecisionLog, Episode, GeneralConfig
+from app.models import Batch, BatchDecisionLog, Episode, GeneralConfig, AuditEvent
 
 
 def adjudicate_batch(db: Session, batch_id: str, actor: str = 'system') -> BatchDecisionLog | None:
@@ -80,6 +80,19 @@ def adjudicate_batch(db: Session, batch_id: str, actor: str = 'system') -> Batch
     )
     db.add(log)
     db.flush()
+
+    ts = int(datetime.utcnow().timestamp())
+    db.add(AuditEvent(
+        id=f'audit_batch_{batch_id}_{ts}',
+        operator=actor,
+        action='批次判定',
+        target=batch_id,
+        detail=f'{decision} failure_rate={failure_rate:.4f} fail={manual_fail_count}/{sampled_count}',
+        time=datetime.utcnow(),
+        event_type='business_action',
+        severity='info',
+        operator_id=actor,
+    ))
 
     for episode in episodes:
         if decision == 'REJECTED':

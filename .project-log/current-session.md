@@ -2,6 +2,9 @@
 
 ## Last Updated
 
+- 2026-06-30 (DI-01 改用深度相机真实时间戳替代合成轴：cam_top_depth.timestamps.npy → depth_dt → 仅评分不输出timeline段)
+- 2026-06-30 (批量修复：导出UTF-8编码/QC筛选字段/批次checkbox选择/checkbox边框)
+- 2026-06-30 (每日凌晨自动扫描入库：APScheduler cron 00:00 UTC 触发 run_minio_scan)
 - 2026-06-30 (修复派发重生成数量不稳定 + 旧 QC 痕迹残留：重生成前彻底归零所有 episode QC 状态，3 次 15% 抽样稳定在 10 条)
 - 2026-06-30 (修复 manual_qc_status 历史未回填 + 批次判定抽检过滤 + 数据库页面显示：3 个批次成功重判、数据库页面补回 QC 结果列、PENDING_NOT_ADJUDICATED 映射)
 - 2026-06-29 (RDDQF v1.2 平台增强完整落地：导出字段扩展14项、导出历史、管理员任务池管理撤回/释放、任务操作日志、审核员卡片管理任务抽屉)

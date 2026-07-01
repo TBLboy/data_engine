@@ -190,6 +190,7 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='账号已停用')
     if user.session_token and user.session_token != token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Session expired — account logged in from another device')
+    request.state.user = user
     return user
 
 
@@ -610,6 +611,19 @@ def login(payload: AuthLoginRequest, response: Response, db: Session = Depends(g
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='账号已停用')
 
+    audit = AuditEvent(
+        id=_audit_event_id('login', user.id),
+        operator=user.username,
+        action='登录',
+        target=user.id,
+        detail=f'用户 {user.username} 登录成功',
+        time=_utcnow(),
+        event_type='auth_event',
+        severity='info',
+        operator_id=user.id,
+    )
+    db.add(audit)
+
     set_session_cookie(response, user)
     db.commit()
     session_payload = {'user': serialize_user(user)}
@@ -620,7 +634,7 @@ def login(payload: AuthLoginRequest, response: Response, db: Session = Depends(g
 
 
 @router.post('/auth/logout', status_code=status.HTTP_204_NO_CONTENT)
-def logout(response: Response):
+def logout(response: Response, current_user: User = Depends(get_current_user)):
     clear_session_cookie(response)
 
 

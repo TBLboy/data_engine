@@ -1,3 +1,99 @@
+## 2026-07-01 (三层日志系统落地：DB审计 + 文件日志 + Docker轮转)
+
+- Type: feature (new)
+- Status: backend compile + migration passed, Docker rebuilt + deployed, all 3 tiers verified
+- Importance: high
+- Reusable: yes (middleware pattern + logging config)
+- Objective: 建立专业项目级日志系统，覆盖远程网页操作和本机部署操作
+- Work completed:
+  - **Tier 1 — 数据库审计日志**:
+    - Migration `20260701_0015` 增强 `audit_events` 表：新增 event_type/severity/operator_id/ip_address/user_agent/duration_ms 字段
+    - 新建 `app/middleware/audit_middleware.py`：BaseHTTPMiddleware 自动捕获所有 API 请求（method/path/status/duration/user/ip/ua），排除 /api/health 和 /api/auth/session
+    - `get_current_user` 增加 `request.state.user = user` 使中间件能识别已认证用户
+    - 补齐缺失审计点：auth login/logout、ReviewerTaskManager (revoke/reassign/release)、batch_adjudication (批次判定)、dataset_service (导出)
+  - **Tier 2 — 应用文件日志**:
+    - 新建 `app/core/logging_config.py`：TimedRotatingFileHandler 按天轮转，保留 30 天，写入 `/app/logs/app.log`
+    - 纯文本格式：`2026-07-01 00:00:01 [INFO] app.services.scanner: 消息`
+    - `scan_scheduler.py` 和 `scan_queue.py` 的 `print()` 替换为 `logger.info()`
+  - **Tier 3 — Docker 日志轮转**:
+    - docker-compose.yml 添加 `logging: driver: json-file, max-size: 50m, max-file: 5`
+  - Schema/Type 更新：serialize_audit、AuditRecordSchema、AuditRecord TS 类型全部新增对应字段
+- Verification:
+  - health endpoint 正确跳过（不产生 audit 记录）
+  - login 产生 api_request + auth_event 两条记录
+  - 已认证 dashboard 请求正确识别 operator=admin，带 ip_address 和 duration_ms
+  - `/app/logs/app.log` 正常产出，scheduler 消息已写入
+  - Docker inspect 确认 `max-size=50m max-file=5`
+- Files changed:
+  - `backend/migrations/versions/20260701_0015_audit_enhance.py` — 新建
+  - `backend/app/models/audit.py` — 新增 6 字段
+  - `backend/app/middleware/__init__.py` + `audit_middleware.py` — 新建
+  - `backend/app/core/logging_config.py` — 新建
+  - `backend/app/main.py` — 注册中间件 + logging 初始化
+  - `backend/app/api/routes/qc.py` — request.state.user + login 审计
+  - `backend/app/services/scan_scheduler.py` — print → logger
+  - `backend/app/services/scan_queue.py` — print → logger
+  - `backend/app/services/reviewer_task_manager.py` — +audit (revoke/reassign/release)
+  - `backend/app/services/batch_adjudication.py` — +audit (批次判定)
+  - `backend/app/services/dataset_service.py` — +audit (导出)
+  - `backend/app/services/payloads.py` — serialize_audit 新增字段
+  - `backend/app/schemas/qc.py` — AuditRecordSchema 新增字段
+  - `frontend/src/types/qc.ts` — AuditRecord 新增字段
+  - `software/deploy/docker-compose.yml` — logging 轮转配置
+- Commit: pending
+
+## 2026-06-30 (每日凌晨自动扫描入库 — APScheduler cron)
+
+- Type: feature (new)
+- Status: backend compile passed, Docker rebuilt + deployed, scheduler verified via logs
+- Importance: medium
+- Reusable: yes (APScheduler + FastAPI lifecycle pattern)
+- Objective: 每天凌晨 00:00 UTC 自动触发 MinIO 扫描入库，无需人工点击
+- Work completed:
+  - `requirements.txt` 新增 `apscheduler` 依赖
+  - 新建 `backend/app/services/scan_scheduler.py`：BackgroundScheduler + CronTrigger，每日 00:00 UTC 调用 `run_minio_scan`，查找 active admin 作为 operator，扫描默认 `yaocao` bucket
+  - `backend/app/core/config.py` 新增 `scan_cron_hour`/`scan_cron_minute` 环境变量（默认 0/0）
+  - `backend/app/main.py` 注册 `@app.on_event('startup')` 启动 scheduler、`@app.on_event('shutdown')` 停止 scheduler
+  - 日志确认：`[scan_cron] scheduler started, daily at 00:00 (UTC)`
+- Files changed:
+  - `backend/requirements.txt` — +apscheduler
+  - `backend/app/services/scan_scheduler.py` — 新建
+  - `backend/app/core/config.py` — +2 配置项
+  - `backend/app/main.py` — startup/shutdown events
+- Commit: 5404539 → main
+
+## 2026-06-30 (DI-01 改用深度相机真实时间戳 + 批量修复)
+
+- Type: feature + bugfix
+- Status: backend compile passed, Docker deployed, functional test passed
+- Importance: high
+- Reusable: no
+- Objective: DI-01 从检测合成固定fps时间轴改为检测顶部深度相机真实时间戳；修复导出编码/QC筛选/批次选择/checkbox边框等问题
+- Work completed:
+  - **DI-01 深度相机时间戳**：
+    - `feature_extractor.py`：`L3V2Features` 新增 `depth_dt` 字段，`FeatureExtractor` 接受可选 `depth_timestamps` 参数计算真实 dt
+    - `metric_engine.py`：`_timestamp_regularity()` 检测 `depth_dt`，有则走 `_timestamp_regularity_depth()`（仅评分不输出 timeline 段），无则退回合成轴逻辑
+    - `engine.py`：`L3V2Engine.__init__` 新增 `depth_timestamps` 参数，透传至 FeatureExtractor
+    - `payloads.py`：`_build_real_manual_qc_context` 在 object_rows 中按 `timestamp_npy` + key 含 `cam_top_depth` 找到深度相机时间戳 npy，`_read_minio_npy` 读取后传入引擎
+  - **批量修复**：
+    - 导出：Content-Disposition 使用 RFC 5987 `filename*=UTF-8''...` 修复中文 task_type 报错
+    - 数据库：QC 结果筛选改用 `final_dataset_status`，下拉标签中文化
+    - 训练数据集：批次汇总表增加 checkbox 批量选择，导出传 batchIds
+    - CSS：修复 qc-table checkbox 边框不可见（白色→#909399）
+- Verification: 合成数据两路径测试通过（depth 路径正确抑制 timeline 段）；容器内确认 depth_dt/depth_timestamps 参数存在
+- Files changed:
+  - `backend/app/services/l3_v2/feature_extractor.py`
+  - `backend/app/services/l3_v2/metric_engine.py`
+  - `backend/app/services/l3_v2/engine.py`
+  - `backend/app/services/payloads.py`
+  - `backend/app/api/routes/qc.py`
+  - `backend/app/services/dataset_service.py`
+  - `frontend/src/api/client.ts`
+  - `frontend/src/pages/database-view.vue`
+  - `frontend/src/pages/dataset-management.vue`
+  - `frontend/src/styles/components.css`
+- Commit: 51ee775 → main
+
 ## 2026-06-30 (修复派发重生成数量不稳定 + 旧 QC 痕迹残留)
 
 - Type: bugfix (high)

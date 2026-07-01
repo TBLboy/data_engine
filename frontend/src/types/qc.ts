@@ -211,6 +211,12 @@ export interface AuditRecord {
   target: string
   time: string
   detail: string
+  eventType?: string
+  severity?: string
+  operatorId?: string
+  ipAddress?: string
+  userAgent?: string
+  durationMs?: number
 }
 
 export interface ReasonStat {

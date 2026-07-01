@@ -1,3 +1,4 @@
+import logging
 import threading
 from datetime import datetime
 
@@ -5,9 +6,11 @@ from app.core.db import SessionLocal
 from app.models import ScanJob, User
 from app.services.scanner import resume_minio_scan
 
+logger = logging.getLogger(__name__)
+
 
 def enqueue_scan_job(scan_job_id: str, operator_id: str) -> None:
-    print(f'[scan_queue] enqueue {scan_job_id} operator={operator_id}', flush=True)
+    logger.info('[scan_queue] enqueue %s operator=%s', scan_job_id, operator_id)
     worker = threading.Thread(
         target=process_scan_job,
         args=(scan_job_id, operator_id),
@@ -15,18 +18,18 @@ def enqueue_scan_job(scan_job_id: str, operator_id: str) -> None:
         daemon=True,
     )
     worker.start()
-    print(f'[scan_queue] started thread {worker.name}', flush=True)
+    logger.info('[scan_queue] started thread %s', worker.name)
 
 
 def process_scan_job(scan_job_id: str, operator_id: str) -> None:
-    print(f'[scan_queue] process start {scan_job_id}', flush=True)
+    logger.info('[scan_queue] process start %s', scan_job_id)
     db = SessionLocal()
     try:
         operator = db.query(User).filter(User.id == operator_id).one()
         resume_minio_scan(db, scan_job_id=scan_job_id, operator=operator)
-        print(f'[scan_queue] process done {scan_job_id}', flush=True)
+        logger.info('[scan_queue] process done %s', scan_job_id)
     except Exception as exc:
-        print(f'[scan_queue] process failed {scan_job_id}: {exc}', flush=True)
+        logger.exception('[scan_queue] process failed %s: %s', scan_job_id, exc)
         db.rollback()
         failed_job = db.query(ScanJob).filter(ScanJob.id == scan_job_id).first()
         if failed_job:

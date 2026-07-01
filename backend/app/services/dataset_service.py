@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.models import Batch, DatasetExportJob, Episode, TaskType
+from app.models import Batch, DatasetExportJob, Episode, TaskType, AuditEvent
 
 
 class DatasetSummaryService:
@@ -138,6 +138,20 @@ class DatasetExportService:
             created_by=created_by or 'system',
         )
         db.add(job)
+
+        ts = int(datetime.now(timezone.utc).timestamp())
+        db.add(AuditEvent(
+            id=f'audit_export_{task_type_id}_{ts}',
+            operator=created_by or 'system',
+            action='导出数据集',
+            target=task_type_id,
+            detail=f'{fmt.upper()} 导出 {episode_count} 条 episode',
+            time=datetime.now(timezone.utc),
+            event_type='business_action',
+            severity='info',
+            operator_id=created_by or None,
+        ))
+
         db.commit()
         db.refresh(job)
         return job
