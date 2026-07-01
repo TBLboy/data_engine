@@ -10,6 +10,7 @@ import {
 } from '../api/client'
 import { useSessionStore } from '../stores/session'
 import type { HistoryReportPayload } from '../types/qc'
+import { reasonLabel } from '../utils/reasonLabels'
 
 const session = useSessionStore()
 const payload = ref<HistoryPayload | null>(null)
@@ -242,7 +243,9 @@ const reasonTagType = (category: string) => {
           <el-card shadow="never" class="qc-card" v-loading="reportLoading">
             <template #header>失败原因分布</template>
             <el-table :data="topReasons" stripe class="qc-table" height="300">
-              <el-table-column prop="reason" label="原因码" min-width="160" />
+              <el-table-column label="原因码" min-width="160">
+                <template #default="{ row }">{{ reasonLabel(row.reason) }}</template>
+              </el-table-column>
               <el-table-column label="层级" width="110">
                 <template #default="{ row }">
                   <el-tag :type="reasonTagType(row.category)">{{ row.category }}</el-tag>
@@ -333,7 +336,9 @@ const reasonTagType = (category: string) => {
               <el-table-column prop="reviewer" label="审核人" width="120" />
               <el-table-column prop="qcStatus" label="状态" width="110" />
               <el-table-column prop="qcResult" label="结果" width="100" />
-              <el-table-column prop="reasonCode" label="原因码" min-width="160" />
+              <el-table-column label="原因码" min-width="160">
+                <template #default="{ row }">{{ reasonLabel(row.reasonCode) }}</template>
+              </el-table-column>
               <el-table-column prop="updatedAt" label="更新时间" min-width="160" />
             </el-table>
           </el-card>

@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
 import { fetchDatabase, scanDatabase, type DatabasePayload } from '../api/client'
 import { useSessionStore } from '../stores/session'
+import { reasonLabel } from '../utils/reasonLabels'
 
 const session = useSessionStore()
 const payload = ref<DatabasePayload | null>(null)
@@ -216,7 +217,9 @@ const ingestStatusType = (statusValue: string) => {
                 <span v-else class="text-muted">-</span>
               </template>
             </el-table-column>
-            <el-table-column prop="reasonCode" label="原因码" min-width="160" />
+            <el-table-column label="原因码" min-width="160">
+              <template #default="{ row }">{{ reasonLabel(row.reasonCode) }}</template>
+            </el-table-column>
             <el-table-column prop="reviewer" label="审核员" width="120" />
             <el-table-column prop="updatedAt" label="更新时间" min-width="160" />
             <el-table-column label="操作" width="240" fixed="right">

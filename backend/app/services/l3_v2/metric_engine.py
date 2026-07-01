@@ -78,7 +78,7 @@ class MetricEngine:
                 'startSec': 0.0,
                 'endSec': end,
                 'level': 'good',
-                'label': '全段无显著 L3 v2 异常',
+                'label': '全段无显著异常',
                 'sourceMetricId': 'l3v2.overall',
                 'sourceEvidenceId': 'overall.normal',
                 'qualityDimension': 'overall',
@@ -101,7 +101,7 @@ class MetricEngine:
         timeline.extend(mask_to_segments(
             joint_jerk > spike_threshold,
             self.f.t_rel,
-            label='轨迹突变/不平滑',
+            label='轨迹突变',
             level='warn' if score >= 5 else 'bad',
             source_metric_id='MQ-01',
             source_evidence_id='EV-MOTION-SMOOTHNESS',
@@ -136,7 +136,7 @@ class MetricEngine:
         timeline.extend(mask_to_segments(
             cont > threshold,
             self.f.t_rel,
-            label='动作指令突变 / Action 不连续',
+            label='动作指令突变',
             level='warn' if score >= 5 else 'bad',
             source_metric_id='MQ-02',
             source_evidence_id='EV-MOTION-CONTINUITY',
@@ -178,7 +178,7 @@ class MetricEngine:
         timeline.extend(mask_to_segments(
             mask_osc,
             self.f.t_rel,
-            label='Motion Oscillation',
+            label='运动震荡',
             level='warn' if r_osc < 0.15 else 'bad',
             source_metric_id='MQ-03',
             source_evidence_id='EV-MOTION-STABILITY',
@@ -190,7 +190,7 @@ class MetricEngine:
         timeline.extend(mask_to_segments(
             mask_chat,
             self.f.t_rel,
-            label='Hand Chatter',
+            label='手指颤振',
             level='warn' if r_chat < 0.15 else 'bad',
             source_metric_id='MQ-03',
             source_evidence_id='EV-MOTION-STABILITY',
@@ -237,7 +237,7 @@ class MetricEngine:
         timeline.extend(mask_to_segments(
             low_eff_mask,
             self.f.t_rel,
-            label='Low Effective Action',
+            label='低效动作',
             level='warn',
             source_metric_id='LQ-01',
             source_evidence_id='EV-LEARN-ACTION-EFFECTIVENESS',
@@ -336,7 +336,7 @@ class MetricEngine:
 
         timeline.extend(mask_to_segments(
             low_value, self.f.t_rel,
-            label='Low-value Segment / 低学习价值片段',
+            label='低学习价值片段',
             level='warn' if score >= 5 else 'bad',
             source_metric_id='LQ-03',
             source_evidence_id='EV-LEARN-LOW-VALUE-SEGMENT',
@@ -393,13 +393,13 @@ class MetricEngine:
         mask_gap = dt > gap_mult * dt_med
         timeline.extend(mask_to_segments(
             mask_invalid, self.f.t_rel,
-            label='Invalid Timestamp / 非单调时间戳',
+            label='非单调时间戳',
             level='bad', source_metric_id='DI-01', source_evidence_id='EV-DATA-TIMESTAMP',
             quality_dimension='data_integrity', min_dur=0.0, gap_merge=0.1, confidence=0.9,
         ))
         timeline.extend(mask_to_segments(
             mask_gap, self.f.t_rel,
-            label='Timestamp Gap / 疑似丢帧',
+            label='疑似丢帧',
             level='warn', source_metric_id='DI-01', source_evidence_id='EV-DATA-TIMESTAMP',
             quality_dimension='data_integrity', min_dur=0.0, gap_merge=0.3, confidence=0.85,
         ))
@@ -496,7 +496,7 @@ class MetricEngine:
 
         timeline.extend(mask_to_segments(
             diff > tau_warn, self.f.t_rel,
-            label='Sensor Sync Warning / 同步偏差',
+            label='同步偏差',
             level='warn', source_metric_id='DI-02', source_evidence_id='EV-DATA-SYNC',
             quality_dimension='data_integrity', min_dur=0.5, gap_merge=0.3,
             raw_values=diff, threshold=tau_warn, confidence=0.9,
@@ -504,7 +504,7 @@ class MetricEngine:
         severe = (~valid) | (diff > tau_bad)
         timeline.extend(mask_to_segments(
             severe, self.f.t_rel,
-            label='Severe Desync / 严重同步错位',
+            label='严重同步错位',
             level='bad', source_metric_id='DI-02', source_evidence_id='EV-DATA-SYNC',
             quality_dimension='data_integrity', min_dur=0.5, gap_merge=0.3,
             raw_values=diff, threshold=tau_bad, confidence=0.9,
@@ -550,14 +550,14 @@ class MetricEngine:
 
         timeline.extend(mask_to_segments(
             err_aligned > tau_warn, self.f.t_rel[best_k:] if best_k > 0 else self.f.t_rel,
-            label='Execution Tracking Error / 执行跟踪偏差',
+            label='执行跟踪偏差',
             level='warn', source_metric_id='DX-01', source_evidence_id='EV-DIAG-EXECUTION-TRACKING',
             quality_dimension='execution_diagnostics', min_dur=0.5, gap_merge=0.3,
             raw_values=err_aligned, threshold=tau_warn, confidence=0.8,
         ))
         timeline.extend(mask_to_segments(
             err_aligned > tau_bad, self.f.t_rel[best_k:] if best_k > 0 else self.f.t_rel,
-            label='Severe Tracking Error / 严重跟踪偏差',
+            label='严重跟踪偏差',
             level='bad', source_metric_id='DX-01', source_evidence_id='EV-DIAG-EXECUTION-TRACKING',
             quality_dimension='execution_diagnostics', min_dur=0.5, gap_merge=0.3,
             raw_values=err_aligned, threshold=tau_bad, confidence=0.8,
