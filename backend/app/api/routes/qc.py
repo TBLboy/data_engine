@@ -262,7 +262,10 @@ def list_task_types(
     current_user: User = Depends(get_current_user),
 ):
     require_roles(current_user, 'admin', 'qc_manager')
-    return [serialize_task_type(item) for item in db.query(TaskType).order_by(TaskType.id.asc()).all()]
+    task_types = db.query(TaskType).order_by(TaskType.id.asc()).all()
+    _refresh_task_type_stats(db, *[t.id for t in task_types])
+    db.commit()
+    return [serialize_task_type(item) for item in task_types]
 
 
 @router.post('/task-types', response_model=TaskTypeSchema, status_code=status.HTTP_201_CREATED)
