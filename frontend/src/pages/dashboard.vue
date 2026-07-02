@@ -280,7 +280,7 @@ async function doReleaseTask(taskId: string) {
             <template #header>
               <div class="card-header"><span>批次派发总览</span><router-link to="/database"><el-button plain>查看数据总库</el-button></router-link></div>
             </template>
-            <el-table class="qc-table dispatch-overview-table" :data="paginatedBatches" stripe row-key="id" highlight-current-row :height="740" :current-row-key="selectedBatchId" @row-click="(row: { id: string }) => { selectedBatchId = row.id; onBatchChange() }">
+            <el-table class="qc-table dispatch-overview-table" :data="paginatedBatches" stripe row-key="id" highlight-current-row :height="1040" :current-row-key="selectedBatchId" @row-click="(row: { id: string }) => { selectedBatchId = row.id; onBatchChange() }">
               <el-table-column prop="name" label="批次" min-width="190" />
               <el-table-column prop="episodeCount" label="总量" width="70" />
               <el-table-column label="派发模式" width="110">
