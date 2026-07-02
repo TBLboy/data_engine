@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
 import { assignBatchTasks, fetchDashboard, submitDispatchPlan, fetchReviewerTasks, revokeTask, releaseTask, type DashboardPayload } from '../api/client'
@@ -18,6 +18,9 @@ const dispatchForm = reactive({
   samplingRatio: 25,
   note: ''
 })
+
+const batchPage = ref(1)
+const batchPageSize = 10
 
 const assignMode = ref<'even' | 'custom_counts'>('even')
 const selectedReviewerIds = ref<string[]>([])
@@ -53,6 +56,11 @@ const reasonStats = computed(() => payload.value?.reasonStats ?? [])
 const reviewerWorkloads = computed(() => payload.value?.reviewerWorkloads ?? [])
 const reviewerAccounts = computed(() => payload.value?.reviewerAccounts ?? [])
 const currentBatches = computed(() => batches.value.filter((batch) => batch.taskTypeId === selectedTaskType.value))
+const paginatedBatches = computed(() => {
+  const start = (batchPage.value - 1) * batchPageSize
+  return currentBatches.value.slice(start, start + batchPageSize)
+})
+watch(selectedTaskType, () => { batchPage.value = 1 })
 const batchIdsInTaskType = computed(() => new Set(currentBatches.value.map((batch) => batch.id)))
 const filteredDispatchPreviews = computed(() => dispatchPreviews.value.filter((preview) => batchIdsInTaskType.value.has(preview.batchId)))
 const filteredQcTasks = computed(() => qcTasks.value.filter((task) => batchIdsInTaskType.value.has(task.batchId)))
@@ -272,7 +280,7 @@ async function doReleaseTask(taskId: string) {
             <template #header>
               <div class="card-header"><span>批次派发总览</span><router-link to="/database"><el-button plain>查看数据总库</el-button></router-link></div>
             </template>
-            <el-table class="qc-table dispatch-overview-table" :data="currentBatches" stripe row-key="id" highlight-current-row :current-row-key="selectedBatchId" @row-click="(row: { id: string }) => { selectedBatchId = row.id; onBatchChange() }">
+            <el-table class="qc-table dispatch-overview-table" :data="paginatedBatches" stripe row-key="id" highlight-current-row :height="740" :current-row-key="selectedBatchId" @row-click="(row: { id: string }) => { selectedBatchId = row.id; onBatchChange() }">
               <el-table-column prop="name" label="批次" min-width="190" />
               <el-table-column prop="episodeCount" label="总量" width="70" />
               <el-table-column label="派发模式" width="110">
@@ -301,6 +309,16 @@ async function doReleaseTask(taskId: string) {
               </el-table-column>
               <el-table-column prop="topReason" label="Top失败原因" min-width="150" />
             </el-table>
+            <div style="display:flex; justify-content:center; margin-top:12px; height:32px">
+              <el-pagination
+                v-if="currentBatches.length > batchPageSize"
+                v-model:current-page="batchPage"
+                :page-size="batchPageSize"
+                :total="currentBatches.length"
+                layout="prev, pager, next"
+                size="small"
+              />
+            </div>
           </el-card>
         </el-col>
 
