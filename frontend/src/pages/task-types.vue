@@ -313,7 +313,7 @@ const detachBatch = async (batch: BatchSummary) => {
     <el-dialog v-model="createDialogVisible" title="新建任务类型" width="460px" destroy-on-close>
       <el-form label-position="top">
         <el-form-item label="名称">
-          <el-input v-model="createForm.name" />
+          <el-input v-model="createForm.name" maxlength="18" show-word-limit />
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="createForm.description" type="textarea" :rows="3" />
@@ -330,7 +330,7 @@ const detachBatch = async (batch: BatchSummary) => {
     <el-dialog v-model="editDialogVisible" title="编辑任务类型" width="460px" destroy-on-close>
       <el-form label-position="top">
         <el-form-item label="名称">
-          <el-input v-model="editForm.name" />
+          <el-input v-model="editForm.name" maxlength="18" show-word-limit />
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="editForm.description" type="textarea" :rows="3" />
@@ -389,6 +389,7 @@ const detachBatch = async (batch: BatchSummary) => {
 }
 
 .task-type-item {
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -399,6 +400,8 @@ const detachBatch = async (batch: BatchSummary) => {
 }
 
 .task-type-copy {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -411,5 +414,14 @@ const detachBatch = async (batch: BatchSummary) => {
 
 :deep(.el-table-column--selection .el-checkbox__inner) {
   border-color: #111827;
+}
+
+.task-type-item :deep(.el-radio) {
+  flex: 1;
+  min-width: 0;
+}
+
+.task-type-item :deep(.el-radio__label) {
+  width: 100%;
 }
 </style>

@@ -440,7 +440,7 @@ const submit = async () => {
           </div>
           <div class="lock-panel">
             <span>审核锁状态</span>
-            <strong>{{ reviewLock?.ownerName || (episode?.reviewer && episode.reviewer !== '-' ? episode.reviewer : '待认领') }}</strong>
+            <strong>{{ reviewLock?.ownerName || (episode?.reviewer && episode.reviewer !== '-' ? episode.reviewer : '-') }}</strong>
             <el-tag :type="lockTagType" effect="light">{{ lockLabel }}</el-tag>
             <small v-if="reviewLock?.expiresAt">锁到期时间 {{ reviewLock.expiresAt }}</small>
             <small v-else>认领后方可提交质检结果</small>
@@ -752,8 +752,20 @@ const submit = async () => {
 }
 
 .lock-panel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 16px;
+  background: transparent;
   position: relative;
   z-index: 2;
+}
+
+.lock-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .segment-chip.clickable {

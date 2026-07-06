@@ -40,9 +40,9 @@ def start_scheduler() -> None:
     hour = settings.scan_cron_hour
     minute = settings.scan_cron_minute
     _scheduler = BackgroundScheduler(daemon=True)
-    _scheduler.add_job(_scan_job, CronTrigger(hour=hour, minute=minute), id='daily_scan')
+    _scheduler.add_job(_scan_job, CronTrigger(hour=hour, minute=minute, timezone='Asia/Shanghai'), id='daily_scan')
     _scheduler.start()
-    logger.info('[scan_cron] scheduler started, daily at %02d:%02d (UTC)', hour, minute)
+    logger.info('[scan_cron] scheduler started, daily at %02d:%02d (Asia/Shanghai)', hour, minute)
 
 
 def stop_scheduler() -> None:

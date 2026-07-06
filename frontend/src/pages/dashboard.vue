@@ -270,7 +270,7 @@ async function doReleaseTask(taskId: string) {
       <el-row :gutter="18" v-loading="loading">
         <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-blue"><span>候选总量</span><strong>{{ totalEpisodes }}</strong><small>待抽检 / 已入库</small></el-card></el-col>
         <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-orange"><span>已抽中样本</span><strong>{{ totalSampled }}</strong><small>抽检覆盖率 {{ avgCoverage }}%</small></el-card></el-col>
-        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-green"><span>样本完成率</span><strong>{{ avgPassRate }}%</strong><small>基于已完成样本 pass rate</small></el-card></el-col>
+        <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-green"><span>抽检通过率</span><strong>{{ avgPassRate }}%</strong><small>已完成抽检中判 pass 的比例</small></el-card></el-col>
         <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-purple"><span>待处理任务</span><strong>{{ currentTodoCount }}</strong><small>高优先级 {{ highPriorityCount }} 条</small></el-card></el-col>
       </el-row>
 

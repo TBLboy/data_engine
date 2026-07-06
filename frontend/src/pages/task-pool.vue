@@ -154,7 +154,6 @@ const lockLabel = (task: TaskPoolPayload['qcTasks'][number]) => {
               <div style="display:flex; flex-direction:column; gap:4px; line-height:1.2;">
                 <el-tag :type="lockTagType(row)" size="small">{{ lockLabel(row) }}</el-tag>
                 <span v-if="row.reviewLock.expiresAt" style="font-size:12px; color:#909399;">到期 {{ row.reviewLock.expiresAt }}</span>
-                <span v-else style="font-size:12px; color:#909399;">未认领</span>
               </div>
             </template>
           </el-table-column>

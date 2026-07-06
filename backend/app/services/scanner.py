@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import time
 from collections import defaultdict
@@ -457,6 +458,7 @@ def _execute_minio_scan(
                 normalized_roles: list[str] = []
                 manifest_hash = ''
                 metadata_hash = ''
+                manifest_key = ''
 
                 inventory = db.query(EpisodeInventory).filter(EpisodeInventory.id == episode_inventory_id).first()
                 previous_state = inventory.state if inventory else None
@@ -500,6 +502,7 @@ def _execute_minio_scan(
                     object_role = _classify_object_role(object_scope, relative_key)
                     normalized_roles.append(object_role)
                     if object_role == 'manifest' and not manifest_hash:
+                        manifest_key = object_key
                         manifest_hash = str(object_row['content_hash'])
                     if object_role == 'metadata' and not metadata_hash:
                         metadata_hash = str(object_row['content_hash'])
@@ -528,6 +531,24 @@ def _execute_minio_scan(
                         episode_object.last_modified = object_row['last_modified']
                         episode_object.last_seen_scan_id = scan_job.id
 
+                duration_sec = 0.0
+                frame_count = 0
+                if manifest_key:
+                    try:
+                        resp = _retry_minio(
+                            lambda: get_minio_service().get_object(normalized_bucket, manifest_key)
+                        )
+                        manifest = json.loads(resp.read().decode('utf-8'))
+                        resp.close()
+                        resp.release_conn()
+                        duration_sec = float(manifest.get('duration', 0.0))
+                        frame_count = int(manifest.get('frame_count', 0))
+                    except Exception:
+                        pass
+
+                inventory.duration_sec = duration_sec
+                inventory.frame_count = frame_count
+
                 inventory.manifest_hash = manifest_hash
                 inventory.metadata_hash = metadata_hash
                 inventory.episode_id_from_manifest = episode_name
@@ -548,8 +569,8 @@ def _execute_minio_scan(
                         id=episode_id,
                         batch_id=batch.id,
                         task_name=task_type.name,
-                        duration_sec=0.0,
-                        frame_count=0,
+                        duration_sec=duration_sec,
+                        frame_count=frame_count,
                         qc_status='new',
                         qc_result='pending',
                         reviewer='-',
@@ -563,6 +584,8 @@ def _execute_minio_scan(
                     episode.batch_id = batch.id
                     episode.task_name = task_type.name
                     episode.updated_at = now
+                    episode.duration_sec = duration_sec
+                    episode.frame_count = frame_count
                 inventory.ingested_episode_id = episode.id
 
                 if ep_counter % 50 == 0 and total_eps > 0:
