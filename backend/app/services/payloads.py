@@ -11,7 +11,7 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import get_settings
-from app.models import AuditEvent, Batch, Episode, EpisodeInventory, EpisodeObject, ListRecord, QcReviewRevision, QcTask, ScanJob, TaskType, User
+from app.models import AuditEvent, Batch, BugReport, Episode, EpisodeInventory, EpisodeObject, ListRecord, QcReviewRevision, QcTask, ScanJob, TaskType, User
 from app.services.minio_client import get_minio_service
 
 UNCLASSIFIED_TASK_TYPE_ID = 'task_type:unclassified'
@@ -57,6 +57,7 @@ def serialize_task_type(task_type: TaskType) -> dict:
         'id': task_type.id,
         'name': task_type.name,
         'description': task_type.description,
+        'armMode': task_type.arm_mode,
         'isActive': bool(task_type.is_active),
         'totalBatches': task_type.total_batches,
         'totalEpisodes': task_type.total_episodes,
@@ -275,6 +276,30 @@ def serialize_task(task: QcTask, current_user: User | None = None) -> dict:
     }
 
 
+def serialize_bug_report(report: BugReport) -> dict:
+    import json as _json
+    filenames: list[str] = []
+    if report.image_filename:
+        try:
+            parsed = _json.loads(report.image_filename)
+            if isinstance(parsed, list):
+                filenames = parsed
+            else:
+                filenames = [str(parsed)]
+        except (ValueError, TypeError):
+            filenames = [report.image_filename]
+    return {
+        'id': report.id,
+        'description': report.description,
+        'status': report.status,
+        'imageUrls': [f'/api/bug-reports/{report.id}/image/{idx}' for idx in range(len(filenames))],
+        'reporterUserId': report.reporter_user_id,
+        'reporterName': report.reporter_name,
+        'createdAt': format_time(report.created_at),
+        'updatedAt': format_time(report.updated_at),
+    }
+
+
 def serialize_revision(revision: QcReviewRevision) -> dict:
     episode = revision.episode
     batch = episode.batch
@@ -349,19 +374,39 @@ def _media_preview_expiry(expires: timedelta) -> str:
     return (datetime.utcnow() + expires).replace(microsecond=0).isoformat() + 'Z'
 
 
-def _media_slot_and_label(object_key: str) -> tuple[str, str]:
-    normalized = object_key.lower()
-    if 'left' in normalized:
-        return 'left', 'Left Wrist'
-    if 'right' in normalized:
-        return 'right', 'Right Wrist'
+def _camera_slot_map_from_manifest(manifest: dict) -> dict[str, dict[str, object]]:
+    """Return {video_basename: {slot, label}} from manifest files.cameras."""
+    cameras = manifest.get('files', {}).get('cameras', {}) if isinstance(manifest.get('files'), dict) else {}
+    slot_labels = {
+        'cam_top': ('top', 'Top Camera'),
+        'cam_left_wrist': ('left', 'Left Wrist'),
+        'cam_right_wrist': ('right', 'Right Wrist'),
+    }
+    mapping: dict[str, dict[str, object]] = {}
+    for cam_key, info in cameras.items():
+        slot, label = slot_labels.get(cam_key, ('unknown', cam_key.replace('_', ' ').title()))
+        video_path = info.get('video', '') if isinstance(info, dict) else ''
+        basename = video_path.rsplit('/', 1)[-1] if video_path else ''
+        if basename:
+            mapping[basename] = {'slot': slot, 'label': label}
+    return mapping
+
+
+def _media_slot_and_label(object_key: str, cam_slot_map: dict[str, dict[str, object]] | None = None) -> tuple[str, str]:
+    basename = object_key.rsplit('/', 1)[-1]
+    if cam_slot_map and basename in cam_slot_map:
+        info = cam_slot_map[basename]
+        return str(info['slot']), str(info['label'])
     return 'top', 'Top Camera'
 
 
-def _media_variant_from_key(object_key: str) -> str:
-    normalized = object_key.lower()
+def _media_variant_from_key(object_key: str, cam_slot_map: dict[str, dict[str, object]] | None = None) -> str:
+    basename = object_key.rsplit('/', 1)[-1]
+    normalized = basename.lower()
     if 'depth' in normalized and 'colormap' in normalized:
         return 'depth_colormap'
+    if cam_slot_map and basename in cam_slot_map:
+        return 'rgb'
     return 'rgb'
 
 
@@ -376,6 +421,19 @@ def _manual_qc_media(db: Session, episode_id: str, current_user: User | None) ->
     refreshable = bool(review_lock and review_lock['isMine'])
     preview_ttl = timedelta(minutes=5)
 
+    # Build camera slot map from manifest (manifest-key based lookup)
+    cam_slot_map: dict[str, dict[str, object]] = {}
+    manifest_key = next((row.object_key for row in db.query(EpisodeObject).filter(
+        EpisodeObject.episode_inventory_id == inventory.id,
+        EpisodeObject.object_role == 'manifest',
+    ).limit(1)), None)
+    if manifest_key:
+        try:
+            manifest = _read_minio_json(bucket, manifest_key)
+            cam_slot_map = _camera_slot_map_from_manifest(manifest)
+        except Exception:
+            pass
+
     media_items = []
     object_rows = db.query(EpisodeObject).filter(
         EpisodeObject.episode_inventory_id == inventory.id,
@@ -383,9 +441,15 @@ def _manual_qc_media(db: Session, episode_id: str, current_user: User | None) ->
         EpisodeObject.object_key.like('%.mp4'),
     ).order_by(EpisodeObject.object_key.asc()).all()
 
+    # Dynamic sort order from camera enumeration
+    cam_order = [info['slot'] for info in cam_slot_map.values()]
+    if not cam_order:
+        cam_order = ['top', 'left', 'right']
+    slot_sort = {slot: (i + 1) * 10 for i, slot in enumerate(cam_order)}
+
     for item in object_rows:
-        slot, label = _media_slot_and_label(item.object_key)
-        variant = _media_variant_from_key(item.object_key)
+        slot, label = _media_slot_and_label(item.object_key, cam_slot_map)
+        variant = _media_variant_from_key(item.object_key, cam_slot_map)
         media_items.append({
             'objectId': str(item.id),
             'role': item.object_role,
@@ -397,7 +461,7 @@ def _manual_qc_media(db: Session, episode_id: str, current_user: User | None) ->
             'previewExpiresAt': _media_preview_expiry(preview_ttl),
             'refreshable': refreshable,
             'downloadable': True,
-            'sortOrder': {'top': 10, 'left': 20, 'right': 30}.get(slot, 100) + (1 if variant == 'depth_colormap' else 0),
+            'sortOrder': slot_sort.get(slot, 100) + (1 if variant == 'depth_colormap' else 0),
         })
 
     return sorted(media_items, key=lambda item: (item['sortOrder'], item['label'], item['variant']))
@@ -429,6 +493,11 @@ def _build_real_manual_qc_context(db: Session, episode_id: str) -> dict | None:
     if not inventory_row:
         return None
 
+    episode = db.query(Episode).options(joinedload(Episode.batch).joinedload(Batch.task_type)).filter(Episode.id == episode_id).first()
+    if not episode or not episode.batch or not episode.batch.task_type:
+        return None
+    arm_mode = episode.batch.task_type.arm_mode or 'both_arms'
+
     inventory, bucket = inventory_row
     object_rows = db.query(EpisodeObject).filter(
         EpisodeObject.episode_inventory_id == inventory.id,
@@ -441,24 +510,57 @@ def _build_real_manual_qc_context(db: Session, episode_id: str) -> dict | None:
     if not manifest_key or not metadata_key or not telemetry_key:
         return None
 
+    manifest = _read_minio_json(bucket, manifest_key)
+    metadata = _read_minio_json(bucket, metadata_key)
+
+    # Use manifest to find depth camera timestamp file (no substring guessing)
     depth_ts_key: str | None = None
-    for item in object_rows:
-        if item.object_role == 'timestamp_npy' and 'cam_top_depth' in item.object_key.lower():
-            depth_ts_key = item.object_key
-            break
+    cameras = manifest.get('files', {}).get('cameras', {})
+    top_cam = cameras.get('cam_top', {})
+    if isinstance(top_cam, dict):
+        depth_ts_path = top_cam.get('timestamps', '')
+        # Find matching EpisodeObject
+        for item in object_rows:
+            if item.object_key == depth_ts_path:
+                depth_ts_key = item.object_key
+                break
+    # Fallback: iterate object_rows for any depth timestamp
+    if not depth_ts_key:
+        for item in object_rows:
+            if item.object_role == 'timestamp_npy' and 'depth' in item.object_key.lower():
+                depth_ts_key = item.object_key
+                break
     depth_timestamps: npt.NDArray[np.float64] | None = None
     if depth_ts_key:
         depth_timestamps = _read_minio_npy(bucket, depth_ts_key)
 
-    manifest = _read_minio_json(bucket, manifest_key)
-    metadata = _read_minio_json(bucket, metadata_key)
+    # Extract DOF config from metadata
+    dof_config = None
+    try:
+        dev = (metadata.get('device') or metadata)
+        arm_joints = dev.get('arm', {}).get('joints', {})
+        hand_joints = dev.get('hand', {}).get('joints', {})
+        dof_config = {
+            'arm_left_dof': int(arm_joints.get('left_dof', 7)),
+            'arm_right_dof': int(arm_joints.get('right_dof', 7)),
+            'hand_left_dof': int(hand_joints.get('left_dof', 6)),
+            'hand_right_dof': int(hand_joints.get('right_dof', 6)),
+        }
+    except Exception:
+        pass
 
     with _read_minio_npz(bucket, telemetry_key) as telemetry:
         telemetry_dict = {key: telemetry[key] for key in telemetry.files}
         from app.services.l3_v2 import L3V2Engine
         from app.models.l3_v2_config import L3V2Config
         l3_params = L3V2Config.get_params(db)
-        l3_v2 = L3V2Engine(telemetry_dict, l3_params, depth_timestamps=depth_timestamps).compute()
+        l3_v2 = L3V2Engine(
+            telemetry_dict,
+            l3_params,
+            depth_timestamps=depth_timestamps,
+            dof_config=dof_config,
+            arm_mode=arm_mode,
+        ).compute()
 
     return {
         'durationSec': float(manifest.get('duration', 0.0)),
@@ -953,7 +1055,7 @@ def manual_qc_context_payload(db: Session, episode_id: str, current_user: User |
     return {
         'episode': {
             **serialize_episode(episode),
-            'fps': 30.0,
+            'fps': episode.frame_count / episode.duration_sec if (episode.frame_count and episode.duration_sec) else 0.0,
         },
         'l3V2': None,
         'revisions': [serialize_revision(item) for item in revisions],

@@ -8,6 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 BASE_DIR = Path(__file__).resolve().parents[2]
 PROJECT_ROOT = BASE_DIR.parents[1] if len(BASE_DIR.parents) > 1 else BASE_DIR
 DEFAULT_SQLITE_PATH = BASE_DIR / 'data' / 'robot_qc.db'
+BUG_REPORT_UPLOAD_DIR = BASE_DIR / 'data' / 'bug_reports'
 DEFAULT_SECRET_KEY = 'robot-qc-dev-secret-change-in-prod'
 
 

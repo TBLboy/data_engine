@@ -18,13 +18,15 @@ class L3V2Engine:
     without changing the computation contract.
     """
 
-    def __init__(self, telemetry: dict[str, Any], params: dict[str, Any] | None = None, *, depth_timestamps: np.ndarray | None = None):
+    def __init__(self, telemetry: dict[str, Any], params: dict[str, Any] | None = None, *, depth_timestamps: np.ndarray | None = None, dof_config: dict[str, int] | None = None, arm_mode: str = 'both_arms'):
         self.telemetry = telemetry
         self.params = params or {}
         self.depth_timestamps = depth_timestamps
+        self.dof_config = dof_config
+        self.arm_mode = arm_mode
 
     def compute(self) -> dict:
-        parsed = TelemetryParser(self.telemetry).parse()
+        parsed = TelemetryParser(self.telemetry).parse(dof_config=self.dof_config, arm_mode=self.arm_mode)
         features = FeatureExtractor(parsed, self.params, depth_timestamps=self.depth_timestamps).extract()
         metrics, timeline, diagnostics = MetricEngine(features, self.params).compute()
         report = QualityEngine(metrics, diagnostics, self.params).build_report()

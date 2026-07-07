@@ -93,3 +93,17 @@ class TaskOperationLog(Base):
     operator_id: Mapped[str] = mapped_column(String(64), nullable=False)
     reason: Mapped[str] = mapped_column(Text, default='', nullable=False)
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), server_default=func.now())
+
+
+class BugReport(Base):
+    __tablename__ = 'bug_reports'
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    description: Mapped[str] = mapped_column(Text, default='', nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default='open', nullable=False, index=True)
+    image_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    image_content_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reporter_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    reporter_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), nullable=False, default=func.now())
+    updated_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), nullable=False, default=func.now(), onupdate=func.now())

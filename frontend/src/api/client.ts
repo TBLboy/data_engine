@@ -2,6 +2,8 @@ import type {
   Account,
   AuditRecord,
   BatchSummary,
+  BugReport,
+  BugReportListPayload,
   DatasetBatchRow,
   DatasetEpisodeListPayload,
   DatasetTaskSummary,
@@ -133,11 +135,13 @@ export interface IngestScanRequest {
 export interface TaskTypeCreateRequest {
   name: string
   description?: string
+  armMode?: 'both_arms' | 'left_arm' | 'right_arm'
 }
 
 export interface TaskTypeUpdateRequest {
   name: string
   description?: string
+  armMode?: 'both_arms' | 'left_arm' | 'right_arm'
 }
 
 export interface TaskTypeBatchOperationRequest {
@@ -220,6 +224,11 @@ export interface ManualQcSubmitRequest {
   primaryReason: string
   note: string
   version: number
+}
+
+export interface CreateBugReportRequest {
+  description: string
+  imageFiles?: File[]
 }
 
 export async function login(payload: LoginRequest) {
@@ -419,6 +428,35 @@ export async function submitManualQc(episodeId: string, payload: ManualQcSubmitR
   return request<ManualQcSubmitResponse>(`/qc/manual/${episodeId}`, {
     method: 'POST',
     body: JSON.stringify(payload)
+  })
+}
+
+export async function createBugReport(payload: CreateBugReportRequest) {
+  const formData = new FormData()
+  formData.set('description', payload.description)
+  if (payload.imageFiles?.length) {
+    for (const file of payload.imageFiles) formData.append('images', file)
+  }
+  return request<BugReport>('/bug-reports', {
+    method: 'POST',
+    body: formData
+  })
+}
+
+export async function fetchBugReports() {
+  return request<BugReportListPayload>('/bug-reports')
+}
+
+export async function updateBugReportStatus(reportId: string, status: BugReport['status']) {
+  return request<BugReport>(`/bug-reports/${reportId}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status })
+  })
+}
+
+export async function deleteBugReport(reportId: string) {
+  return request<void>(`/bug-reports/${reportId}`, {
+    method: 'DELETE'
   })
 }
 

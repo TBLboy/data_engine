@@ -61,7 +61,7 @@ class TelemetryParser:
         value = np.asarray(self.telemetry[key])
         return value.astype(np.float64) if value.size else None
 
-    def parse(self) -> ParsedTelemetry:
+    def parse(self, dof_config: dict[str, int] | None = None, arm_mode: str = 'both_arms') -> ParsedTelemetry:
         ts = self._get_required('timestamps').astype(np.float64)
         qpos = self._get_required('qpos').astype(np.float64)
         qvel = self._get_required('qvel').astype(np.float64)
@@ -81,7 +81,28 @@ class TelemetryParser:
         if effort.ndim != 2:
             effort = effort.reshape((len(ts), -1))
 
-        arm_dims, hand_dims = self._detect_dims(qpos)
+        if not dof_config:
+            raise ValueError('dof_config is required — read from metadata.json device.arm/hand.joints')
+        arm_left = dof_config.get('arm_left_dof', 7)
+        arm_right = dof_config.get('arm_right_dof', 7)
+        hand_left = dof_config.get('hand_left_dof', 6)
+        hand_right = dof_config.get('hand_right_dof', 6)
+        arm_total = arm_left + arm_right
+        hand_total = hand_left + hand_right
+        left_arm_dims = list(range(0, arm_left))
+        right_arm_dims = list(range(arm_left, arm_total))
+        left_hand_dims = list(range(arm_total, arm_total + hand_left))
+        right_hand_dims = list(range(arm_total + hand_left, arm_total + hand_total))
+
+        if arm_mode == 'left_arm':
+            arm_dims = left_arm_dims
+            hand_dims = left_hand_dims
+        elif arm_mode == 'right_arm':
+            arm_dims = right_arm_dims
+            hand_dims = right_hand_dims
+        else:
+            arm_dims = left_arm_dims + right_arm_dims
+            hand_dims = left_hand_dims + right_hand_dims
 
         qpos_arm = qpos[:, arm_dims] if arm_dims else np.zeros((len(ts), 0), dtype=np.float64)
         qpos_hand_raw = qpos[:, hand_dims] if hand_dims else np.zeros((len(ts), 0), dtype=np.float64)
@@ -102,6 +123,7 @@ class TelemetryParser:
             arm_dims=arm_dims,
             hand_dims=hand_dims,
             qpos_arm=qpos_arm,
+            # Hand raw→normalized: 0-255 range division (Linker Hand hardware spec, see requirements.md)
             qpos_hand=qpos_hand_raw / 255.0 if hand_dims else np.zeros((len(ts), 0), dtype=np.float64),
             qvel_arm=qvel_arm,
             actions_arm=actions_arm,
@@ -113,18 +135,3 @@ class TelemetryParser:
             ee_poses_actions_left=self._get_optional('ee_poses_actions_left'),
             ee_poses_actions_right=self._get_optional('ee_poses_actions_right'),
         )
-
-    @staticmethod
-    def _detect_dims(qpos: np.ndarray) -> tuple[list[int], list[int]]:
-        if qpos.size == 0 or qpos.ndim != 2:
-            return [], []
-        qpos_range = np.nanmax(qpos, axis=0) - np.nanmin(qpos, axis=0)
-        active = qpos_range > 1e-8
-        active_idx = np.where(active)[0]
-        if active_idx.size == 0:
-            return [], []
-        qpos_active_max = np.nanmax(np.abs(qpos[:, active_idx]), axis=0)
-        arm_mask = qpos_active_max <= 3.5
-        arm_dims = active_idx[arm_mask].astype(int).tolist()
-        hand_dims = active_idx[~arm_mask].astype(int).tolist()
-        return arm_dims, hand_dims

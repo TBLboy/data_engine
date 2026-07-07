@@ -10,7 +10,67 @@ import { useSessionStore } from '../stores/session'
 import { triggerCelebration } from '../composables/useCelebration'
 import { Chart, registerables } from 'chart.js'
 
-Chart.register(...registerables)
+const timelineOverlayPlugin = {
+  id: 'timelineOverlay',
+  beforeDatasetsDraw(chart: Chart, _args: unknown, options?: any) {
+    const xScale = chart.scales.x
+    const chartArea = chart.chartArea
+    if (!xScale || !chartArea) return
+
+    const segments = Array.isArray(options?.segments) ? options.segments : []
+    if (!segments.length) return
+    const ctx = chart.ctx
+
+    // Pre-compute pixel range for each segment
+    const segPixels = segments.map((s: any) => {
+      const start = Math.max(s.startSec ?? 0, 0)
+      const end = Math.max(s.endSec ?? start, start)
+      const left = Math.max(chartArea.left, Math.round(xScale.getPixelForValue(start)))
+      const right = Math.min(chartArea.right, Math.round(xScale.getPixelForValue(end)))
+      return { level: s.level as string, left, right }
+    })
+
+    ctx.save()
+    const top = chartArea.top
+    const height = chartArea.bottom - chartArea.top
+
+    // Scan each pixel column and determine dominant level + overlap count
+    let x = chartArea.left
+    while (x <= chartArea.right) {
+      let badCount = 0
+      let warnCount = 0
+      let goodCount = 0
+      for (const sp of segPixels) {
+        if (x >= sp.left && x < sp.right) {
+          if (sp.level === 'bad') badCount++
+          else if (sp.level === 'warn') warnCount++
+          else goodCount++
+        }
+      }
+
+      let fillStyle: string | null = null
+      if (badCount > 0) {
+        const alpha = Math.min(0.15 + badCount * 0.12, 0.60)
+        fillStyle = `rgba(220, 38, 38, ${alpha})`
+      } else if (warnCount > 0) {
+        const alpha = Math.min(0.10 + warnCount * 0.08, 0.45)
+        fillStyle = `rgba(230, 162, 60, ${alpha})`
+      } else if (goodCount > 0) {
+        const alpha = Math.min(0.05 + goodCount * 0.04, 0.20)
+        fillStyle = `rgba(103, 194, 58, ${alpha})`
+      }
+
+      if (fillStyle) {
+        ctx.fillStyle = fillStyle
+        ctx.fillRect(x, top, 1, height)
+      }
+      x++
+    }
+    ctx.restore()
+  }
+}
+
+Chart.register(...registerables, timelineOverlayPlugin)
 
 const route = useRoute()
 const router = useRouter()
@@ -37,9 +97,22 @@ const isManager = computed(() => session.user?.role === 'admin' || session.user?
 const curveData = ref<TelemetryCurve | null>(null)
 const curveError = ref('')
 const curveMode = ref<'arm' | 'hand'>('arm')
-const chartCanvas = ref<HTMLCanvasElement | null>(null)
-let chartInstance: Chart | null = null
+const chartCanvasL = ref<HTMLCanvasElement | null>(null)
+const chartCanvasR = ref<HTMLCanvasElement | null>(null)
+const chartHoverTimeSec = ref<number | null>(null)
+const chartDragging = ref(false)
+const suppressFrameWatcher = ref(false)
+const chartPlaybackCursorLeftPx = ref(0)
+const chartPlaybackCursorVisible = ref(false)
+const chartHoverCursorLeftPx = ref(0)
+const chartHoverCursorVisible = ref(false)
+const chartCursorTopPx = ref(0)
+const chartCursorHeightPx = ref(0)
+let chartL: Chart | null = null
+let chartR: Chart | null = null
 let playbackLoopId: number | null = null
+let scrubRafId: number | null = null
+let pendingScrubTimeSec: number | null = null
 
 const episodeId = computed(() => String(route.params.id))
 const fps = computed(() => payload.value?.episode.fps || 30)
@@ -59,6 +132,33 @@ const scoreRingPercent = computed(() => {
   return Math.round(Math.max(0, Math.min(10, s)) / 10 * 100)
 })
 const timelineSegments = computed(() => l3V2Report.value?.timelineSegments ?? [])
+const normalizedTimelineSegments = computed(() => timelineSegments.value.map((segment: any) => ({
+  ...segment,
+  startSec: segmentStartSec(segment),
+  endSec: segmentEndSec(segment),
+}))
+  .sort((a: any, b: any) => a.startSec - b.startSec))
+const activeTimelineSegments = computed(() => normalizedTimelineSegments.value.filter((segment: any) => {
+  const epsilon = 1 / Math.max(fps.value || 30, 1)
+  return currentTimeSec.value + epsilon >= segment.startSec && currentTimeSec.value - epsilon <= segment.endSec
+}))
+
+const activeTimelineSegmentIds = computed(() => new Set(activeTimelineSegments.value.map((segment: any) => segmentKey(segment))))
+const chartLegendItems = computed(() => {
+  const cd = curveData.value
+  if (!cd) return [] as Array<{ key: string; label: string; color: string; dashed: boolean }>
+  const isArm = curveMode.value === 'arm'
+  const dimCount = isArm ? cd.armDims : cd.handDims
+  const perSideCount = Math.round(dimCount / 2)
+  const colors = ['#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#909399', '#00D4AA', '#B37FEB', '#FF85C0', '#7EC8E3', '#FFD700', '#CD5C5C', '#8FBC8F']
+  const items: Array<{ key: string; label: string; color: string; dashed: boolean }> = []
+  for (let d = 0; d < perSideCount; d++) {
+    const color = colors[d % colors.length]
+    items.push({ key: `actual-${d}`, label: `J${d + 1} 实际`, color, dashed: false })
+    items.push({ key: `target-${d}`, label: `J${d + 1} 目标`, color, dashed: true })
+  }
+  return items
+})
 const qcRevisions = computed(() => payload.value?.revisions ?? [])
 const episode = computed(() => payload.value?.episode)
 const episodeNumber = computed(() => {
@@ -88,15 +188,129 @@ const severityTagType = (level?: string) => {
 
 const segmentStartSec = (segment: any) => Number(segment.startSec ?? segment.start ?? 0)
 const segmentEndSec = (segment: any) => Number(segment.endSec ?? segment.end ?? 0)
-const segmentSource = (segment: any) => segment.sourceMetricId ? `${segment.sourceMetricId} · ${segment.sourceEvidenceId || ''}` : 'L3 v1'
-const segmentHasSource = (segment: any) => Boolean(segment.sourceMetricId)
 const segmentKey = (segment: any) => `${segment.label}-${segmentStartSec(segment)}-${segmentEndSec(segment)}-${segment.sourceMetricId || ''}`
 
-const jumpToSegment = async (segment: any) => {
+const seekToTime = async (targetSec: number) => {
   pauseAll()
-  const targetSec = Math.max(0, Math.min(durationSec.value || segmentStartSec(segment), segmentStartSec(segment)))
-  currentFrame.value = Math.max(0, Math.min(maxFrame.value, Math.round(targetSec * fps.value)))
+  await applyTimeToPlayback(targetSec)
+}
+
+const applyTimeToPlayback = async (targetSec: number) => {
+  const clampedSec = Math.max(0, Math.min(durationSec.value || targetSec, targetSec))
+  suppressFrameWatcher.value = true
+  currentFrame.value = Math.max(0, Math.min(maxFrame.value, Math.round(clampedSec * fps.value)))
   await syncVideosToFrame()
+  suppressFrameWatcher.value = false
+  drawChartOverlay()
+}
+
+const queueScrubToTime = (targetSec: number) => {
+  pendingScrubTimeSec = targetSec
+  if (scrubRafId !== null) return
+  scrubRafId = requestAnimationFrame(async () => {
+    scrubRafId = null
+    if (pendingScrubTimeSec == null) return
+    const target = pendingScrubTimeSec
+    pendingScrubTimeSec = null
+    await applyTimeToPlayback(target)
+  })
+}
+
+const chartTimeFromPointer = (event: MouseEvent, chart: Chart | null, canvas: HTMLCanvasElement | null) => {
+  const xScale = chart?.scales?.x
+  const rect = canvas?.getBoundingClientRect()
+  if (!xScale || !rect) return null
+  const pixelX = event.clientX - rect.left
+  const nextTime = Number(xScale.getValueForPixel(pixelX))
+  if (!Number.isFinite(nextTime)) return null
+  return Math.max(0, Math.min(durationSec.value || nextTime, nextTime))
+}
+
+const handleChartPointerMove = (event: MouseEvent, chart: Chart | null, canvas: HTMLCanvasElement | null) => {
+  const nextTime = chartTimeFromPointer(event, chart, canvas)
+  chartHoverTimeSec.value = nextTime
+  drawChartOverlay()
+  if (chartDragging.value && nextTime != null) {
+    queueScrubToTime(nextTime)
+  }
+}
+
+const handleChartPointerLeave = () => {
+  if (chartDragging.value) return
+  chartHoverTimeSec.value = null
+  drawChartOverlay()
+}
+
+const handleChartPointerDown = async (event: MouseEvent, chart: Chart | null, canvas: HTMLCanvasElement | null) => {
+  const nextTime = chartTimeFromPointer(event, chart, canvas)
+  if (nextTime == null) return
+  chartDragging.value = true
+  chartHoverTimeSec.value = nextTime
+  pauseAll()
+  await applyTimeToPlayback(nextTime)
+}
+
+const stopChartDragging = () => {
+  if (!chartDragging.value) return
+  chartDragging.value = false
+  if (scrubRafId !== null) {
+    cancelAnimationFrame(scrubRafId)
+    scrubRafId = null
+  }
+  pendingScrubTimeSec = null
+  drawChartOverlay()
+}
+
+const jumpToSegment = async (segment: any) => {
+  await seekToTime(segmentStartSec(segment))
+}
+
+const drawChartOverlay = () => {
+  for (const ch of [chartL, chartR]) {
+    if (!ch) continue
+    const pluginOptions = ((ch.options.plugins as any).timelineOverlay ??= {})
+    pluginOptions.segments = normalizedTimelineSegments.value
+    ch.update('none')
+  }
+  updateChartCursorPosition()
+}
+
+const updateChartCursorPosition = () => {
+  const ch = chartL
+  const canvas = chartCanvasL.value
+  if (!ch || !canvas) {
+    chartPlaybackCursorVisible.value = false
+    chartHoverCursorVisible.value = false
+    return
+  }
+  const xScale = ch.scales.x
+  const chartArea = ch.chartArea
+  if (!xScale || !chartArea) {
+    chartPlaybackCursorVisible.value = false
+    chartHoverCursorVisible.value = false
+    return
+  }
+
+  const displayWidth = canvas.getBoundingClientRect().width || ch.width || 1
+  const displayHeight = canvas.getBoundingClientRect().height || ch.height || 1
+  const scale = displayWidth / (ch.width || displayWidth || 1)
+  const scaleY = displayHeight / (ch.height || displayHeight || 1)
+
+  chartCursorTopPx.value = chartArea.top * scaleY
+  chartCursorHeightPx.value = Math.max((chartArea.bottom - chartArea.top) * scaleY, 0)
+
+  const playbackX = Number(xScale.getPixelForValue(currentTimeSec.value))
+  chartPlaybackCursorVisible.value = Number.isFinite(playbackX)
+  chartPlaybackCursorLeftPx.value = playbackX * scale
+
+  const hoverTime = chartHoverTimeSec.value
+  if (hoverTime == null || !Number.isFinite(hoverTime)) {
+    chartHoverCursorVisible.value = false
+    return
+  }
+  const hoverX = Number(xScale.getPixelForValue(hoverTime))
+  chartHoverCursorVisible.value = Number.isFinite(hoverX)
+  chartHoverCursorLeftPx.value = hoverX * scale
 }
 
 const stopPlaybackLoop = () => {
@@ -188,10 +402,8 @@ const loadContext = async () => {
 }
 
 const destroyChart = () => {
-  if (chartInstance) {
-    chartInstance.destroy()
-    chartInstance = null
-  }
+  if (chartL) { chartL.destroy(); chartL = null }
+  if (chartR) { chartR.destroy(); chartR = null }
 }
 
 const loadCurveData = async () => {
@@ -208,7 +420,7 @@ const loadCurveData = async () => {
 }
 
 const renderChart = () => {
-  if (!chartCanvas.value || !curveData.value) return
+  if (!chartCanvasL.value || !chartCanvasR.value || !curveData.value) return
   const cd = curveData.value
   const isArm = curveMode.value === 'arm'
   const qpos = isArm ? cd.qposArm : cd.qposHand
@@ -217,48 +429,65 @@ const renderChart = () => {
   if (!dimCount || !qpos.length) return
 
   const colors = ['#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#909399', '#00D4AA', '#B37FEB', '#FF85C0', '#7EC8E3', '#FFD700', '#CD5C5C', '#8FBC8F']
-  const datasets: any[] = []
-  for (let d = 0; d < dimCount; d++) {
-    const c = colors[d % colors.length]
-    datasets.push({
-      label: `J${d + 1} 实际`,
-      data: qpos.map((row, i) => ({ x: cd.timestamps[i], y: row[d] })),
-      borderColor: c,
-      backgroundColor: 'transparent',
-      borderWidth: 1.5,
-      pointRadius: 0,
-      tension: 0.1,
-    })
-    datasets.push({
-      label: `J${d + 1} 目标`,
-      data: actions.map((row, i) => ({ x: cd.timestamps[i], y: row[d] })),
-      borderColor: c,
-      backgroundColor: 'transparent',
-      borderWidth: 1,
-      borderDash: [4, 3],
-      pointRadius: 0,
-      tension: 0.1,
-    })
+  const perSideCount = Math.round(dimCount / 2)
+  const yTitle = isArm ? '位置 (rad)' : '位置 (0-255)'
+
+  const sideLabels = isArm ? ['左臂', '右臂'] : ['左手', '右手']
+
+  const buildDatasets = (dStart: number) => {
+    const ds: any[] = []
+    for (let d = dStart; d < dStart + perSideCount; d++) {
+      const c = colors[(d - dStart) % colors.length]
+      ds.push({
+        label: `J${d + 1} 实际`,
+        data: qpos.map((row, i) => ({ x: cd.timestamps[i], y: row[d] })),
+        borderColor: c, backgroundColor: 'transparent',
+        borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 3, pointHitRadius: 8, tension: 0.1,
+      })
+      ds.push({
+        label: `J${d + 1} 目标`,
+        data: actions.map((row, i) => ({ x: cd.timestamps[i], y: row[d] })),
+        borderColor: c, backgroundColor: 'transparent',
+        borderWidth: 1, borderDash: [4, 3], pointRadius: 0, pointHoverRadius: 3, pointHitRadius: 8, tension: 0.1,
+      })
+    }
+    return ds
   }
 
-  chartInstance = new Chart(chartCanvas.value, {
-    type: 'line',
-    data: { datasets },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      animation: false,
-      scales: {
-        x: { type: 'linear', title: { display: true, text: '时间 (s)' } },
-        y: { title: { display: true, text: isArm ? '位置 (rad)' : '位置 (0-255)' } }
-      },
-      plugins: {
-        legend: { display: dimCount <= 6, position: 'bottom', labels: { boxWidth: 12, padding: 4, font: { size: 10 } } },
-        tooltip: { mode: 'index', intersect: false },
-      },
-      interaction: { mode: 'nearest', axis: 'x', intersect: false },
-    }
+  const baseOptions = (title: string): any => ({
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    parsing: false,
+    scales: {
+      x: { type: 'linear', title: { display: true, text: '时间 (s)' } },
+      y: { title: { display: true, text: yTitle } }
+    },
+    plugins: {
+      legend: { display: false },
+      tooltip: { enabled: false },
+      title: { display: true, text: title, position: 'top' as const, font: { size: 13 } },
+    },
+    interaction: { mode: 'nearest', axis: 'x', intersect: false },
   })
+
+  chartL = new Chart(chartCanvasL.value, {
+    type: 'line',
+    data: { datasets: buildDatasets(0) },
+    options: baseOptions(sideLabels[0]),
+  })
+  ;((chartL.options.plugins as any).timelineOverlay ??= {}).segments = normalizedTimelineSegments.value
+
+  chartR = new Chart(chartCanvasR.value, {
+    type: 'line',
+    data: { datasets: buildDatasets(perSideCount) },
+    options: baseOptions(sideLabels[1]),
+  })
+  ;((chartR.options.plugins as any).timelineOverlay ??= {}).segments = normalizedTimelineSegments.value
+
+  chartCanvasL.value.style.cursor = 'crosshair'
+  chartCanvasR.value.style.cursor = 'crosshair'
+  drawChartOverlay()
 }
 
 const refreshMedia = async () => {
@@ -362,7 +591,9 @@ watch(episodeId, () => {
 })
 
 watch(currentFrame, async () => {
-  if (syncingSlider.value) return
+  if (syncingSlider.value || suppressFrameWatcher.value) return
+  drawChartOverlay()
+  if (playing.value) return
   await syncVideosToFrame()
 })
 
@@ -377,9 +608,26 @@ watch(curveMode, () => {
   renderChart()
 })
 
+watch(normalizedTimelineSegments, () => {
+  drawChartOverlay()
+}, { deep: true })
+
+watch(curveData, () => {
+  drawChartOverlay()
+})
+
 onBeforeUnmount(() => {
   pauseAll()
+  stopChartDragging()
   destroyChart()
+})
+
+onMounted(() => {
+  window.addEventListener('mouseup', stopChartDragging)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('mouseup', stopChartDragging)
 })
 
 const submit = async () => {
@@ -501,6 +749,11 @@ const submit = async () => {
             <div>
               <strong>Frame {{ currentFrame }} / {{ totalFrames }}</strong>
               <span>{{ progress }}% · 当前时间 {{ currentTimeSec.toFixed(2) }}s / {{ durationSec.toFixed(2) }}s · {{ fps.toFixed(2) }} fps</span>
+              <small class="active-segment-note" :class="{ placeholder: !activeTimelineSegments.length }">
+                {{ activeTimelineSegments.length
+                  ? `当前异常段：${activeTimelineSegments.map((segment: any) => `${segment.startSec.toFixed(1)}-${segment.endSec.toFixed(1)}s ${segment.label}`).join("；")}`
+                  : '当前异常段：--' }}
+              </small>
             </div>
             <div class="player-actions">
               <el-button :disabled="!totalFrames" @click="stepSeconds(-1)">-1s</el-button>
@@ -525,7 +778,7 @@ const submit = async () => {
               v-for="segment in timelineSegments"
               :key="segmentKey(segment)"
               class="segment-chip clickable"
-              :class="segment.level"
+              :class="[segment.level, { current: activeTimelineSegmentIds.has(segmentKey(segment)) }]"
               @click="jumpToSegment(segment)"
             >
               {{ segmentStartSec(segment).toFixed(1) }}-{{ segmentEndSec(segment).toFixed(1) }}s · {{ segment.label }}
@@ -538,7 +791,7 @@ const submit = async () => {
             <div style="display:flex; justify-content:space-between; align-items:center">
               <span>遥操作曲线联动视图</span>
               <el-radio-group v-model="curveMode" size="small" :disabled="!curveData">
-                <el-radio-button value="arm">机械臂 ({{ curveData?.armDims || 0 }} 维)</el-radio-button>
+                <el-radio-button value="arm">机械臂 ({{ Math.round((curveData?.armDims || 0) / 2) }} 维)</el-radio-button>
                 <el-radio-button v-if="curveData?.handDims" value="hand">灵巧手 ({{ curveData?.handDims || 0 }} 维)</el-radio-button>
               </el-radio-group>
             </div>
@@ -549,31 +802,52 @@ const submit = async () => {
           <div v-else-if="!curveData" style="height: 200px; display:flex; align-items:center; justify-content:center; color: #909399; font-size: 13px">
             加载关节位置数据中...
           </div>
-          <div v-else style="height: 320px; position: relative">
-            <canvas ref="chartCanvas"></canvas>
-          </div>
-          <div style="font-size: 11px; color: #909399; margin-top: 6px">
-            实线 = 实际关节位置 (qpos)；虚线 = 目标关节位置 (actions)。不同颜色代表不同关节维度。
+          <div v-else>
+            <div class="chart-legend-panel">
+              <div v-for="item in chartLegendItems" :key="item.key" class="chart-legend-item">
+                <span class="chart-legend-swatch" :style="{ borderColor: item.color }" :class="{ dashed: item.dashed }"></span>
+                <span>{{ item.label }}</span>
+              </div>
+            </div>
+            <div class="chart-canvas-shell" style="height: 280px; position: relative; margin-bottom: 12px">
+              <div
+                v-show="chartPlaybackCursorVisible"
+                class="chart-cursor-line playback"
+                :style="{ left: `${chartPlaybackCursorLeftPx}px`, top: `${chartCursorTopPx}px`, height: `${chartCursorHeightPx}px` }"
+              ></div>
+              <div
+                v-show="chartHoverCursorVisible"
+                class="chart-cursor-line hover"
+                :style="{ left: `${chartHoverCursorLeftPx}px`, top: `${chartCursorTopPx}px`, height: `${chartCursorHeightPx}px` }"
+              ></div>
+              <canvas
+                ref="chartCanvasL"
+                @mousemove="e => handleChartPointerMove(e, chartL, chartCanvasL)"
+                @mouseleave="handleChartPointerLeave"
+                @mousedown="e => handleChartPointerDown(e, chartL, chartCanvasL)"
+              ></canvas>
+            </div>
+            <div class="chart-canvas-shell" style="height: 280px; position: relative">
+              <div
+                v-show="chartPlaybackCursorVisible"
+                class="chart-cursor-line playback"
+                :style="{ left: `${chartPlaybackCursorLeftPx}px`, top: `${chartCursorTopPx}px`, height: `${chartCursorHeightPx}px` }"
+              ></div>
+              <div
+                v-show="chartHoverCursorVisible"
+                class="chart-cursor-line hover"
+                :style="{ left: `${chartHoverCursorLeftPx}px`, top: `${chartCursorTopPx}px`, height: `${chartCursorHeightPx}px` }"
+              ></div>
+              <canvas
+                ref="chartCanvasR"
+                @mousemove="e => handleChartPointerMove(e, chartR, chartCanvasR)"
+                @mouseleave="handleChartPointerLeave"
+                @mousedown="e => handleChartPointerDown(e, chartR, chartCanvasR)"
+              ></canvas>
+            </div>
           </div>
         </el-card>
 
-        <el-row :gutter="18">
-          <el-col :span="24">
-            <el-card shadow="never" class="qc-card">
-              <template #header>异常段核查清单</template>
-              <el-check-tag
-                v-for="segment in timelineSegments"
-                :key="segmentKey(segment)"
-                :checked="segment.level !== 'good'"
-                :type="severityTagType(segment.level)"
-                @click="jumpToSegment(segment)"
-              >
-                {{ segmentStartSec(segment).toFixed(1) }}-{{ segmentEndSec(segment).toFixed(1) }}s {{ segment.label }}
-                <small v-if="segmentHasSource(segment)"> · {{ segmentSource(segment) }}</small>
-              </el-check-tag>
-            </el-card>
-          </el-col>
-        </el-row>
       </section>
 
       <aside class="manual-side sticky-side">
@@ -768,6 +1042,19 @@ const submit = async () => {
   gap: 8px;
 }
 
+.active-segment-note {
+  display: block;
+  margin-top: 6px;
+  color: #b45309;
+  font-size: 12px;
+  font-weight: 600;
+  min-height: 18px;
+}
+
+.active-segment-note.placeholder {
+  color: #94a3b8;
+}
+
 .segment-chip.clickable {
   cursor: pointer;
   transition: transform 0.12s ease, box-shadow 0.12s ease;
@@ -776,6 +1063,65 @@ const submit = async () => {
 .segment-chip.clickable:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12);
+}
+
+.segment-chip.current {
+  outline: 2px solid rgba(17, 24, 39, 0.18);
+  outline-offset: 1px;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.12);
+}
+
+.chart-legend-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-bottom: 10px;
+  max-height: 72px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #475569;
+  white-space: nowrap;
+}
+
+.chart-legend-swatch {
+  width: 18px;
+  height: 0;
+  border-top: 2px solid currentColor;
+  display: inline-block;
+}
+
+.chart-legend-swatch.dashed {
+  border-top-style: dashed;
+}
+
+.chart-canvas-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.chart-cursor-line {
+  position: absolute;
+  width: 2px;
+  margin-left: -1px;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.chart-cursor-line.playback {
+  background: rgba(59, 130, 246, 0.7);
+}
+
+.chart-cursor-line.hover {
+  background: #111827;
+  opacity: 0.95;
 }
 
 .l3v2-panel .score-ring.good {

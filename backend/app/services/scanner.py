@@ -211,12 +211,17 @@ def _classify_object_role(object_scope: str, relative_key: str) -> str:
     return 'unknown'
 
 
-def _derive_state(*, raw_exists: bool, processed_exists: bool, roles: list[str]) -> str:
+def _derive_state(*, raw_exists: bool, processed_exists: bool, roles: list[str], manifest_data: dict | None = None) -> str:
     role_set = set(roles)
-    has_rgb_video = 'camera_rgb_video' in role_set
     has_manifest = 'manifest' in role_set
     has_metadata = 'metadata' in role_set
     has_telemetry = 'telemetry_npz' in role_set
+    # Use manifest's declared camera files for video presence check (not filename guessing)
+    if manifest_data and isinstance(manifest_data.get('files'), dict):
+        cameras = manifest_data['files'].get('cameras', {})
+        has_rgb_video = any(isinstance(v, dict) and 'video' in v for v in cameras.values())
+    else:
+        has_rgb_video = 'camera_rgb_video' in role_set
     if processed_exists and has_manifest and has_metadata and has_telemetry and has_rgb_video:
         return 'qc_ready'
     if processed_exists:
@@ -556,6 +561,7 @@ def _execute_minio_scan(
                     raw_exists=bool(raw_prefix),
                     processed_exists=bool(processed_prefix),
                     roles=normalized_roles,
+                    manifest_data=manifest,
                 )
                 next_state = _apply_state_transition(previous_state, derived_state)
                 if previous_state != next_state:

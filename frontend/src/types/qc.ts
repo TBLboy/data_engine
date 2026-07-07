@@ -20,10 +20,28 @@ export interface Account {
   passwordChangedAt: string | null
 }
 
+export interface BugReport {
+  id: string
+  description: string
+  status: 'open' | 'fixed'
+  imageUrls: string[]
+  reporterUserId: string
+  reporterName: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface BugReportListPayload {
+  items: BugReport[]
+}
+
+export type TaskTypeArmMode = 'both_arms' | 'left_arm' | 'right_arm'
+
 export interface TaskType {
   id: string
   name: string
   description: string
+  armMode: TaskTypeArmMode
   isActive: boolean
   totalBatches: number
   totalEpisodes: number

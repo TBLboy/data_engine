@@ -15,7 +15,7 @@ import {
   type TaskTypeDetailResponse,
   type TaskTypeUpdateRequest
 } from '../api/client'
-import type { BatchSummary, TaskType } from '../types/qc'
+import type { BatchSummary, TaskType, TaskTypeArmMode } from '../types/qc'
 
 const taskTypes = ref<TaskType[]>([])
 const selectedTaskTypeId = ref('task_type:unclassified')
@@ -37,13 +37,21 @@ const keyword = ref('')
 
 const createForm = reactive<TaskTypeCreateRequest>({
   name: '',
-  description: ''
+  description: '',
+  armMode: 'both_arms'
 })
 
 const editForm = reactive<TaskTypeUpdateRequest>({
   name: '',
-  description: ''
+  description: '',
+  armMode: 'both_arms'
 })
+
+const armModeLabelMap: Record<TaskTypeArmMode, string> = {
+  both_arms: '双臂',
+  left_arm: '左臂',
+  right_arm: '右臂'
+}
 
 const selectedTaskType = computed(() => taskTypes.value.find((item) => item.id === selectedTaskTypeId.value) ?? null)
 const canEditSelected = computed(() => selectedTaskType.value?.id !== 'task_type:unclassified')
@@ -110,6 +118,7 @@ watch(selectedTaskTypeId, async () => {
 const openCreateDialog = () => {
   createForm.name = ''
   createForm.description = ''
+  createForm.armMode = 'both_arms'
   createDialogVisible.value = true
 }
 
@@ -118,7 +127,8 @@ const submitCreateTaskType = async () => {
   try {
     const created = await createTaskType({
       name: createForm.name.trim(),
-      description: (createForm.description ?? '').trim()
+      description: (createForm.description ?? '').trim(),
+      armMode: createForm.armMode ?? 'both_arms'
     })
     ElMessage.success('任务类型已创建')
     createDialogVisible.value = false
@@ -136,6 +146,7 @@ const openEditDialog = () => {
   if (!selectedTaskType.value || !canEditSelected.value) return
   editForm.name = selectedTaskType.value.name
   editForm.description = selectedTaskType.value.description
+  editForm.armMode = selectedTaskType.value.armMode
   editDialogVisible.value = true
 }
 
@@ -145,7 +156,8 @@ const submitEditTaskType = async () => {
   try {
     await updateTaskType(selectedTaskType.value.id, {
       name: editForm.name.trim(),
-      description: (editForm.description ?? '').trim()
+      description: (editForm.description ?? '').trim(),
+      armMode: editForm.armMode ?? 'both_arms'
     })
     ElMessage.success('任务类型已更新')
     editDialogVisible.value = false
@@ -289,6 +301,7 @@ const detachBatch = async (batch: BatchSummary) => {
               <el-descriptions-item label="名称">{{ selectedTaskType?.name ?? '-' }}</el-descriptions-item>
               <el-descriptions-item label="状态">{{ selectedTaskType?.id === 'task_type:unclassified' ? '系统保底' : (selectedTaskType?.isActive ? '启用中' : '已停用') }}</el-descriptions-item>
               <el-descriptions-item label="描述">{{ selectedTaskType?.description ?? '-' }}</el-descriptions-item>
+              <el-descriptions-item label="手臂模式">{{ selectedTaskType ? armModeLabelMap[selectedTaskType.armMode] : '-' }}</el-descriptions-item>
               <el-descriptions-item label="批次数">{{ selectedTaskType?.totalBatches ?? 0 }}</el-descriptions-item>
             </el-descriptions>
 
@@ -318,6 +331,13 @@ const detachBatch = async (batch: BatchSummary) => {
         <el-form-item label="描述">
           <el-input v-model="createForm.description" type="textarea" :rows="3" />
         </el-form-item>
+        <el-form-item label="手臂模式">
+          <el-radio-group v-model="createForm.armMode">
+            <el-radio value="both_arms">双臂</el-radio>
+            <el-radio value="left_arm">左臂</el-radio>
+            <el-radio value="right_arm">右臂</el-radio>
+          </el-radio-group>
+        </el-form-item>
       </el-form>
       <template #footer>
         <div class="dialog-actions">
@@ -334,6 +354,13 @@ const detachBatch = async (batch: BatchSummary) => {
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="editForm.description" type="textarea" :rows="3" />
+        </el-form-item>
+        <el-form-item label="手臂模式">
+          <el-radio-group v-model="editForm.armMode">
+            <el-radio value="both_arms">双臂</el-radio>
+            <el-radio value="left_arm">左臂</el-radio>
+            <el-radio value="right_arm">右臂</el-radio>
+          </el-radio-group>
         </el-form-item>
       </el-form>
       <template #footer>

@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import io
+import json
 import random
+import uuid
 from datetime import datetime, timedelta
 from urllib.parse import quote
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
+from app.core.config import BUG_REPORT_UPLOAD_DIR, get_settings
 from app.core.db import get_db
 from app.core.security import create_session_token, hash_password, verify_password, verify_session_token
-from app.models import AuditEvent, Batch, Episode, EpisodeInventory, EpisodeObject, GeneralConfig, L3V2Config, ListRecord, QcReviewRevision, QcTask, ScanJob, TaskType, User
+from app.models import AuditEvent, Batch, BugReport, Episode, EpisodeInventory, EpisodeObject, GeneralConfig, L3V2Config, ListRecord, QcReviewRevision, QcTask, ScanJob, TaskType, User
 from app.schemas.qc import (
     AccountListPayloadSchema,
     AccountSchema,
@@ -21,6 +23,9 @@ from app.schemas.qc import (
     BatchDispatchAssignRequest,
     BatchSummarySchema,
     BatchTaskTypeUpdateRequest,
+    BugReportListPayloadSchema,
+    BugReportSchema,
+    BugReportStatusUpdateRequest,
     CreateAccountRequest,
     DashboardPayloadSchema,
     DatabasePayloadSchema,
@@ -66,6 +71,7 @@ from app.services.payloads import (
     review_lock_payload,
     reviewer_dashboard_payload,
     serialize_account,
+    serialize_bug_report,
     serialize_ingest_job,
     serialize_task,
     serialize_task_type,
@@ -81,6 +87,24 @@ from app.services.scan_queue import enqueue_scan_job
 router = APIRouter(prefix='/api', tags=['qc'])
 settings = get_settings()
 UNCLASSIFIED_TASK_TYPE_ID = 'task_type:unclassified'
+TASK_TYPE_ARM_MODES = {'both_arms', 'left_arm', 'right_arm'}
+ALLOWED_BUG_IMAGE_TYPES = {'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp'}
+
+
+def _delete_bug_report_image(report: BugReport) -> None:
+    if not report.image_filename:
+        return
+    import json as _json
+    filenames: list[str] = []
+    try:
+        parsed = _json.loads(report.image_filename)
+        filenames = parsed if isinstance(parsed, list) else [str(parsed)]
+    except (ValueError, TypeError):
+        filenames = [report.image_filename]
+    for name in filenames:
+        path = BUG_REPORT_UPLOAD_DIR / name
+        if path.exists():
+            path.unlink()
 
 
 @router.get('/health')
@@ -220,6 +244,13 @@ def _task_type_id_from_name(name: str) -> str:
     return f'task_type:{slug}'
 
 
+def _normalize_task_type_arm_mode(arm_mode: str) -> str:
+    normalized = arm_mode.strip()
+    if normalized not in TASK_TYPE_ARM_MODES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='任务类型手臂模式不支持')
+    return normalized
+
+
 def _ensure_task_type_name_available(db: Session, name: str, *, exclude_id: str | None = None) -> None:
     query = db.query(TaskType).filter(TaskType.name == name)
     if exclude_id:
@@ -277,11 +308,13 @@ def create_task_type(
     require_roles(current_user, 'admin', 'qc_manager')
     name = _normalize_task_type_name(payload.name)
     description = payload.description.strip()
+    arm_mode = _normalize_task_type_arm_mode(payload.armMode)
     _ensure_task_type_name_available(db, name)
     task_type = TaskType(
         id=_task_type_id_from_name(name),
         name=name,
         description=description or name,
+        arm_mode=arm_mode,
         is_active=True,
         total_batches=0,
         total_episodes=0,
@@ -316,9 +349,11 @@ def update_task_type(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='待分类任务类型不可编辑')
     name = _normalize_task_type_name(payload.name)
     description = payload.description.strip()
+    arm_mode = _normalize_task_type_arm_mode(payload.armMode)
     _ensure_task_type_name_available(db, name, exclude_id=task_type.id)
     task_type.name = name
     task_type.description = description or name
+    task_type.arm_mode = arm_mode
     for batch in db.query(Batch).filter(Batch.task_type_id == task_type.id).all():
         for episode in batch.episodes:
             episode.task_name = task_type.name
@@ -788,6 +823,157 @@ def qc_history_export(
     return build_history_export_payload(db, selected_batch_id, normalized_scope)
 
 
+@router.get('/bug-reports', response_model=BugReportListPayloadSchema)
+def list_bug_reports(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    require_roles(current_user, 'admin')
+    items = db.query(BugReport).order_by(
+        BugReport.status.asc(),
+        BugReport.created_at.desc(),
+    ).all()
+    return {'items': [serialize_bug_report(item) for item in items]}
+
+
+@router.post('/bug-reports', response_model=BugReportSchema, status_code=status.HTTP_201_CREATED)
+async def create_bug_report(
+    description: str = Form(''),
+    images: list[UploadFile] = File(default=[]),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    normalized_description = description.strip()
+    has_images = any(img.filename for img in images)
+    if not normalized_description and not has_images:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='请至少填写描述或粘贴一张截图')
+    if len(normalized_description) > 5000:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='描述不能超过 5000 个字符')
+
+    report_id = f'bug_{uuid.uuid4().hex[:16]}'
+    now = _utcnow()
+    report = BugReport(
+        id=report_id,
+        description=normalized_description,
+        status='open',
+        reporter_user_id=current_user.id,
+        reporter_name=current_user.name,
+        created_at=now,
+        updated_at=now,
+    )
+
+    saved_filenames: list[str] = []
+    for idx, img in enumerate(images):
+        if not img.filename:
+            continue
+        content_type = (img.content_type or '').lower().strip()
+        extension = ALLOWED_BUG_IMAGE_TYPES.get(content_type)
+        if not extension:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='仅支持 PNG、JPEG、WebP 图片')
+        data = await img.read()
+        if not data:
+            continue
+        if len(data) > 5 * 1024 * 1024:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='单张截图不能超过 5MB')
+        BUG_REPORT_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        filename = f'{report_id}_{idx}.{extension}'
+        (BUG_REPORT_UPLOAD_DIR / filename).write_bytes(data)
+        saved_filenames.append(filename)
+
+    if saved_filenames:
+        import json as _json
+        report.image_filename = _json.dumps(saved_filenames)
+        report.image_content_type = (images[0].content_type or '') if saved_filenames else None
+
+    db.add(report)
+    db.add(AuditEvent(
+        id=_audit_event_id('bug_report_create', report_id),
+        operator=current_user.name,
+        action='提交BUG',
+        target=report_id,
+        detail=f'status={report.status}',
+        time=now,
+        event_type='business_action',
+        severity='info',
+        operator_id=current_user.id,
+    ))
+    db.commit()
+    db.refresh(report)
+    return serialize_bug_report(report)
+
+
+@router.get('/bug-reports/{report_id}/image/{image_index}')
+def get_bug_report_image(report_id: str, image_index: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+    report = db.query(BugReport).filter(BugReport.id == report_id).first()
+    if not report or not report.image_filename:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='截图不存在')
+    import json as _json
+    filenames: list[str] = []
+    try:
+        parsed = _json.loads(report.image_filename)
+        filenames = parsed if isinstance(parsed, list) else [str(parsed)]
+    except (ValueError, TypeError):
+        filenames = [report.image_filename]
+    if image_index < 0 or image_index >= len(filenames):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='截图索引越界')
+    image_path = BUG_REPORT_UPLOAD_DIR / filenames[image_index]
+    if not image_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='截图文件不存在')
+    return FileResponse(image_path, media_type=report.image_content_type or 'application/octet-stream', filename=filenames[image_index])
+
+
+@router.patch('/bug-reports/{report_id}/status', response_model=BugReportSchema)
+def update_bug_report_status(
+    report_id: str,
+    payload: BugReportStatusUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin')
+    normalized_status = payload.status.strip().lower()
+    if normalized_status not in {'open', 'fixed'}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='BUG 状态仅支持 open 或 fixed')
+    report = db.query(BugReport).filter(BugReport.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='BUG 记录不存在')
+    report.status = normalized_status
+    report.updated_at = _utcnow()
+    db.add(AuditEvent(
+        id=_audit_event_id('bug_report_status', report_id),
+        operator=current_user.name,
+        action='更新BUG状态',
+        target=report_id,
+        detail=f'status={normalized_status}',
+        time=report.updated_at,
+        event_type='business_action',
+        severity='info',
+        operator_id=current_user.id,
+    ))
+    db.commit()
+    db.refresh(report)
+    return serialize_bug_report(report)
+
+
+@router.delete('/bug-reports/{report_id}', status_code=status.HTTP_204_NO_CONTENT)
+def delete_bug_report(report_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    require_roles(current_user, 'admin')
+    report = db.query(BugReport).filter(BugReport.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='BUG 记录不存在')
+    _delete_bug_report_image(report)
+    db.add(AuditEvent(
+        id=_audit_event_id('bug_report_delete', report_id),
+        operator=current_user.name,
+        action='删除BUG',
+        target=report_id,
+        detail='deleted',
+        time=_utcnow(),
+        event_type='business_action',
+        severity='warning',
+        operator_id=current_user.id,
+    ))
+    db.delete(report)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get('/episodes/{episode_id}/qc-context', response_model=ManualQcContextSchema)
 def manual_qc_context(episode_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     episode = db.query(Episode).filter(Episode.id == episode_id).first()
@@ -817,21 +1003,34 @@ def telemetry_curve(episode_id: str, db: Session = Depends(get_db), current_user
     if not telemetry_key:
         raise HTTPException(status_code=404, detail='Telemetry data not available')
 
+    # Read metadata.json for device DOF config
+    arm_left_dof, arm_right_dof = 7, 7
+    hand_left_dof, hand_right_dof = 6, 6
+    metadata_key = obj_map.get('metadata_json') or obj_map.get('metadata')
+    if metadata_key:
+        try:
+            meta_bytes = minio_client.get_object(bucket, metadata_key).read()
+            meta = json.loads(meta_bytes)
+            dev = meta.get('device') or meta
+            arm_joints = (dev.get('arm') or {}).get('joints') or {}
+            hand_joints = (dev.get('hand') or {}).get('joints') or {}
+            arm_left_dof = int(arm_joints.get('left_dof', 7))
+            arm_right_dof = int(arm_joints.get('right_dof', 7))
+            hand_left_dof = int(hand_joints.get('left_dof', 6))
+            hand_right_dof = int(hand_joints.get('right_dof', 6))
+        except Exception:
+            pass  # fall back to defaults
+
     with _read_minio_npz(bucket, telemetry_key) as telemetry:
         ts = telemetry['timestamps'].astype(np.float64)
         t_rel = (ts - ts[0]).tolist()
         qpos = telemetry['qpos'].astype(np.float64)
         actions = telemetry['actions'].astype(np.float64)
 
-        # Auto-detect arm/hand dims
-        qpos_range = np.max(qpos, axis=0) - np.min(qpos, axis=0)
-        active = qpos_range > 1e-8
-        qpos_active = np.max(np.abs(qpos[:, active]), axis=0)
-        arm_mask = qpos_active <= 3.5
-        hand_mask = ~arm_mask
-        active_idx = np.where(active)[0]
-        arm_dims = active_idx[arm_mask].tolist()
-        hand_dims = active_idx[hand_mask].tolist()
+        arm_total = arm_left_dof + arm_right_dof
+        hand_total = hand_left_dof + hand_right_dof
+        arm_dims = list(range(arm_total))
+        hand_dims = list(range(arm_total, arm_total + hand_total))
 
         # Downsample if > 500 frames
         n = len(t_rel)
@@ -839,15 +1038,15 @@ def telemetry_curve(episode_id: str, db: Session = Depends(get_db), current_user
         idx = list(range(0, n, stride))
         t_sampled = [t_rel[i] for i in idx]
 
-        qpos_arm = qpos[:, arm_dims][idx, :].tolist() if arm_dims else []
-        qpos_hand = qpos[:, hand_dims][idx, :].tolist() if hand_dims else []
-        actions_arm = actions[:, arm_dims][idx, :].tolist() if arm_dims else []
-        actions_hand = actions[:, hand_dims][idx, :].tolist() if hand_dims else []
+        qpos_arm = qpos[:, :arm_total][idx, :].tolist() if arm_total else []
+        qpos_hand = qpos[:, arm_total:arm_total + hand_total][idx, :].tolist() if hand_total else []
+        actions_arm = actions[:, :arm_total][idx, :].tolist() if arm_total else []
+        actions_hand = actions[:, arm_total:arm_total + hand_total][idx, :].tolist() if hand_total else []
 
     return {
         'timestamps': t_sampled,
-        'armDims': len(arm_dims),
-        'handDims': len(hand_dims),
+        'armDims': arm_total,
+        'handDims': hand_total,
         'qposArm': qpos_arm,
         'qposHand': qpos_hand,
         'actionsArm': actions_arm,

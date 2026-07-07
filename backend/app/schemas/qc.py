@@ -57,6 +57,7 @@ class TaskTypeSchema(BaseModel):
     id: str
     name: str
     description: str
+    armMode: str
     isActive: bool
     totalBatches: int
     totalEpisodes: int
@@ -65,11 +66,13 @@ class TaskTypeSchema(BaseModel):
 class TaskTypeCreateRequest(BaseModel):
     name: str
     description: str = ''
+    armMode: str = 'both_arms'
 
 
 class TaskTypeUpdateRequest(BaseModel):
     name: str
     description: str = ''
+    armMode: str = 'both_arms'
 
 
 class TaskTypeBatchOperationRequest(BaseModel):
@@ -476,6 +479,25 @@ class BatchDispatchAssignRequest(BaseModel):
 class ManualQcClaimResponseSchema(BaseModel):
     status: str
     reviewLock: ReviewLockSchema
+
+
+class BugReportSchema(BaseModel):
+    id: str
+    description: str
+    status: str
+    imageUrls: list[str]
+    reporterUserId: str
+    reporterName: str
+    createdAt: str
+    updatedAt: str
+
+
+class BugReportListPayloadSchema(BaseModel):
+    items: list[BugReportSchema]
+
+
+class BugReportStatusUpdateRequest(BaseModel):
+    status: str
 
 
 class ManualQcSubmitRequest(BaseModel):

@@ -1,22 +1,25 @@
 <script setup lang="ts">
 import {
+  ArrowDown,
+  CollectionTag,
   Files,
   Finished,
   FolderOpened,
   Monitor,
   Setting,
   User,
-  VideoCamera,
-  CollectionTag
+  VideoCamera
 } from '@element-plus/icons-vue'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
+import BugReportDialog from './BugReportDialog.vue'
 import { useSessionStore } from '../stores/session'
 
 const route = useRoute()
 const router = useRouter()
 const session = useSessionStore()
+const bugDialogVisible = ref(false)
 
 const menuItems = [
   { path: '/dashboard', label: '工作台', icon: Monitor, roles: ['admin', 'qc_manager', 'viewer'] },
@@ -44,6 +47,20 @@ const logout = async () => {
     router.push('/login')
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '退出登录失败')
+  }
+}
+
+const handleUserCommand = async (command: string) => {
+  if (command === 'settings') {
+    router.push('/settings')
+    return
+  }
+  if (command === 'bug-management') {
+    router.push('/bug-management')
+    return
+  }
+  if (command === 'logout') {
+    await logout()
   }
 }
 </script>
@@ -87,13 +104,26 @@ const logout = async () => {
         </div>
         <div class="topbar-actions">
           <el-tag type="success" effect="light">LAN 内网访问</el-tag>
+          <el-button plain class="qc-btn-plain" @click="bugDialogVisible = true">BUG提交</el-button>
           <el-button v-if="session.user?.role !== 'reviewer'" type="primary" plain class="qc-btn-plain" @click="router.push('/dashboard')">任务派发</el-button>
-          <el-button plain @click="logout">退出登录</el-button>
-          <el-avatar>{{ session.user?.avatar ?? '?' }}</el-avatar>
-          <div class="user-meta">
-            <div>{{ session.user?.name ?? '未登录' }}</div>
-            <span>{{ session.user?.role ?? '-' }}</span>
-          </div>
+          <el-dropdown trigger="click" @command="handleUserCommand">
+            <div class="user-dropdown-trigger">
+              <el-button plain @click.stop="logout">退出登录</el-button>
+              <el-avatar>{{ session.user?.avatar ?? '?' }}</el-avatar>
+              <div class="user-meta">
+                <div>{{ session.user?.name ?? '未登录' }}</div>
+                <span>{{ session.user?.role ?? '-' }}</span>
+              </div>
+              <el-icon class="dropdown-arrow"><ArrowDown /></el-icon>
+            </div>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item v-if="isAdmin" command="bug-management">BUG管理</el-dropdown-item>
+                <el-dropdown-item v-if="isAdmin" command="settings">设置</el-dropdown-item>
+                <el-dropdown-item command="logout">退出登录</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </el-header>
 
@@ -102,6 +132,8 @@ const logout = async () => {
       </el-main>
     </el-container>
   </el-container>
+
+  <BugReportDialog v-model="bugDialogVisible" />
 </template>
 
 <style scoped>
@@ -122,5 +154,16 @@ const logout = async () => {
 .settings-entry:hover {
   color: #fff;
   background: rgba(37, 99, 235, 0.22);
+}
+
+.user-dropdown-trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.dropdown-arrow {
+  color: #64748b;
 }
 </style>

@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api import router
-from app.core.config import DEFAULT_SECRET_KEY, get_settings
+from app.core.config import BUG_REPORT_UPLOAD_DIR, DEFAULT_SECRET_KEY, get_settings
 from app.middleware.audit_middleware import AuditMiddleware
 
 settings = get_settings()
@@ -27,6 +27,7 @@ app.include_router(router)
 
 @app.on_event('startup')
 async def _startup():
+    BUG_REPORT_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     from app.core.logging_config import setup_logging
     setup_logging()
     from app.services.scan_scheduler import start_scheduler
