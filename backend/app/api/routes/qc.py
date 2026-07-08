@@ -1803,3 +1803,138 @@ def admin_bulk_reassign(
     return ReviewerTaskManager.bulk_reassign(
         db, payload.get('taskIds', []), payload.get('toReviewerId', ''), current_user.id, payload.get('reason', '')
     )
+
+
+# ── AI QC Explain ──────────────────────────────────────────────
+
+@router.post('/ai/explain')
+def ai_explain(
+    payload: dict = Body(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from app.ai_qc.schemas import AiExplainRequest
+    from app.ai_qc.service import AiQcService
+
+    gen_cfg = GeneralConfig.get_params(db)
+    host = str(gen_cfg.get('ai_model_host', '127.0.0.1'))
+    port = int(gen_cfg.get('ai_model_port', 11434))
+    ollama_url = f"http://{host}:{port}"
+
+    svc = AiQcService(
+        enabled=settings.ai_explain_enabled,
+        ollama_base_url=ollama_url,
+        ollama_model=settings.ollama_model,
+        timeout_seconds=settings.ai_explain_timeout_seconds,
+    )
+    request = AiExplainRequest(**payload)
+    response = svc.explain(request)
+    return response.model_dump()
+
+
+# ── AI Assistant (Phase 1: conversations + chat) ────────────────
+
+@router.post('/ai-assistant/conversations')
+def ai_create_conversation(
+    payload: dict = Body(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """创建或恢复对话。如果该 episode+user 已有活跃对话则恢复。"""
+    from app.ai_qc.conversation_store import get_or_create_conversation
+    from app.ai_qc.schemas import AiConversationDetail, AiMessageItem
+
+    conv = get_or_create_conversation(
+        db,
+        episode_id=str(payload.get('episodeId', '')),
+        user_id=current_user.id,
+        title=payload.get('title'),
+    )
+    msgs = conv.messages or []
+    return AiConversationDetail(
+        conversationId=conv.id,
+        episodeId=conv.episode_id,
+        title=conv.title,
+        status=conv.status,
+        messages=[
+            AiMessageItem(
+                id=m.id, role=m.role, content=m.content,
+                provider=m.provider, model=m.model,
+                latencyMs=m.latency_ms, createdAt=m.created_at,
+            )
+            for m in msgs
+        ],
+    ).model_dump()
+
+
+@router.get('/ai-assistant/conversations/{conversation_id}/messages')
+def ai_get_messages(
+    conversation_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """获取指定对话的消息列表。"""
+    from app.ai_qc.chat_service import AiChatService
+    svc = AiChatService()
+    detail = svc.get_conversation_detail(db, conversation_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    return detail.model_dump()
+
+
+@router.post('/ai-assistant/chat')
+def ai_chat(
+    payload: dict = Body(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """发送消息并获取 AI 回复（非流式）。"""
+    from app.ai_qc.chat_service import AiChatService
+    from app.ai_qc.schemas import AiChatRequest
+
+    gen_cfg = GeneralConfig.get_params(db)
+    host = str(gen_cfg.get('ai_model_host', '127.0.0.1'))
+    port = int(gen_cfg.get('ai_model_port', 11434))
+
+    svc = AiChatService(
+        enabled=settings.ai_explain_enabled,
+        ollama_base_url=f"http://{host}:{port}",
+        ollama_model=settings.ollama_model,
+        timeout_seconds=settings.ai_explain_timeout_seconds,
+    )
+    request = AiChatRequest(**payload)
+    response = svc.chat(db, request, current_user.id)
+    return response.model_dump(mode='json')
+
+
+@router.post('/ai-assistant/chat/stream')
+def ai_chat_stream(
+    payload: dict = Body(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """发送消息并流式获取 AI 回复（SSE）。"""
+    from app.ai_qc.chat_service import AiChatService
+    from app.ai_qc.schemas import AiChatRequest
+    from starlette.responses import StreamingResponse
+
+    gen_cfg = GeneralConfig.get_params(db)
+    host = str(gen_cfg.get('ai_model_host', '127.0.0.1'))
+    port = int(gen_cfg.get('ai_model_port', 11434))
+
+    svc = AiChatService(
+        enabled=settings.ai_explain_enabled,
+        ollama_base_url=f"http://{host}:{port}",
+        ollama_model=settings.ollama_model,
+        timeout_seconds=settings.ai_explain_timeout_seconds,
+    )
+    request = AiChatRequest(**payload)
+    return StreamingResponse(
+        svc.chat_stream(db, request, current_user.id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # 禁用 nginx 缓冲
+        },
+    )

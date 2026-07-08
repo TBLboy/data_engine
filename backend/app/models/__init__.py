@@ -1,4 +1,5 @@
 from app.core.db import Base
+from app.models.ai_assistant import AiConversation, AiMessage
 from app.models.control_plane import (
     ClassificationRule,
     DiscoveredPrefix,
@@ -18,6 +19,8 @@ from app.models.user import User
 
 __all__ = [
     'Base',
+    'AiConversation',
+    'AiMessage',
     'GeneralConfig',
     'L3V2Config',
     'AuditEvent',

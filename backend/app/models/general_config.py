@@ -8,6 +8,8 @@ from app.core.db import Base
 def default_general_config() -> dict:
     return {
         'batch_reject_threshold': 0.10,
+        'ai_model_host': '127.0.0.1',
+        'ai_model_port': 11434,
     }
 
 

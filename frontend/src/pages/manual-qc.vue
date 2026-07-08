@@ -5,7 +5,10 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
 import QcReasonPicker from '../components/QcReasonPicker.vue'
+import AiAssistantAnchor from '../components/ai/AiAssistantAnchor.vue'
+import AiAssistantPanel from '../components/ai/AiAssistantPanel.vue'
 import { claimManualQc, fetchManualQcContext, fetchTelemetryCurve, refreshManualQcMedia, releaseManualQc, submitManualQc, type ManualQcContext, type TelemetryCurve } from '../api/client'
+import { useAiAssistant } from '../composables/useAiAssistant'
 import { useSessionStore } from '../stores/session'
 import { triggerCelebration } from '../composables/useCelebration'
 import { Chart, registerables } from 'chart.js'
@@ -75,6 +78,7 @@ Chart.register(...registerables, timelineOverlayPlugin)
 const route = useRoute()
 const router = useRouter()
 const session = useSessionStore()
+const ai = useAiAssistant()
 const result = ref<'pass' | 'fail'>('pass')
 const primaryReason = ref('')
 const currentFrame = ref(0)
@@ -100,6 +104,7 @@ const curveMode = ref<'arm' | 'hand'>('arm')
 const chartCanvasL = ref<HTMLCanvasElement | null>(null)
 const chartCanvasR = ref<HTMLCanvasElement | null>(null)
 const chartHoverTimeSec = ref<number | null>(null)
+const selectedMetricId = ref('')
 const chartDragging = ref(false)
 const suppressFrameWatcher = ref(false)
 const chartPlaybackCursorLeftPx = ref(0)
@@ -423,6 +428,71 @@ const loadCurveData = async () => {
   } catch (err) {
     curveData.value = null
     curveError.value = '遥操作曲线数据暂时不可用'
+  }
+}
+
+function buildAiPayload() {
+  const report = l3V2Report.value
+  if (!report) return null
+  const metrics = (report.metricResults || []).map((m: any) => ({
+    metricId: m.metricId,
+    name: m.name,
+    qualityDimension: m.qualityDimension,
+    evidenceId: m.evidenceId || '',
+    value: m.value,
+    valueText: m.valueText || '',
+    unit: m.unit || '',
+    score: m.score,
+    level: m.level,
+    description: m.description || '',
+    confidence: m.confidence ?? 1,
+    weight: m.weight ?? 1,
+  }))
+  const timelineSegments = (report.timelineSegments || []).map((s: any) => ({
+    start: s.start,
+    end: s.end,
+    startSec: s.startSec,
+    endSec: s.endSec,
+    level: s.level,
+    label: s.label,
+    sourceMetricId: s.sourceMetricId,
+    qualityDimension: s.qualityDimension || '',
+  }))
+  return {
+    episodeId: episodeId.value,
+    qMotionScore: report.trainingQualityScore,
+    qMotionLevel: report.trainingQualityLevel,
+    weightedScoreBeforeCap: null as number | null,
+    metrics,
+    timelineSegments,
+  }
+}
+
+function buildPageState() {
+  return {
+    selectedMetricId: selectedMetricId.value || '',
+    currentVideoTimeSec: (currentTimeSec.value !== undefined ? currentTimeSec.value : null) as number | null,
+    selectedTimelineSegmentId: '',
+    visibleChart: curveMode.value === 'arm' ? 'arm_qpos_actions' : 'hand_qpos_actions',
+    openedMetricPanel: '',
+  }
+}
+
+async function handleAiSend(prompt: string) {
+  const payload = buildAiPayload()
+  if (!payload) return
+  await ai.send(prompt, payload, buildPageState())
+}
+
+async function handleAiOpen() {
+  ai.open()
+  const payload = buildAiPayload()
+  if (!payload) return
+  // 从服务端恢复对话
+  await ai.loadConversation(payload.episodeId)
+  // 如果恢复后消息只有默认欢迎语，自动请求首次解释
+  if (ai.messages.value.length <= 1) {
+    await ai.send(payload.episodeId ? '' : '解释本条检测结果', payload, buildPageState())
   }
 }
 
@@ -870,18 +940,35 @@ const submit = async () => {
           <template #header>{{ l3V2Report ? 'RDDQF 训练质量评分' : 'Episode 质量评分' }}</template>
 
           <div v-if="l3V2Report" class="l3v2-panel">
-            <div class="score-ring" :class="trainingQualityLevel">
-              <svg viewBox="0 0 120 120" class="score-ring-svg">
-                <circle cx="60" cy="60" r="52" fill="none" stroke="#e2e8f0" stroke-width="10" />
-                <circle cx="60" cy="60" r="52" fill="none" stroke="currentColor" stroke-width="10"
-                  stroke-linecap="round" transform="rotate(-90 60 60)"
-                  :stroke-dasharray="2 * Math.PI * 52"
-                  :stroke-dashoffset="2 * Math.PI * 52 * (1 - scoreRingPercent / 100)" />
-              </svg>
-              <div class="score-ring-text">
-                <strong>{{ trainingQualityScore?.toFixed(1) || '--' }}</strong>
-                <span>{{ l3V2Report.scoreLabel }}</span>
+            <div class="score-ring-wrapper">
+              <div class="score-ring" :class="trainingQualityLevel">
+                <svg viewBox="0 0 120 120" class="score-ring-svg">
+                  <circle cx="60" cy="60" r="52" fill="none" stroke="#e2e8f0" stroke-width="10" />
+                  <circle cx="60" cy="60" r="52" fill="none" stroke="currentColor" stroke-width="10"
+                    stroke-linecap="round" transform="rotate(-90 60 60)"
+                    :stroke-dasharray="2 * Math.PI * 52"
+                    :stroke-dashoffset="2 * Math.PI * 52 * (1 - scoreRingPercent / 100)" />
+                </svg>
+                <div class="score-ring-text">
+                  <strong>{{ trainingQualityScore?.toFixed(1) || '--' }}</strong>
+                  <span>{{ l3V2Report.scoreLabel }}</span>
+                </div>
               </div>
+              <AiAssistantAnchor
+                class="score-ring-ai-anchor"
+                :status="ai.status.value"
+                :active="ai.isOpen.value"
+                @open="handleAiOpen"
+                @close="ai.close"
+              />
+              <AiAssistantPanel
+                v-if="ai.isOpen.value"
+                :messages="ai.messages.value"
+                :is-thinking="ai.isThinking.value"
+                :provider-status="ai.providerStatus.value"
+                @send="handleAiSend"
+                @close="ai.close"
+              />
             </div>
             <p class="l3v2-summary">{{ l3V2Report.summary }}</p>
             <div class="telemetry-profile">
@@ -1137,6 +1224,17 @@ const submit = async () => {
 .chart-cursor-line.hover {
   background: #111827;
   opacity: 0.95;
+}
+
+.score-ring-wrapper {
+  position: relative;
+}
+
+.score-ring-ai-anchor {
+  position: absolute;
+  top: -2px;
+  right: 36px;
+  z-index: 10;
 }
 
 .l3v2-panel .score-ring.good {

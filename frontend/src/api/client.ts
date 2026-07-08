@@ -23,7 +23,12 @@ import type {
   ReviewerWorkload,
   TaskType,
   TaskTypeDetailPayload,
-  UserProfile
+  UserProfile,
+  AiExplainRequest,
+  AiExplainResponse,
+  AiChatRequest,
+  AiChatResponse,
+  AiConversationDetail,
 } from '../types/qc'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') || '/api'
@@ -499,7 +504,7 @@ export async function updateL3V2Params(params: L3V2Params) {
 }
 
 // General configuration
-export type GeneralConfig = Record<string, number>
+export type GeneralConfig = Record<string, number | string>
 
 export async function fetchGeneralConfig() {
   return request<GeneralConfig>('/admin/general-config')
@@ -636,5 +641,31 @@ export async function bulkReassignTasks(taskIds: string[], toReviewerId: string,
   return request<{ success: boolean; results: any[] }>('/admin/qc-tasks/bulk-reassign', {
     method: 'POST',
     body: JSON.stringify({ taskIds, toReviewerId, reason })
+  })
+}
+
+export async function fetchAiExplain(payload: AiExplainRequest) {
+  return request<AiExplainResponse>('/ai/explain', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+// AI Assistant Phase 1
+export async function fetchOrCreateConversation(episodeId: string, title?: string) {
+  return request<AiConversationDetail>('/ai-assistant/conversations', {
+    method: 'POST',
+    body: JSON.stringify({ episodeId, title })
+  })
+}
+
+export async function fetchConversationMessages(conversationId: string) {
+  return request<AiConversationDetail>(`/ai-assistant/conversations/${conversationId}/messages`)
+}
+
+export async function postChatMessage(payload: AiChatRequest) {
+  return request<AiChatResponse>('/ai-assistant/chat', {
+    method: 'POST',
+    body: JSON.stringify(payload)
   })
 }

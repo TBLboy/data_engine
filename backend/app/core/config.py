@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     minio_default_bucket: str = Field(default='yaocao', alias='MINIO_DEFAULT_BUCKET')
     scan_cron_hour: int = Field(default=0, alias='SCAN_CRON_HOUR')
     scan_cron_minute: int = Field(default=0, alias='SCAN_CRON_MINUTE')
+    # AI QC Explain
+    ai_explain_enabled: bool = Field(default=False, alias='AI_EXPLAIN_ENABLED')
+    ai_explain_provider: str = Field(default='ollama', alias='AI_EXPLAIN_PROVIDER')
+    ollama_base_url: str = Field(default='http://localhost:11434', alias='OLLAMA_BASE_URL')
+    ollama_model: str = Field(default='qwen2.5:7b', alias='OLLAMA_MODEL')
+    ai_explain_timeout_seconds: int = Field(default=10, alias='AI_EXPLAIN_TIMEOUT_SECONDS')
     database_url: str = Field(
         default=f'sqlite:///{DEFAULT_SQLITE_PATH}',
         alias='DATABASE_URL'

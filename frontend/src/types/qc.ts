@@ -469,3 +469,77 @@ export interface ReviewerTask {
   createdAt: string | null
   lockAcquiredAt: string | null
 }
+
+// AI QC Explain
+export interface AiExplainRequest {
+  episodeId?: string
+  qMotionScore: number
+  qMotionLevel: string
+  weightedScoreBeforeCap?: number | null
+  metrics: any[]
+  timelineSegments?: any[]
+  userPrompt?: string
+}
+
+export interface AiExplainResponse {
+  enabled: boolean
+  source: string
+  model: string | null
+  latencyMs: number
+  explanation: string
+  fallbackUsed: boolean
+  mentionedMetricIds: string[]
+  warnings: string[]
+}
+
+// AI Assistant Phase 1: Conversations + Chat
+export interface PageState {
+  selectedMetricId?: string
+  currentVideoTimeSec?: number | null
+  selectedTimelineSegmentId?: string
+  visibleChart?: string
+  openedMetricPanel?: string
+}
+
+export interface AiChatRequest {
+  conversationId?: string
+  episodeId?: string
+  message: string
+  pageState?: PageState | null
+  qMotionScore?: number | null
+  qMotionLevel?: string | null
+  weightedScoreBeforeCap?: number | null
+  metrics?: any[]
+  timelineSegments?: any[]
+  stream?: boolean
+}
+
+export interface AiMessageItem {
+  id: string
+  role: string
+  content: string
+  provider?: string | null
+  model?: string | null
+  latencyMs?: number | null
+  createdAt?: string | null
+}
+
+export interface AiConversationDetail {
+  conversationId: string
+  episodeId: string
+  title?: string | null
+  status: string
+  messages: AiMessageItem[]
+}
+
+export interface AiChatResponse {
+  messageId: string
+  conversationId: string
+  status: string
+  answer: string
+  source: string
+  model?: string | null
+  latencyMs: number
+  fallbackUsed: boolean
+  warnings: string[]
+}

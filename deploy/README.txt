@@ -115,3 +115,144 @@ docker compose -f deploy/docker-compose.yml down -v
 
 # 然后从第三步重新开始
 ```
+
+---
+
+## AI 质检助手模块
+
+平台支持通过本地大模型（Ollama）对 L3 自动质检结果进行中文解读，
+降低质检员判读门槛。
+
+### 架构
+
+```
+┌─────────────────────────┐      ┌─────────────────────┐
+│  Robot QC 服务器         │      │  AI 模型服务器        │
+│                         │      │                     │
+│  backend (Docker)       │ HTTP │  Ollama serve       │
+│  └─ llm_client.py ──────┼─────▶│  └─ qwen2.5:7b     │
+│     OLLAMA_BASE_URL=    │ LAN  │     :11434          │
+│     http://192.168.x.x  │      │                     │
+│                         │      │  RTX 4090 24GB      │
+└─────────────────────────┘      └─────────────────────┘
+```
+
+模型服务器和平台服务器可部署在同一台或不同机器，仅需局域网互通。
+
+### 安装 Ollama
+
+```bash
+# 1. 下载 Ollama（Linux）
+curl -fsSL https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tar.zst \
+  -o /tmp/ollama.tar.zst
+zstd -d /tmp/ollama.tar.zst -o /tmp/ollama.tar
+mkdir -p ~/.local
+tar -xf /tmp/ollama.tar -C ~/.local/
+chmod +x ~/.local/bin/ollama
+```
+
+### 启动 Ollama
+
+```bash
+# 模型存储目录 + 监听所有网卡（允许其他机器访问）
+OLLAMA_MODELS=/path/to/models OLLAMA_HOST=0.0.0.0:11434 ~/.local/bin/ollama serve &
+
+# 仅本机访问（默认行为）
+OLLAMA_MODELS=/path/to/models ~/.local/bin/ollama serve &
+```
+
+关键环境变量：
+
+| 变量 | 作用 | 默认值 |
+|------|------|--------|
+| OLLAMA_MODELS | 模型文件存储目录 | ~/.ollama/models |
+| OLLAMA_HOST | 监听地址和端口 | 127.0.0.1:11434 |
+
+### 下载模型
+
+```bash
+OLLAMA_MODELS=/path/to/models ~/.local/bin/ollama pull qwen2.5:7b
+```
+
+常用模型：
+
+| 模型 | 大小 | 说明 |
+|------|------|------|
+| qwen2.5:7b | 4.7GB | 推荐，7.6B 参数，Q4_K_M 量化，中文优秀 |
+| qwen2.5:14b | 8.9GB | 更强推理，需更多显存 |
+| qwen2.5:32b | 19GB | 最强，需 RTX 4090 24G 几乎满载 |
+
+### 模型管理
+
+```bash
+~/.local/bin/ollama list          # 查看已下载的模型
+~/.local/bin/ollama rm qwen2.5:7b # 删除模型
+pkill ollama                       # 停止服务
+```
+
+### 外部访问模型 API
+
+启动后直接 HTTP 请求 11434 端口：
+
+```bash
+# 查看模型列表
+curl http://<ip>:11434/api/tags
+
+# 问答
+curl http://<ip>:11434/api/chat -d '{
+  "model": "qwen2.5:7b",
+  "messages": [{"role": "user", "content": "你好"}],
+  "stream": false
+}'
+```
+
+### 平台配置
+
+1. 进入设置页 → 通用 tab → "AI 模型服务器"
+2. 填入模型服务器的 IP 和端口（默认 11434）
+3. 保存，立即生效，无需重启
+
+环境变量（在 docker-compose.yml 中配置）：
+
+```env
+AI_EXPLAIN_ENABLED=true         # 是否启用 LLM 调用
+OLLAMA_MODEL=qwen2.5:7b         # 模型名称
+AI_EXPLAIN_TIMEOUT_SECONDS=30   # 调用超时
+```
+
+默认 `AI_EXPLAIN_ENABLED=false`，显式设为 `true` 后才调用 LLM。
+LLM 不可用时自动回退到规则模板解释。
+
+### 调用链
+
+```
+前端点击 AI 按钮
+  → POST /api/ai/explain
+    → GeneralConfig 读取 host:port
+    → httpx.post(http://<host>:<port>/api/chat)
+      → qwen2.5:7b 返回解释
+    → 前端展示
+```
+
+### 常见问题
+
+**Q: Ollama 启动后其他机器访问不通？**
+确保 OLLAMA_HOST=0.0.0.0:11434，防火墙放行 11434 端口。
+
+**Q: 模型下载慢？**
+使用代理：
+```bash
+HTTPS_PROXY=http://127.0.0.1:10808 ~/.local/bin/ollama pull qwen2.5:7b
+```
+
+**Q: 显存不够？**
+换更小的量化版本：
+```bash
+~/.local/bin/ollama pull qwen2.5:3b
+```
+
+**Q: 如何验证 GPU 推理生效？**
+查看 Ollama 启动日志，应出现：
+```
+msg="inference compute" library=CUDA compute=8.9 name="NVIDIA GeForce RTX 4090"
+```

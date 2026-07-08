@@ -263,6 +263,41 @@ onMounted(load)
               </el-col>
             </el-row>
           </el-card>
+
+          <el-card shadow="never" class="qc-card" style="margin-top: 16px">
+            <template #header>
+              <div>
+                <strong>AI 模型服务器</strong>
+                <div class="group-desc">配置本地大模型服务的连接地址，用于 AI 辅助质检解读</div>
+              </div>
+            </template>
+            <el-alert type="info" :closable="false" style="margin-bottom: 16px">
+              模型服务器需与平台在同一局域网内。修改后立即生效，无需重启服务。
+            </el-alert>
+            <el-row :gutter="20">
+              <el-col :span="12">
+                <div class="field-label">服务器 IP 地址</div>
+                <el-input
+                  v-model="generalConfig.ai_model_host"
+                  placeholder="127.0.0.1"
+                  style="width: 100%"
+                />
+                <div class="field-hint">模型服务器所在机器的局域网 IP，如 192.168.1.100</div>
+              </el-col>
+              <el-col :span="12">
+                <div class="field-label">端口</div>
+                <el-input-number
+                  v-model="generalConfig.ai_model_port"
+                  :step="1"
+                  :min="1"
+                  :max="65535"
+                  controls-position="right"
+                  style="width: 100%"
+                />
+                <div class="field-hint">Ollama 默认端口为 11434</div>
+              </el-col>
+            </el-row>
+          </el-card>
         </el-tab-pane>
 
         <el-tab-pane label="L3 v2 指标参数" name="l3v2">

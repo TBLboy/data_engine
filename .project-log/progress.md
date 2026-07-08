@@ -1,3 +1,119 @@
+## 2026-07-08 (QC Agent Phase 1 落地：持久化聊天 + conversation API + 流式 SSE + pageState)
+
+- Type: feature (major)
+- Status: backend + frontend built, Docker deployed, migration 0018 applied, API verified
+- Importance: high
+- Reusable: yes
+- Objective: 按照 `docs/qc-agent设计.md` 的 Phase 1 规划，将 AI 助手从"无状态的单次解释请求"升级为"持久化多轮对话 Copilot"
+- Design doc: `docs/qc-agent设计.md` — 完整技术评估已产出，结论：能做，分 3 阶段；Phase 1 低风险 1-2 周
+- Model plan: qwen2.5:7b → Qwen3-VL-32B-Thinking (Q4_K_M, ~19GB, HuggingFace unsloth GGUF), 下载中
+
+- Work completed:
+  - **DB 模型** (`models/ai_assistant.py`):
+    - `AiConversation`: id, episode_id, user_id, title, status, created_at, updated_at
+    - `AiMessage`: id, conversation_id, episode_id, user_id, role, content, content_json(JSONB), provider, model, latency_ms, created_at
+    - Migration `20260708_0018` 已执行到生产库
+  - **持久化层** (`conversation_store.py`):
+    - `get_or_create_conversation`: 同 episode+user 自动复用活跃对话
+    - `add_message` + `get_recent_messages`: 消息 CRUD，自动修剪超 200 条旧消息
+    - `list_user_conversations` / `get_conversation_messages`
+  - **Chat Service** (`chat_service.py`):
+    - `chat()`: conversation → persist user msg → build evidence → LLM → validator → persist assistant msg → response
+    - `chat_stream()`: SSE Generator，流式逐 token 输出 + 最终持久化
+    - 自动 fallback: LLM 不可用/校验失败 → template
+  - **API 端点** (`routes/qc.py`):
+    - `POST /api/ai-assistant/conversations` — 创建/恢复对话
+    - `GET /api/ai-assistant/conversations/{id}/messages` — 获取消息历史
+    - `POST /api/ai-assistant/chat` — 发送消息（非流式）
+    - `POST /api/ai-assistant/chat/stream` — 发送消息（SSE 流式）
+  - **Schemas 扩展** (`ai_qc/schemas.py`):
+    - PageState: selectedMetricId, currentVideoTimeSec, selectedTimelineSegmentId, visibleChart, openedMetricPanel
+    - AiChatRequest/ChatResponse, AiConversationDetail, AiMessageItem
+  - **llm_client 增强**: 新增 `call_ollama_stream()` — httpx.stream + iter_lines 逐 token yield
+  - **prompt_builder 增强**: 新增 `page_state` 参数，注入"质检员当前查看的指标/时间/曲线"
+  - **前端 useAiAssistant 重写**:
+    - `loadConversation(episodeId)`: 打开面板时从服务端恢复历史对话
+    - `send(prompt, context, pageState)`: 发送消息 + pageState 上下文
+    - conversationId 持久化，关闭重开自动恢复
+  - **前端 API client**: 新增 fetchOrCreateConversation / fetchConversationMessages / postChatMessage
+  - **前端 types**: 新增 PageState / AiChatRequest / AiChatResponse / AiConversationDetail / AiMessageItem
+  - **manual-qc.vue**: 新增 buildPageState() / selectedMetricId ref；handleAiOpen 改为先 loadConversation 再发首次解释；handleAiSend 传入 pageState
+
+- Key design decisions:
+  - **Phase 1 不做工具调用、不做多模态**：先完成持久化和上下文增强，Phase 2 再加工具层
+  - **conversation 按 episode+user 自动复用**：同一 episode 的对话不会散落多个 conversation
+  - **旧 `/api/ai/explain` 端点保留**：向后兼容，渐进迁移
+  - **后端流式 SSE 已就绪**：前端暂用非流式（等 32B 模型上了再切，因为推理时间长更需要流式）
+  - **pageState 注入 prompt**：让模型知道用户在看什么，解决"这个""这里"的指代问题
+
+- Verification:
+  - 后端 `python3 -m compileall` ✅
+  - 前端 `npm run build` ✅ (392ms)
+  - Docker build + deploy ✅
+  - Migration `20260708_0018` ✅
+  - API: create conversation → chat → close + reopen 恢复 2 条历史 ✅
+
+- Files changed (12 files):
+  - `backend/app/models/ai_assistant.py` (new)
+  - `backend/app/models/__init__.py`
+  - `backend/migrations/versions/20260708_0018_ai_assistant.py` (new)
+  - `backend/app/ai_qc/schemas.py`
+  - `backend/app/ai_qc/conversation_store.py` (new)
+  - `backend/app/ai_qc/chat_service.py` (new)
+  - `backend/app/ai_qc/llm_client.py`
+  - `backend/app/ai_qc/prompt_builder.py`
+  - `backend/app/api/routes/qc.py`
+  - `frontend/src/types/qc.ts`
+  - `frontend/src/api/client.ts`
+  - `frontend/src/composables/useAiAssistant.ts`
+  - `frontend/src/pages/manual-qc.vue`
+
+- Next steps:
+  - Qwen3-VL-32B-Thinking 模型下载完成后切换模型名测试
+  - 浏览器端完整验收：打开面板 → 多轮对话 → 关闭 → 重开恢复 → 切换 episode
+  - Phase 2 规划：NPZ/曲线工具 + 视频关键帧 + 多模态视觉证据
+
+## 2026-07-08 (AI 助手对话体验修复：prompt 重写 + 对话历史 + 校验放宽)
+
+- Type: bugfix + enhancement
+- Status: backend + frontend rebuilt, Docker deployed, API verified
+- Importance: high
+- Reusable: yes
+- Objective: 修复 AI 质检助手无论用户说什么都回复相同报告的问题，让 qwen2.5:7b 能真正进行对话
+- Root cause: 三个问题叠加导致小模型无法正常对话
+  1. **提示词太死板**：系统指令"把事实解释给质检员" + 完整 JSON 事实数据 → 7B 模型被 JSON 淹没，只会照 JSON 念报告
+  2. **没有对话历史**：每次调用都是全新请求，模型不知道之前聊了什么
+  3. **校验器过于严格**：强制每次输出都提"封顶/截断"，对话场景下不适用
+- Work completed:
+  - **prompt_builder.py 完全重写**：
+    - JSON 格式替换为自然语言文本摘要（~150 字），对 7B 模型更友好
+    - 系统指令改为对话式："问什么答什么，不要复述完整报告"
+    - 打招呼→友好回应不提数据；问概念→解释概念+结合当前数据举例；问具体指标→只回答相关部分
+    - 新增 `history` 参数支持多轮对话
+  - **schemas.py**：`AiExplainRequest` 新增 `history: list[dict[str, str]]` 字段
+  - **service.py**：传递 `history` 给 prompt builder、`is_conversation` 给 validator
+  - **validator.py 放宽**：
+    - 移除 `{` `<` 误判模式
+    - 对话模式下不强制要求提"封顶/截断"
+    - MAX_CHARS 300→400
+  - **useAiAssistant.ts**：`send()` 自动提取最近 3 轮对话作为 history 发送
+- Key insight: 小模型（7B）和大模型的 prompt 设计理念完全不同：
+  - 大模型能从大段 JSON 中提取关键信息并灵活回答
+  - 小模型会被 JSON 结构淹没，需要自然语言摘要 + 灵活的系统指令
+  - 系统指令不能太死板，否则小模型只会执行"主任务"而忽略用户实际输入
+- Verification:
+  - "哈喽" → "你好！当前 Q_motion 被封顶是因为 DI-02..."（友好开场 + 简要）
+  - "数据完整性是什么意思，为啥会影响分数" → 解释概念 + 当前 DI-02 情况
+  - "MQ-01 轨迹平滑度是干嘛的" → 只解释 MQ-01，不提其他指标
+  - 带历史追问"那 DI-02 具体是什么意思" → 基于前文继续回答
+- Files changed:
+  - `backend/app/ai_qc/prompt_builder.py` — 完全重写
+  - `backend/app/ai_qc/schemas.py` — +history 字段
+  - `backend/app/ai_qc/service.py` — 传递 history + is_conversation
+  - `backend/app/ai_qc/validator.py` — 放宽校验规则
+  - `frontend/src/composables/useAiAssistant.ts` — 发送对话历史
+- Commit: pending
+
 ## 2026-07-08 (manual QC 遥操作曲线图左侧坐标轴对齐修复)
 
 - Type: frontend bugfix + deployment
