@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -15,6 +15,8 @@ class L3V2Features:
     dt: np.ndarray
     fps: float
     duration: float
+    declared_fps: float
+    manifest_frame_count: int
     joint_action_delta_norm: np.ndarray
     joint_state_delta_norm: np.ndarray
     action_delta_arm_norm: np.ndarray
@@ -31,15 +33,26 @@ class L3V2Features:
     sync_diff_sec: np.ndarray
     dt_jitter_cv: float
     depth_dt: np.ndarray | None = None
+    actions_nan: int = 0
+    actions_inf: int = 0
+    qpos_nan: int = 0
+    qpos_inf: int = 0
+    effort_nan: int = 0
+    effort_inf: int = 0
+    qvel_nan: int = 0
+    qvel_inf: int = 0
+    dim_health_records: list[dict] = field(default_factory=list)
 
 
 class FeatureExtractor:
     """Feature layer: derive reusable numeric features from parsed telemetry."""
 
-    def __init__(self, telemetry: ParsedTelemetry, params: dict[str, Any] | None = None, *, depth_timestamps: np.ndarray | None = None):
+    def __init__(self, telemetry: ParsedTelemetry, params: dict[str, Any] | None = None, *, depth_timestamps: np.ndarray | None = None, declared_fps: float = 0.0, manifest_frame_count: int = 0):
         self.t = telemetry
         self.p = params or {}
         self.depth_timestamps = depth_timestamps
+        self.declared_fps = declared_fps
+        self.manifest_frame_count = manifest_frame_count
 
     def extract(self) -> L3V2Features:
         t_rel = self.t.t_rel
@@ -85,11 +98,26 @@ class FeatureExtractor:
         chatter = self._chatter_strength_hand(n)
         tracking = self._tracking_error_weighted(n)
 
+        # NaN/Inf guard — scan all numeric arrays
+        actions_nan = int(np.isnan(self.t.actions).sum())
+        actions_inf = int(np.isinf(self.t.actions).sum())
+        qpos_nan = int(np.isnan(self.t.qpos).sum())
+        qpos_inf = int(np.isinf(self.t.qpos).sum())
+        effort_nan = int(np.isnan(self.t.effort).sum())
+        effort_inf = int(np.isinf(self.t.effort).sum())
+        qvel_nan = int(np.isnan(self.t.qvel).sum())
+        qvel_inf = int(np.isinf(self.t.qvel).sum())
+
+        # Per-dimension health: zero-variance + MAD-based outlier detection
+        dim_health_records = self._compute_dim_health()
+
         return L3V2Features(
             t_rel=t_rel,
             dt=dt,
             fps=fps,
             duration=duration,
+            declared_fps=self.declared_fps,
+            manifest_frame_count=self.manifest_frame_count,
             joint_action_delta_norm=joint_action_delta_norm,
             joint_state_delta_norm=joint_state_delta_norm,
             action_delta_arm_norm=action_delta_arm_norm,
@@ -106,6 +134,15 @@ class FeatureExtractor:
             sync_diff_sec=sync_diff_sec_arr,
             dt_jitter_cv=jitter_cv,
             depth_dt=depth_dt,
+            actions_nan=actions_nan,
+            actions_inf=actions_inf,
+            qpos_nan=qpos_nan,
+            qpos_inf=qpos_inf,
+            effort_nan=effort_nan,
+            effort_inf=effort_inf,
+            qvel_nan=qvel_nan,
+            qvel_inf=qvel_inf,
+            dim_health_records=dim_health_records,
         )
 
     @staticmethod
@@ -169,3 +206,71 @@ class FeatureExtractor:
         elif self.t.actions_hand.shape[1]:
             out = hand_err
         return out
+
+    def _compute_dim_health(self) -> list[dict]:
+        """Per-dimension health: zero-variance (all dims) + MAD-based outlier detection (position/action only)."""
+        records: list[dict] = []
+        sources = [
+            ('arm_qpos', self.t.qpos_arm),
+            ('arm_actions', self.t.actions_arm),
+            ('arm_effort', self.t.effort_arm),
+            ('arm_qvel', self.t.qvel_arm),
+            ('hand_qpos', self.t.qpos_hand),
+            ('hand_actions', self.t.actions_hand),
+        ]
+        # Only run outlier detection on arm position/action signals;
+        # hand joints naturally jump (open↔close) and qvel/effort spiking is normal.
+        outlier_sources = {'arm_qpos', 'arm_actions'}
+        has_hand = self.t.actions_hand.ndim == 2 and self.t.actions_hand.shape[1] > 0
+        if not has_hand:
+            sources = [s for s in sources if not s[0].startswith('hand_')]
+
+        for cat, arr in sources:
+            if arr.ndim < 2 or arr.shape[1] == 0 or arr.shape[0] == 0:
+                continue
+            n_frames, n_dims = arr.shape
+            do_outlier = cat in outlier_sources
+            for d in range(n_dims):
+                dim_vals = arr[:, d].astype(np.float64)
+                std = float(np.std(dim_vals))
+                if std == 0:
+                    records.append({
+                        'label': f'{cat}_dim_{d}',
+                        'category': cat,
+                        'dim_index': d,
+                        'n_frames': n_frames,
+                        'std': 0.0,
+                        'is_zero_variance': True,
+                        'outlier_count': 0,
+                        'outlier_ratio': 0.0,
+                    })
+                    continue
+                if not do_outlier:
+                    records.append({
+                        'label': f'{cat}_dim_{d}',
+                        'category': cat,
+                        'dim_index': d,
+                        'n_frames': n_frames,
+                        'std': std,
+                        'is_zero_variance': False,
+                        'outlier_count': 0,
+                        'outlier_ratio': 0.0,
+                    })
+                    continue
+                median = float(np.median(dim_vals))
+                mad = float(np.median(np.abs(dim_vals - median)))
+                if mad < 1e-10:
+                    mad = 1e-10
+                robust_z = 0.6745 * np.abs(dim_vals - median) / mad
+                outlier_count = int((robust_z > 10).sum())
+                records.append({
+                    'label': f'{cat}_dim_{d}',
+                    'category': cat,
+                    'dim_index': d,
+                    'n_frames': n_frames,
+                    'std': std,
+                    'is_zero_variance': False,
+                    'outlier_count': outlier_count,
+                    'outlier_ratio': float(outlier_count / max(n_frames, 1)),
+                })
+        return records

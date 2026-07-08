@@ -554,12 +554,16 @@ def _build_real_manual_qc_context(db: Session, episode_id: str) -> dict | None:
         from app.services.l3_v2 import L3V2Engine
         from app.models.l3_v2_config import L3V2Config
         l3_params = L3V2Config.get_params(db)
+        declared_fps = float(manifest.get('fps', 0.0))
+        manifest_frame_count = int(manifest.get('frame_count', 0))
         l3_v2 = L3V2Engine(
             telemetry_dict,
             l3_params,
             depth_timestamps=depth_timestamps,
             dof_config=dof_config,
             arm_mode=arm_mode,
+            declared_fps=declared_fps,
+            manifest_frame_count=manifest_frame_count,
         ).compute()
 
     return {

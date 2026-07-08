@@ -62,10 +62,11 @@ def default_l3_v2_params() -> dict:
         'lq03_weight': 0.28,
 
         # ── DI-01 时间戳规则性 ──
-        'di01_jitter_weight': 0.5,
-        'di01_gap_weight': 0.3,
-        'di01_invalid_weight': 0.2,
-        'di01_gap_multiplier': 2.0,
+        'di01_jitter_weight': 0.35,
+        'di01_gap_weight': 0.25,
+        'di01_invalid_weight': 0.15,
+        'di01_fps_weight': 0.25,
+        'di01_drop_multiplier': 1.5,
         'di01_good': 0.05,
         'di01_warn': 0.15,
         'di01_bad': 0.35,
@@ -85,6 +86,14 @@ def default_l3_v2_params() -> dict:
         'di02_warn': 0.15,
         'di02_bad': 0.35,
         'di02_weight': 0.55,
+
+        # ── DI-03 维度健康 ──
+        'di03_outlier_z': 10,
+        'di03_outlier_ratio_warn': 0.01,
+
+        # ── DI-04 episode 完整性 ──
+        'di04_min_frames': 10,
+        'di04_mismatch_ratio': 0.05,
 
         # ── DX-01 执行诊断 ──
         'dx01_max_lag': 5,
@@ -108,10 +117,10 @@ def default_l3_v2_params() -> dict:
         'qf_motion_softmin_ratio': 0.2,
         'qf_learn_softmin_ratio': 0.2,
         'qf_data_softmin_ratio': 0.4,
-        'qf_data_cap_strict': 4.5,
+        'qf_data_cap_strict': 3.0,
         'qf_data_cap_moderate': 6.0,
-        'qf_data_cap_strict_threshold': 3.0,
-        'qf_data_cap_moderate_threshold': 5.0,
+        'qf_data_cap_metric_bad': 3.0,
+        'qf_data_cap_metric_warn': 5.0,
 
         # ── 评分等级 ──
         'sl_level_good': 7.5,

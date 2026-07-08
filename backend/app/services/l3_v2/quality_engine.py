@@ -31,6 +31,8 @@ EVIDENCE_META = {
     'EV-LEARN-LOW-VALUE-SEGMENT': ('低价值片段证据', '长时间低变化片段会稀释训练价值。'),
     'EV-DATA-TIMESTAMP': ('时间轴证据', '时间戳是否规则。'),
     'EV-DATA-SYNC': ('同步证据', '多模态数据是否对齐。'),
+    'EV-DATA-DIM-HEALTH': ('维度健康证据', '各传感器维度是否存在零方差或极端异常值。'),
+    'EV-DATA-EPISODE-COMPLETENESS': ('Episode 完整性证据', '帧数是否充足、声明与实际是否一致。'),
 }
 
 
@@ -76,10 +78,19 @@ class QualityEngine:
         w_data = self.p.get('qf_data_weight', 0.20)
         weighted = w_motion * s_motion + w_learn * s_learn + w_data * s_data
 
-        if s_data < self.p.get('qf_data_cap_strict_threshold', 3.0):
-            total = min(weighted, self.p.get('qf_data_cap_strict', 4.5))
-        elif s_data < self.p.get('qf_data_cap_moderate_threshold', 5.0):
-            total = min(weighted, self.p.get('qf_data_cap_moderate', 6.0))
+        # Cap Q_motion based on worst individual DI metric — a single critical
+        # failure (e.g. sync=1.6) should drag down the total regardless of other DI scores.
+        di_scores = [m.score for m in self.metrics if m.qualityDimension == 'data_integrity']
+        worst_di = min(di_scores) if di_scores else 10.0
+        strict = self.p.get('qf_data_cap_strict', 3.0)
+        moderate = self.p.get('qf_data_cap_moderate', 6.0)
+        di_bad = self.p.get('qf_data_cap_metric_bad', 3.0)
+        di_warn = self.p.get('qf_data_cap_metric_warn', 5.0)
+
+        if worst_di < di_bad:
+            total = min(weighted, strict)
+        elif worst_di < di_warn:
+            total = min(weighted, moderate)
         else:
             total = weighted
 
@@ -89,10 +100,10 @@ class QualityEngine:
             reliability_warnings.append('严重同步异常，运动与学习价值指标可信度下降')
         if di_vals.get('DI-01') and di_vals['DI-01'].level == 'bad':
             reliability_warnings.append('时间戳严重异常，时序指标可信度下降')
-        if s_data < 5.0:
-            reliability_warnings.append('Data Integrity 评分低于 5.0，Training Quality Score 已触发上限封顶')
-        if s_data < 3.0:
-            reliability_warnings.append('Data Integrity 评分低于 3.0，Training Quality Score 已触发严格上限封顶')
+        if worst_di < di_warn:
+            reliability_warnings.append(f'存在数据完整性指标评分低于 {di_warn}，Training Quality Score 已触发上限封顶 {moderate}')
+        if worst_di < di_bad:
+            reliability_warnings.append(f'存在数据完整性指标评分低于 {di_bad}，Training Quality Score 已触发严格上限封顶 {strict}')
 
         diag_warnings = []
         diag_map = {m.metricId: m for m in self.diagnostics}
@@ -132,7 +143,12 @@ class QualityEngine:
         out: list[dict] = []
         for evidence_id, items in by_evidence.items():
             label, summary = EVIDENCE_META.get(evidence_id, (evidence_id, ''))
-            score = weighted_average((m.score, m.weight) for m in items)
+            scores = [m.score for m in items]
+            weights = [m.weight for m in items]
+            if all(w <= 0 for w in weights):
+                score = sum(scores) / max(len(scores), 1)
+            else:
+                score = weighted_average((m.score, m.weight) for m in items)
             out.append({
                 'evidenceId': evidence_id,
                 'label': label,

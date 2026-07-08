@@ -69,6 +69,9 @@ class MetricEngine:
         metrics.append(self._timestamp_regularity(timeline))
         metrics.append(self._sync_validity(timeline))
         diagnostics.append(self._command_tracking_error(timeline))
+        diagnostics.append(self._data_validity())
+        metrics.append(self._dimension_health())
+        metrics.append(self._episode_completeness())
 
         if not timeline:
             end = round(float(self.f.duration), 3)
@@ -112,12 +115,12 @@ class MetricEngine:
         ))
         return MetricResult(
             metricId='MQ-01',
-            name='Trajectory Smoothness',
+            name='轨迹平滑度',
             qualityDimension='motion_quality',
             evidenceId='EV-MOTION-SMOOTHNESS',
             value=p95,
             valueText=f'{p95:.4f}',
-            unit='joint-jerk-p95',
+            unit='关节jerk-P95',
             score=score,
             level=self._level(score),
             description='机械臂关节位置三阶差分 P95，衡量加速度变化是否突兀。数值越低表示轨迹越平滑。该指标服务训练数据质量，不评价控制器执行精度。',
@@ -147,12 +150,12 @@ class MetricEngine:
         ))
         return MetricResult(
             metricId='MQ-02',
-            name='Motion Continuity',
+            name='动作连续性',
             qualityDimension='motion_quality',
             evidenceId='EV-MOTION-CONTINUITY',
             value=p95,
             valueText=f'{p95:.4f}',
-            unit='action-delta2-p95',
+            unit='动作二阶差分-P95',
             score=score,
             level=self._level(score),
             description='Action 二阶差分 P95，衡量遥操作目标动作是否存在突兀跳变。数值越低表示 action label 越连续。不会惩罚稳定、连续的快速动作，只惩罚忽快忽慢或突然跳变的控制指令。',
@@ -201,12 +204,12 @@ class MetricEngine:
         ))
         return MetricResult(
             metricId='MQ-03',
-            name='Motion Stability',
+            name='运动稳定性',
             qualityDimension='motion_quality',
             evidenceId='EV-MOTION-STABILITY',
             value=raw,
             valueText=f'{raw * 100:.1f}%',
-            unit='oscillation-ratio',
+            unit='震荡比例',
             score=score,
             level=self._level(score),
             description='衡量控制信号是否存在持续性反复修正。使用幅度门控的方向反转检测，区分正常精细调整与控制震荡。比例越低表示示范越稳定。',
@@ -248,12 +251,12 @@ class MetricEngine:
         ))
         return MetricResult(
             metricId='LQ-01',
-            name='Effective Action Ratio',
+            name='有效动作比',
             qualityDimension='learnability',
             evidenceId='EV-LEARN-ACTION-EFFECTIVENESS',
             value=ratio,
             valueText=f'{ratio * 100:.1f}%',
-            unit='ratio',
+            unit='比例',
             score=score,
             level=self._level(score),
             description='分离 arm/hand 的有效动作帧占比（OR 融合）。使用 P20 动态阈值 + 绝对最小值门控，避免微小噪声被计为有效训练信号。',
@@ -288,15 +291,15 @@ class MetricEngine:
         score = clamp(score_ratio(raw, good=good, warn=warn, bad=bad))
         return MetricResult(
             metricId='LQ-02',
-            name='Information Density',
+            name='信息密度',
             qualityDimension='learnability',
             evidenceId='EV-LEARN-INFORMATION-DENSITY',
             value=raw,
             valueText=f'{raw:.4f}',
-            unit='density-index',
+            unit='密度指数',
             score=score,
             level=self._level(score),
-            description='Coverage × Intensity 模型：有效覆盖率 × 动作强度 + 状态强度。分离 arm/hand 并用 max 融合，避免静态控制器拉低信息密度估计。',
+            description='覆盖率 × 强度模型：有效覆盖率 × 动作强度 + 状态强度。分离 arm/hand 并用 max 融合，避免静态控制器拉低信息密度估计。',
             weight=self.p.get('lq02_weight', 0.34),
         )
 
@@ -321,7 +324,7 @@ class MetricEngine:
 
         raw_segs = mask_to_segments(
             low_value, self.f.t_rel,
-            label='low_value_candidate', level='warn',
+            label='低价值候选段', level='warn',
             source_metric_id='LQ-03', source_evidence_id='EV-LEARN-LOW-VALUE-SEGMENT',
             quality_dimension='learnability',
             min_dur=0.0, gap_merge=0.3, confidence=0.75,
@@ -346,12 +349,12 @@ class MetricEngine:
         ))
         return MetricResult(
             metricId='LQ-03',
-            name='Low-value Segment Ratio',
+            name='低价值片段比',
             qualityDimension='learnability',
             evidenceId='EV-LEARN-LOW-VALUE-SEGMENT',
             value=ratio,
             valueText=f'{ratio * 100:.1f}%',
-            unit='ratio',
+            unit='比例',
             score=score,
             level=self._level(score),
             description='长持续时间低学习价值片段占比。复用 LQ-01 有效动作判定，仅惩罚持续性无监督信号区间，不惩罚短暂停顿。',
@@ -369,28 +372,60 @@ class MetricEngine:
         n_dt = dt.size
         if n_dt == 0:
             return MetricResult(
-                metricId='DI-01', name='Timestamp Regularity', qualityDimension='data_integrity',
-                evidenceId='EV-DATA-TIMESTAMP', value=1.0, valueText='1.0000', unit='index',
+                metricId='DI-01', name='时间戳规则性', qualityDimension='data_integrity',
+                evidenceId='EV-DATA-TIMESTAMP', value=1.0, valueText='1.0000', unit='指数',
                 score=0.0, level='bad',
                 description='无有效时间戳数据。', weight=w_di01,
             )
+
         valid_dt = dt[dt > 0]
         r_invalid = 1.0 - valid_dt.size / max(n_dt, 1)
         dt_med = float(np.median(valid_dt)) if valid_dt.size else 1.0
-        jitter = np.abs(dt - dt_med) / (dt_med + 1e-6)
+
+        declared_fps = self.f.declared_fps
+        use_declared = declared_fps > 0
+        expected_interval = 1.0 / declared_fps if use_declared else dt_med
+
+        # Jitter: deviation from expected interval (declared FPS or dt_median fallback)
+        jitter = np.abs(dt - expected_interval) / (expected_interval + 1e-6)
         j_95 = float(np.nanpercentile(jitter, 95)) if jitter.size else 0.0
-        gap_mult = self.p.get('di01_gap_multiplier', 2.0)
-        r_gap = float(np.mean(dt > gap_mult * dt_med)) if dt.size else 0.0
-        w_j = self.p.get('di01_jitter_weight', 0.5)
-        w_g = self.p.get('di01_gap_weight', 0.3)
-        w_i = self.p.get('di01_invalid_weight', 0.2)
+
+        # Drop frame: gap > drop_mult × expected_interval
+        drop_mult = self.p.get('di01_drop_multiplier', 1.5)
+        r_gap = float(np.mean(dt > drop_mult * expected_interval)) if dt.size else 0.0
+
+        w_j = self.p.get('di01_jitter_weight', 0.35)
+        w_g = self.p.get('di01_gap_weight', 0.25)
+        w_i = self.p.get('di01_invalid_weight', 0.15)
+        w_fps = self.p.get('di01_fps_weight', 0.25)
         raw = w_j * j_95 + w_g * r_gap + w_i * r_invalid
+
+        description_parts = [f'J_95={j_95:.4f}', f'R_gap={r_gap:.4f}', f'R_invalid={r_invalid:.4f}']
+
+        # FPS consistency: only meaningful when declared FPS is available
+        if use_declared:
+            fps_error = abs(dt_med - expected_interval) / (expected_interval + 1e-6)
+            raw += w_fps * fps_error
+            description_parts.append(f'FPS_err={fps_error:.4f}')
+            if fps_error > 0.1:
+                timeline.append({
+                    'start': 0.0, 'end': round(float(self.f.duration), 3),
+                    'startSec': 0.0, 'endSec': round(float(self.f.duration), 3),
+                    'level': 'warn',
+                    'label': f'FPS一致性偏差 (声明{declared_fps:.0f}fps, 实际{1.0/dt_med:.1f}fps)',
+                    'sourceMetricId': 'DI-01', 'sourceEvidenceId': 'EV-DATA-TIMESTAMP',
+                    'qualityDimension': 'data_integrity',
+                    'rawValue': round(float(fps_error), 4), 'threshold': 0.1,
+                    'confidence': 0.85,
+                })
+
         good = self.p.get('di01_good', 0.05)
         warn = self.p.get('di01_warn', 0.15)
         bad = self.p.get('di01_bad', 0.35)
         score = clamp(score_inverse(raw, good=good, warn=warn, bad=bad))
+
         mask_invalid = dt <= 0
-        mask_gap = dt > gap_mult * dt_med
+        mask_gap = dt > drop_mult * expected_interval
         timeline.extend(mask_to_segments(
             mask_invalid, self.f.t_rel,
             label='非单调时间戳',
@@ -403,11 +438,18 @@ class MetricEngine:
             level='warn', source_metric_id='DI-01', source_evidence_id='EV-DATA-TIMESTAMP',
             quality_dimension='data_integrity', min_dur=0.0, gap_merge=0.3, confidence=0.85,
         ))
+
+        desc = '时间戳规则性：' + ' + '.join(description_parts)
+        if use_declared:
+            desc += f'。基于声明FPS={declared_fps:.0f}计算期望间隔'
+        else:
+            desc += '。基于dt中位数计算（无声明FPS）'
+
         return MetricResult(
-            metricId='DI-01', name='Timestamp Regularity', qualityDimension='data_integrity',
-            evidenceId='EV-DATA-TIMESTAMP', value=raw, valueText=f'{raw:.4f}', unit='index',
+            metricId='DI-01', name='时间戳规则性', qualityDimension='data_integrity',
+            evidenceId='EV-DATA-TIMESTAMP', value=raw, valueText=f'{raw:.4f}', unit='指数',
             score=score, level=self._level(score),
-            description='鲁棒时间戳规则性：J_95(dt偏离中位数) + R_gap(长间隔比例) + R_invalid(非单调比例)。保留 dt CV 为诊断参考。',
+            description=desc,
             weight=w_di01,
         )
 
@@ -415,31 +457,40 @@ class MetricEngine:
         n_dt = depth_dt.size
         if n_dt == 0:
             return MetricResult(
-                metricId='DI-01', name='Timestamp Regularity', qualityDimension='data_integrity',
-                evidenceId='EV-DATA-TIMESTAMP', value=1.0, valueText='1.0000', unit='index',
+                metricId='DI-01', name='时间戳规则性', qualityDimension='data_integrity',
+                evidenceId='EV-DATA-TIMESTAMP', value=1.0, valueText='1.0000', unit='指数',
                 score=0.0, level='bad',
                 description='深度相机无有效时间戳数据。', weight=w_di01,
             )
+
         valid_dt = depth_dt[depth_dt > 0]
         r_invalid = 1.0 - valid_dt.size / max(n_dt, 1)
         dt_med = float(np.median(valid_dt)) if valid_dt.size else 1.0
-        jitter = np.abs(depth_dt - dt_med) / (dt_med + 1e-6)
+        expected_interval = dt_med
+
+        # Jitter: deviation from expected interval
+        jitter = np.abs(depth_dt - expected_interval) / (expected_interval + 1e-6)
         j_95 = float(np.nanpercentile(jitter, 95)) if jitter.size else 0.0
-        gap_mult = self.p.get('di01_gap_multiplier', 2.0)
-        r_gap = float(np.mean(depth_dt > gap_mult * dt_med)) if depth_dt.size else 0.0
-        w_j = self.p.get('di01_jitter_weight', 0.5)
-        w_g = self.p.get('di01_gap_weight', 0.3)
-        w_i = self.p.get('di01_invalid_weight', 0.2)
+
+        # Drop frame: gap > drop_mult × expected_interval
+        drop_mult = self.p.get('di01_drop_multiplier', 1.5)
+        r_gap = float(np.mean(depth_dt > drop_mult * expected_interval)) if depth_dt.size else 0.0
+
+        w_j = self.p.get('di01_jitter_weight', 0.35)
+        w_g = self.p.get('di01_gap_weight', 0.25)
+        w_i = self.p.get('di01_invalid_weight', 0.15)
         raw = w_j * j_95 + w_g * r_gap + w_i * r_invalid
+
         good = self.p.get('di01_good', 0.05)
         warn = self.p.get('di01_warn', 0.15)
         bad = self.p.get('di01_bad', 0.35)
         score = clamp(score_inverse(raw, good=good, warn=warn, bad=bad))
+
         return MetricResult(
-            metricId='DI-01', name='Timestamp Regularity', qualityDimension='data_integrity',
-            evidenceId='EV-DATA-TIMESTAMP', value=raw, valueText=f'{raw:.4f}', unit='index',
+            metricId='DI-01', name='时间戳规则性', qualityDimension='data_integrity',
+            evidenceId='EV-DATA-TIMESTAMP', value=raw, valueText=f'{raw:.4f}', unit='指数',
             score=score, level=self._level(score),
-            description='深度相机时间戳规则性（非合成轴）：J_95 + R_gap + R_invalid。仅评分，不输出时间轴警告。',
+            description=f'深度相机时间戳规则性（非合成轴，基准={1.0/dt_med:.1f}fps）：J_95={j_95:.4f} + R_gap={r_gap:.4f} + R_invalid={r_invalid:.4f}。仅评分，不输出时间轴警告。',
             weight=w_di01,
         )
 
@@ -452,8 +503,8 @@ class MetricEngine:
 
         if n == 0:
             return MetricResult(
-                metricId='DI-02', name='Sensor Synchronization Validity', qualityDimension='data_integrity',
-                evidenceId='EV-DATA-SYNC', value=1.0, valueText='100.0%', unit='index',
+                metricId='DI-02', name='传感器同步有效性', qualityDimension='data_integrity',
+                evidenceId='EV-DATA-SYNC', value=1.0, valueText='100.0%', unit='指数',
                 score=0.0, level='bad',
                 description='无有效同步数据。', weight=w_di02,
             )
@@ -475,7 +526,7 @@ class MetricEngine:
         anomaly = (~valid) | (diff > tau_warn)
         raw_segs = mask_to_segments(
             anomaly, self.f.t_rel,
-            label='sync_anomaly_candidate', level='warn',
+            label='同步异常候选段', level='warn',
             source_metric_id='DI-02', source_evidence_id='EV-DATA-SYNC',
             quality_dimension='data_integrity', min_dur=0.0, gap_merge=0.3, confidence=0.9,
         )
@@ -510,8 +561,8 @@ class MetricEngine:
             raw_values=diff, threshold=tau_bad, confidence=0.9,
         ))
         return MetricResult(
-            metricId='DI-02', name='Sensor Synchronization Validity', qualityDimension='data_integrity',
-            evidenceId='EV-DATA-SYNC', value=raw, valueText=f'{raw * 100:.1f}%', unit='index',
+            metricId='DI-02', name='传感器同步有效性', qualityDimension='data_integrity',
+            evidenceId='EV-DATA-SYNC', value=raw, valueText=f'{raw * 100:.1f}%', unit='指数',
             score=score, level=self._level(score),
             description='自适应同步有效性：R_flag+R_hard+R_soft+M_sync+R_seg。使用 dt_median 自适应阈值替代固定 700ms，区分轻微偏差与严重错位。',
             weight=w_di02,
@@ -521,9 +572,9 @@ class MetricEngine:
         err = self.f.tracking_error_weighted
         if err.size == 0:
             return MetricResult(
-                metricId='DX-01', name='Execution Tracking Diagnostic', qualityDimension='execution_diagnostics',
-                evidenceId='EV-DIAG-EXECUTION-TRACKING', value=1.0, valueText='1.000', unit='severity',
-                score=0.0, level='bad', description='无有效tracking数据。', confidence=0.8, weight=0.0,
+                metricId='DX-01', name='执行跟踪诊断', qualityDimension='execution_diagnostics',
+                evidenceId='EV-DIAG-EXECUTION-TRACKING', value=1.0, valueText='1.000', unit='严重度',
+                score=0.0, level='bad', description='无有效跟踪数据。', confidence=0.8, weight=0.0,
             )
         N = err.size
         max_lag = min(self.p.get('dx01_max_lag', 5), N // self.p.get('dx01_lag_ratio', 10))
@@ -563,9 +614,119 @@ class MetricEngine:
             raw_values=err_aligned, threshold=tau_bad, confidence=0.8,
         ))
         return MetricResult(
-            metricId='DX-01', name='Execution Tracking Diagnostic', qualityDimension='execution_diagnostics',
-            evidenceId='EV-DIAG-EXECUTION-TRACKING', value=severity, valueText=f'{severity:.3f}', unit='severity',
+            metricId='DX-01', name='执行跟踪诊断', qualityDimension='execution_diagnostics',
+            evidenceId='EV-DIAG-EXECUTION-TRACKING', value=severity, valueText=f'{severity:.3f}', unit='严重度',
             score=score, level=level,
             description=f'执行链路跟踪诊断（lag={best_k}frames）。加权 RMS 误差，使用 lag alignment 对齐。不参与训练质量总分。',
             confidence=0.8, weight=0.0,
+        )
+
+    def _data_validity(self) -> MetricResult:
+        total = (self.f.actions_nan + self.f.actions_inf
+                 + self.f.qpos_nan + self.f.qpos_inf
+                 + self.f.effort_nan + self.f.effort_inf
+                 + self.f.qvel_nan + self.f.qvel_inf)
+        if total == 0:
+            return MetricResult(
+                metricId='DX-02', name='数据有效性', qualityDimension='data_integrity',
+                evidenceId='EV-DATA-VALIDITY', value=0.0, valueText='0', unit='个',
+                score=10.0, level='good',
+                description='Actions / Qpos / Effort / Qvel 数组未检测到 NaN 或 Inf，数据完整。',
+                confidence=0.95, weight=0.0,
+            )
+        parts = []
+        if self.f.actions_nan: parts.append(f'actions NaN={self.f.actions_nan}')
+        if self.f.actions_inf: parts.append(f'actions Inf={self.f.actions_inf}')
+        if self.f.qpos_nan: parts.append(f'qpos NaN={self.f.qpos_nan}')
+        if self.f.qpos_inf: parts.append(f'qpos Inf={self.f.qpos_inf}')
+        if self.f.effort_nan: parts.append(f'effort NaN={self.f.effort_nan}')
+        if self.f.effort_inf: parts.append(f'effort Inf={self.f.effort_inf}')
+        if self.f.qvel_nan: parts.append(f'qvel NaN={self.f.qvel_nan}')
+        if self.f.qvel_inf: parts.append(f'qvel Inf={self.f.qvel_inf}')
+        severity = min(1.0, total / 100)
+        score = clamp(10.0 * (1.0 - severity))
+        return MetricResult(
+            metricId='DX-02', name='数据有效性', qualityDimension='data_integrity',
+            evidenceId='EV-DATA-VALIDITY', value=float(total), valueText=str(total), unit='个',
+            score=score, level='bad',
+            description='数据发现 NaN/Inf 异常值：' + '；'.join(parts) + '。遥操作数据可能已损坏。',
+            confidence=0.95, weight=0.0,
+        )
+
+    def _dimension_health(self) -> MetricResult:
+        records = self.f.dim_health_records
+        if not records:
+            return MetricResult(
+                metricId='DI-03', name='维度健康', qualityDimension='data_integrity',
+                evidenceId='EV-DATA-DIM-HEALTH', value=0.0, valueText='0', unit='个',
+                score=10.0, level='good',
+                description='无有效维度数据，跳过维度健康检查。',
+                confidence=0.8, weight=0.0,
+            )
+
+        zero_var_dims = [r for r in records if r['is_zero_variance']]
+        outlier_z_threshold = self.p.get('di03_outlier_z', 10)
+        outlier_ratio_warn = self.p.get('di03_outlier_ratio_warn', 0.01)
+        outlier_dims = [r for r in records if r['outlier_ratio'] > outlier_ratio_warn]
+
+        total_issues = len(zero_var_dims) + len(outlier_dims)
+        if total_issues == 0:
+            return MetricResult(
+                metricId='DI-03', name='维度健康', qualityDimension='data_integrity',
+                evidenceId='EV-DATA-DIM-HEALTH', value=0.0, valueText='0', unit='个',
+                score=10.0, level='good',
+                description=f'全部 {len(records)} 个维度健康：无零方差，无极端异常值。',
+                confidence=0.9, weight=0.0,
+            )
+
+        desc_parts = []
+        for r in zero_var_dims:
+            desc_parts.append(f"{r['label']}: 零方差（全段={r['std']:.4f}）")
+        for r in outlier_dims:
+            desc_parts.append(f"{r['label']}: {r['outlier_ratio']:.1%} 帧为极端异常值（robust_z>{outlier_z_threshold}）")
+
+        severity = min(1.0, total_issues / max(len(records), 1))
+        score = clamp(10.0 * (1.0 - severity * 1.5))
+        level = 'bad' if zero_var_dims else 'warn'
+
+        return MetricResult(
+            metricId='DI-03', name='维度健康', qualityDimension='data_integrity',
+            evidenceId='EV-DATA-DIM-HEALTH', value=float(total_issues), valueText=str(total_issues), unit='个',
+            score=score, level=level,
+            description='；'.join(desc_parts[:6]) + ('...' if len(desc_parts) > 6 else ''),
+            confidence=0.9, weight=0.0,
+        )
+
+    def _episode_completeness(self) -> MetricResult:
+        actual = self.f.t_rel.shape[0] if self.f.t_rel.size else 0
+        declared = self.f.manifest_frame_count
+        min_frames = self.p.get('di04_min_frames', 10)
+        mismatch_ratio = self.p.get('di04_mismatch_ratio', 0.05)
+
+        if actual < min_frames:
+            return MetricResult(
+                metricId='DI-04', name='Episode 完整性', qualityDimension='data_integrity',
+                evidenceId='EV-DATA-EPISODE-COMPLETENESS', value=float(actual), valueText=str(actual), unit='帧',
+                score=2.0, level='bad',
+                description=f'帧数过短（实际={actual} < 最低={min_frames}），无法可靠计算指标。',
+                confidence=0.95, weight=0.0,
+            )
+
+        if declared > 0:
+            ratio = abs(declared - actual) / declared
+            if ratio > mismatch_ratio:
+                return MetricResult(
+                    metricId='DI-04', name='Episode 完整性', qualityDimension='data_integrity',
+                    evidenceId='EV-DATA-EPISODE-COMPLETENESS', value=float(actual), valueText=str(actual), unit='帧',
+                    score=7.0, level='warn',
+                    description=f'manifest 声明 {declared} 帧，实际 {actual} 帧（偏差 {ratio:.1%}），可能数据截断。',
+                    confidence=0.9, weight=0.0,
+                )
+
+        return MetricResult(
+            metricId='DI-04', name='Episode 完整性', qualityDimension='data_integrity',
+            evidenceId='EV-DATA-EPISODE-COMPLETENESS', value=float(actual), valueText=str(actual), unit='帧',
+            score=10.0, level='good',
+            description=f'帧数充足（实际={actual}，声明={declared if declared else "无"}），episode 结构完整。',
+            confidence=0.95, weight=0.0,
         )
