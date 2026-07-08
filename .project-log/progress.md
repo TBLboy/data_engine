@@ -1,3 +1,158 @@
+## 2026-07-08 19:25 CST
+
+- Type: feature + infrastructure + bugfix
+- Status: deployed, verified
+- Importance: high
+- Reusable: maybe
+- Objective: 将 AI 质检助手推进到 QC Agent Phase 1，并完善 manual QC 遥操作曲线多信号与缩放交互。
+- Work completed:
+  - **QC Agent Phase 1**：落地 episode 级持久化 conversation/message，新增 conversation API、message restore、pageState 上下文。
+  - **SSE 流式输出**：后端 `chat_stream` 通过 SSE 返回 status/text/meta/done；前端 `postChatStream` + `sendStream` 逐 chunk 渲染。
+  - **模型服务化**：Ollama 改为 systemd 常驻服务，Qwen3-VL-32B-Thinking Q4_K_M 注册上线，`KEEP_ALIVE` 常驻 GPU，启动后自动预热。
+  - **模型配置化**：设置页新增 AI 模型名称，后端从 `GeneralConfig.ai_model_name` 读取，不再硬编码。
+  - **可用性增强**：发送前快速健康检查；模型不可达时立即提示；AI 面板新消息自动滚动。
+  - **遥操作曲线增强**：manual QC 曲线从位置扩展为位置/速度/力矩多信号行，左右臂/手双面板，统一图例，DOF 元数据由后端返回。
+  - **缩放/平移/游标**：接入 `chartjs-plugin-zoom`，Ctrl+滚轮 x 缩放，xy 平移，所有行缩放联动；中键拖动游标 seek。
+  - **游标边界 bugfix**：修复缩放和平移后蓝色播放游标、黑色 hover 游标穿出左/右边界的问题；鼠标取时和游标显示均按 Chart.js `chartArea.left/right` 裁剪，左右图 visibility 分离，避免一侧旧 left 残留。
+  - **部署文档**：`deploy/README.txt` 补齐 AI 模块、Ollama systemd、模型下载/注册、健康检查、故障排查。
+- Business logic impact: manual QC 现在具备本地 LLM 辅助解释能力和多信号遥操作曲线审查能力；AI 服务仍保持平台与模型服务器解耦。
+- Problems encountered:
+  - 7B 小模型对 JSON prompt 响应千篇一律。
+  - Qwen3-VL-32B-Thinking 首次加载和 thinking 输出导致等待时间长。
+  - HuggingFace GGUF 下载后签名验证超时，Ollama 未自动注册模型。
+  - stream 路由曾在模型名配置化编辑中被误删/合并。
+  - Chart.js 缩放后游标位置按 canvas 而不是真实绘图区计算，导致游标消失或穿出坐标系。
+- Resolution:
+  - prompt 改为文本摘要 + 对话式指令 + 历史上下文。
+  - `num_predict` 提升到 1024，保留 thinking 模式；Ollama systemd 常驻和预热降低后续等待。
+  - 用 Modelfile 指向已下载 blob 手动注册模型。
+  - 补回独立 `chat/stream` 路由。
+  - 游标计算统一使用 `chartArea`，出绘图区隐藏；左右图状态独立控制。
+- Verification:
+  - `npm --prefix frontend run build` 通过。
+  - `docker compose -f deploy/docker-compose.yml up --build -d frontend` 已重建并重启前端容器；backend 被依赖 recreate 后 healthy。
+  - `docker compose -f deploy/docker-compose.yml ps frontend backend` 确认 frontend Up、backend healthy。
+- Unverified items:
+  - 缩放/平移/边界修复已部署，但仍需用户在浏览器中实操确认最终手感。
+- Files changed:
+  - `backend/app/ai_qc/llm_client.py`
+  - `backend/app/api/routes/qc.py`
+  - `backend/app/models/general_config.py`
+  - `backend/app/services/l3_v2/telemetry_parser.py`
+  - `deploy/README.txt`
+  - `deploy/docker-compose.yml`
+  - `frontend/package.json`
+  - `frontend/package-lock.json`
+  - `frontend/src/api/client.ts`
+  - `frontend/src/components/ai/AiAssistantPanel.vue`
+  - `frontend/src/composables/useAiAssistant.ts`
+  - `frontend/src/pages/manual-qc.vue`
+  - `frontend/src/pages/settings.vue`
+- Next steps: 用户浏览器强刷后复测 AI 对话与曲线缩放/游标边界；若确认稳定，进入 QC Agent 下一阶段工具调用/NPZ 数据查询能力。
+
+## 2026-07-08 (Ollama systemd 服务化 + 32B 模型上线 + 健康检查 + 自动滚动)
+
+- Type: infrastructure + enhancement
+- Status: deployed, verified
+- Importance: high
+- Objective: 将 Ollama 从手动后台进程升级为 systemd 生产级服务，Qwen3-VL-32B-Thinking 正式上线
+
+- Work completed:
+  - **systemd 服务**（`/etc/systemd/system/ollama.service`）：
+    - `OLLAMA_KEEP_ALIVE=8760h` 模型常驻不卸载
+    - `OLLAMA_NUM_PARALLEL=1` 节省显存
+    - `OLLAMA_CONTEXT_LENGTH=4096` 适配 24GB 显存
+    - `ExecStartPost` 自动预热模型
+    - `Restart=on-failure` 崩溃自动重启
+    - `WantedBy=default.target` 开机自启
+  - **模型配置化**：
+    - `GeneralConfig` 新增 `ai_model_name` 字段
+    - 设置页新增"模型名称"输入框
+    - 后端三个端点全部从 GeneralConfig 读取模型名
+  - **Qwen3-VL-32B-Thinking 上线**：
+    - 从 HuggingFace unsloth GGUF 下载（Q4_K_M, 19GB）
+    - 下载签名验证失败时用 Modelfile 手动注册
+    - `num_predict` 从 512 提升到 1024（保留 thinking 模式）
+    - 推理延迟 ~12-18s（32B Q4 + thinking）
+  - **健康检查**：
+    - 后端 `GET /api/ai-assistant/health`（3s 超时 ping Ollama）
+    - 前端 `sendStream` 发送前先检查，不可达立即提示
+  - **自动滚动**：Panel 组件 `watch(messages)` + `scrollTop = scrollHeight`
+  - **部署文档更新**：deploy/README.txt 完整重写 AI 模块（systemd 服务/模型管理/故障排查）
+  - **路由修复**：stream 端点被误删后补回
+
+- Files changed (9):
+  - `deploy/README.txt` — AI 模块完整重写
+  - `backend/app/models/general_config.py` — +ai_model_name
+  - `backend/app/api/routes/qc.py` — 模型名动态读取 + 健康检查端点 + stream 路由修复
+  - `backend/app/ai_qc/llm_client.py` — num_predict 1024
+  - `backend/app/services/l3_v2/telemetry_parser.py` — +qvel_hand + effort_hand
+  - `frontend/src/api/client.ts` — +checkAiHealth
+  - `frontend/src/composables/useAiAssistant.ts` — +healthOk + setScrollFn + 发前检查
+  - `frontend/src/components/ai/AiAssistantPanel.vue` — +healthOk prop + scrollToBottom
+  - `frontend/src/pages/settings.vue` — +模型名称输入框
+  - `frontend/src/pages/manual-qc.vue` — +healthOk + @ready 绑定
+  - `deploy/docker-compose.yml` — TIMEOUT 30→120
+
+- Infrastructure notes:
+  - Ollama 模型目录：`/home/tbl/Project/models/qwen2.5/`（两个模型共用）
+  - Qwen3-VL-32B Q4_K_M 显存占用 ~22.4GB/24GB，KV cache ~1.5GB
+  - 平台通过 `192.168.20.147:11434` 访问 Ollama
+  - systemd 日志：`journalctl -u ollama -f`
+
+## 2026-07-08 (曲线图多信号行：位置+速度+力矩 + 缩放联动 + 中键拖动)
+
+- Type: feature
+- Status: deployed, verified
+- Importance: medium
+- Objective: 遥操作曲线从单 qpos/actions 扩展为多信号行，支持缩放平移
+
+- Work completed:
+  - **后端**：`telemetry-curve` 端点新增 `qvelArm/qvelHand/effortArm/effortHand`，返回 DOF 元数据（armLeftDof/armRightDof/handLeftDof/handRightDof），从 metadata.json 读取不硬编码
+  - **telemetry_parser**：新增 `qvel_hand` / `effort_hand` 提取
+  - **多信号行渲染**：
+    - `signalRows` computed 动态生成行定义
+    - 机械臂 3 行（位置 280px + 速度 200px + 力矩 200px）
+    - 灵巧手 1-2 行（位置 + 速度仅当数据非全零）
+    - 每行左右双面板，独立 y 轴标签
+  - **单图例**：顶部一份图例，颜色跨行统一，位置行 qpos 实线+actions 虚线
+  - **缩放**：`chartjs-plugin-zoom`，Ctrl+滚轮缩放 x 轴，所有行联动同步，xy 方向拖动平移
+  - **中键拖动游标**：`event.button === 1` 触发 seek，左键留给 pan
+  - **游标修复**：多轮迭代解决联动缩放下游标越界/重复问题
+  - **性能**：游标移动时不再触发 chart 重绘（`updateCursorOnly` vs `drawChartOverlay`）
+
+- Files changed (4):
+  - `backend/app/api/routes/qc.py`
+  - `backend/app/services/l3_v2/telemetry_parser.py`
+  - `frontend/src/pages/manual-qc.vue`
+  - `frontend/src/api/client.ts` — TelemetryCurve 类型扩展
+
+## 2026-07-08 (SSE 流式输出前端落地：postChatStream + sendStream + 逐 token 渲染)
+
+- Type: feature
+- Status: frontend built, Docker deployed, SSE endpoint verified
+- Importance: medium
+- Objective: 前端接入后端 SSE 流式端点，用户能看到 AI 逐字输出而非 loading 动画干等
+
+- Work completed:
+  - **client.ts**: 新增 `postChatStream()` async generator — fetch ReadableStream + 手动 SSE 解析（event/data 行分割），每个 yield 返回 `{event, data}`
+  - **useAiAssistant.ts**: 新增 `sendStream()` — 先 addMessage(user) → 创建空 content 占位 assistant 消息 → for await SSE chunk 逐次追加 content → done 时回填 provider/model；新增 `streamPhase` ref 反映 LLM 状态
+  - **AiAssistantPanel.vue**: 新增 `streamPhase` prop + `streamPhaseText` computed（thinking→"正在分析..."，fallback→"模型超时..."）
+  - **manual-qc.vue**: `handleAiSend`/`handleAiOpen` 切到 `sendStream`，模板传入 `:stream-phase`
+
+- Verification:
+  - `npm run build` ✅
+  - `curl` SSE endpoint: 确认逐 token 输出（"这条" → "数据" → "的质量" → ... → "done"）
+  - Docker deploy frontend ✅
+
+- Files changed (4):
+  - `frontend/src/api/client.ts`
+  - `frontend/src/composables/useAiAssistant.ts`
+  - `frontend/src/components/ai/AiAssistantPanel.vue`
+  - `frontend/src/pages/manual-qc.vue`
+
+- Next: 浏览器端验收流式体验；等模型下载完成切 Qwen3-VL-32B-Thinking
+
 ## 2026-07-08 (QC Agent Phase 1 落地：持久化聊天 + conversation API + 流式 SSE + pageState)
 
 - Type: feature (major)

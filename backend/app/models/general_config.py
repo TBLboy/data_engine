@@ -10,6 +10,7 @@ def default_general_config() -> dict:
         'batch_reject_threshold': 0.10,
         'ai_model_host': '127.0.0.1',
         'ai_model_port': 11434,
+        'ai_model_name': 'qwen2.5:7b',
     }
 
 

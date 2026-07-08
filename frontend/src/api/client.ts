@@ -481,8 +481,12 @@ export async function releaseManualQc(episodeId: string) {
 export interface TelemetryCurve {
   timestamps: number[]
   armDims: number; handDims: number
+  armLeftDof: number; armRightDof: number
+  handLeftDof: number; handRightDof: number
   qposArm: number[][]; qposHand: number[][]
   actionsArm: number[][]; actionsHand: number[][]
+  qvelArm: number[][]; qvelHand: number[][]
+  effortArm: number[][]; effortHand: number[][]
 }
 
 export async function fetchTelemetryCurve(episodeId: string) {
@@ -668,4 +672,61 @@ export async function postChatMessage(payload: AiChatRequest) {
     method: 'POST',
     body: JSON.stringify(payload)
   })
+}
+
+/** 快速检测 AI 模型服务是否可达 */
+export async function checkAiHealth() {
+  return request<{ ok: boolean; detail?: string; models?: number }>('/ai-assistant/health')
+}
+
+/** SSE 流式 chat，返回 async generator。每个 yield 是一个 SSE 事件 { event, data } */
+export async function* postChatStream(payload: AiChatRequest) {
+  const resp = await fetch(`${API_BASE}/ai-assistant/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+  if (!resp.ok) {
+    throw new ApiError(resp.status, await resp.text())
+  }
+
+  const reader = resp.body?.getReader()
+  if (!reader) throw new Error('No response body')
+
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      let eventType = ''
+      let eventData = ''
+
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim()
+        } else if (line.startsWith('data: ')) {
+          eventData = line.slice(6)
+        } else if (line === '' && eventType) {
+          // 空行 = 事件结束
+          try {
+            yield { event: eventType, data: JSON.parse(eventData) }
+          } catch {
+            yield { event: eventType, data: eventData }
+          }
+          eventType = ''
+          eventData = ''
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
 }

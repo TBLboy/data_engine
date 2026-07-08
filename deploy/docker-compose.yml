@@ -15,7 +15,7 @@ services:
       MINIO_DEFAULT_BUCKET: ${MINIO_DEFAULT_BUCKET:-yaocao}
       AI_EXPLAIN_ENABLED: ${AI_EXPLAIN_ENABLED:-true}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
-      AI_EXPLAIN_TIMEOUT_SECONDS: ${AI_EXPLAIN_TIMEOUT_SECONDS:-30}
+      AI_EXPLAIN_TIMEOUT_SECONDS: ${AI_EXPLAIN_TIMEOUT_SECONDS:-120}
     depends_on:
       db:
         condition: service_healthy

@@ -15,12 +15,12 @@
       <button v-for="action in quickActions" :key="action" @click="$emit('send', action)">{{ action }}</button>
     </div>
 
-    <div class="messages">
+    <div ref="messagesEl" class="messages">
       <div v-for="message in messages" :key="message.id" class="msg" :class="message.role">
         <div class="bubble">{{ message.content }}</div>
       </div>
       <div v-if="isThinking" class="msg assistant">
-        <div class="bubble"><span class="typing"><i/><i/><i/></span> 正在分析当前 episode...</div>
+        <div class="bubble"><span class="typing"><i/><i/><i/></span> {{ streamPhaseText }}</div>
       </div>
     </div>
 
@@ -32,7 +32,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 
 export interface AiMessage {
   id: string
@@ -44,14 +44,18 @@ const props = defineProps<{
   messages: AiMessage[]
   isThinking?: boolean
   providerStatus?: string
+  streamPhase?: string
+  healthOk?: boolean
 }>()
 
 const emit = defineEmits<{
   close: []
   send: [prompt: string]
+  ready: [scrollFn: () => void]
 }>()
 
 const draft = ref('')
+const messagesEl = ref<HTMLElement | null>(null)
 const quickActions = [
   '解释本条检测结果',
   '为什么被降分',
@@ -63,11 +67,34 @@ const quickActions = [
 ]
 
 const providerStatusText = computed(() => {
+  if (!props.healthOk) return '模型未连接'
   switch (props.providerStatus) {
     case 'llm': return '本地模型'
     case 'template': return '规则模板'
     default: return '未连接'
   }
+})
+
+const streamPhaseText = computed(() => {
+  if (!props.healthOk) return '模型服务不可达'
+  switch (props.streamPhase) {
+    case 'thinking': return '正在分析...'
+    case 'fallback': return '模型超时，切换模板解释...'
+    default: return '正在分析当前 episode...'
+  }
+})
+
+function scrollToBottom() {
+  nextTick(() => {
+    const el = messagesEl.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
+}
+
+watch(() => props.messages, () => scrollToBottom(), { deep: true })
+
+onMounted(() => {
+  emit('ready', scrollToBottom)
 })
 
 function submit() {

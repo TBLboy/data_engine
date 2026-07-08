@@ -1,5 +1,5 @@
 import { ref, computed } from 'vue'
-import { fetchOrCreateConversation, postChatMessage } from '../api/client'
+import { fetchOrCreateConversation, postChatMessage, postChatStream, checkAiHealth } from '../api/client'
 import type { AiMessageItem, AiChatResponse, PageState } from '../types/qc'
 
 export type AiProviderStatus = 'template' | 'llm' | 'unavailable'
@@ -22,7 +22,23 @@ export function useAiAssistant() {
   const lastError = ref<string | null>(null)
   const conversationId = ref<string>('')
   const episodeId = ref<string>('')
+  /** 流式输出时的当前阶段 */
+  const streamPhase = ref<string>('')
+  const healthOk = ref(true)
+  /** 面板组件设置的滚动回调 */
+  let _scrollToBottom: (() => void) | null = null
+  function setScrollFn(fn: (() => void) | null) { _scrollToBottom = fn }
 
+  async function checkHealth(): Promise<boolean> {
+    try {
+      const r = await checkAiHealth()
+      healthOk.value = r.ok
+      return r.ok
+    } catch {
+      healthOk.value = false
+      return false
+    }
+  }
   const lastChatResponse = ref<AiChatResponse | null>(null)
   const messages = ref<AiMessage[]>([
     {
@@ -56,7 +72,6 @@ export function useAiAssistant() {
     episodeId.value = epId
 
     if (conversationId.value) {
-      // 已有 conversation，从服务端刷新消息
       try {
         const { fetchConversationMessages } = await import('../api/client')
         const detail = await fetchConversationMessages(conversationId.value)
@@ -70,13 +85,10 @@ export function useAiAssistant() {
           }))
           return
         }
-      } catch {
-        // 恢复失败，继续用本地消息
-      }
+      } catch { /* 离线降级 */ }
       return
     }
 
-    // 创建新 conversation
     try {
       const detail = await fetchOrCreateConversation(epId)
       conversationId.value = detail.conversationId
@@ -91,11 +103,10 @@ export function useAiAssistant() {
       }
     } catch (err) {
       console.warn('Failed to load conversation:', err)
-      // 离线模式：使用本地消息
     }
   }
 
-  /** 发送消息并获取 AI 回复 */
+  /** 发送消息（非流式，兼容保留） */
   async function send(
     prompt: string,
     context: {
@@ -112,7 +123,6 @@ export function useAiAssistant() {
     isThinking.value = true
     lastError.value = null
 
-    // 确保有 conversation
     if (!conversationId.value) {
       await loadConversation(context.episodeId)
     }
@@ -143,6 +153,109 @@ export function useAiAssistant() {
     }
   }
 
+  /** 流式发送消息。每条流式 chunk 直接追加到消息列表最后一条 assistant 消息上。 */
+  async function sendStream(
+    prompt: string,
+    context: {
+      episodeId: string
+      qMotionScore: number
+      qMotionLevel: string
+      weightedScoreBeforeCap?: number | null
+      metrics: any[]
+      timelineSegments?: any[]
+    },
+    pageState?: PageState | null,
+  ) {
+    addMessage('user', prompt)
+    _scrollToBottom?.()
+
+    // 快速健康检查（3s 超时）
+    const ok = await checkHealth()
+    if (!ok) {
+      addMessage('assistant', '无法连接 AI 模型服务，请确认模型服务器已启动。')
+      return
+    }
+
+    isThinking.value = true
+    lastError.value = null
+    streamPhase.value = ''
+
+    if (!conversationId.value) {
+      await loadConversation(context.episodeId)
+    }
+
+    // 占位消息，之后逐 chunk 追加
+    const streamingId = `msg-${++_seq}`
+    messages.value.push({ id: streamingId, role: 'assistant', content: '' })
+
+    try {
+      const stream = postChatStream({
+        conversationId: conversationId.value,
+        episodeId: context.episodeId,
+        message: prompt,
+        pageState: pageState || null,
+        qMotionScore: context.qMotionScore,
+        qMotionLevel: context.qMotionLevel,
+        weightedScoreBeforeCap: context.weightedScoreBeforeCap || null,
+        metrics: context.metrics,
+        timelineSegments: context.timelineSegments || [],
+        stream: true,
+      })
+
+      let finalSource = ''
+      let finalModel = ''
+
+      for await (const sse of stream) {
+        switch (sse.event) {
+          case 'status':
+            streamPhase.value = sse.data?.phase || ''
+            break
+          case 'text':
+            // 逐 chunk 追加到占位消息
+            const chunk = sse.data?.text || ''
+            const msg = messages.value.find(m => m.id === streamingId)
+            if (msg) {
+              msg.content += chunk
+              messages.value = [...messages.value]
+              _scrollToBottom?.()
+            }
+            break
+          case 'meta':
+            finalSource = sse.data?.source || ''
+            finalModel = sse.data?.model || ''
+            conversationId.value = sse.data?.conversationId || conversationId.value
+            break
+          case 'done':
+            break
+        }
+      }
+
+      // 流式结束，回填 meta 信息
+      const finalMsg = messages.value.find(m => m.id === streamingId)
+      if (finalMsg) {
+        if (finalMsg.content === '') {
+          finalMsg.content = 'AI 未返回内容，请重试。'
+        }
+        if (finalSource) {
+          finalMsg.provider = finalSource
+          providerStatus.value = finalSource === 'llm' ? 'llm' : 'template'
+        }
+        if (finalModel) {
+          finalMsg.model = finalModel
+        }
+      }
+      streamPhase.value = ''
+    } catch (err) {
+      lastError.value = err instanceof Error ? err.message : 'unknown error'
+      const errorMsg = messages.value.find(m => m.id === streamingId)
+      if (errorMsg && errorMsg.content === '') {
+        errorMsg.content = 'AI 解读暂不可用，请以指标、视频和人工判断为准。'
+      }
+    } finally {
+      isThinking.value = false
+    }
+  }
+
   function reset(initialMessage?: string) {
     messages.value = [{
       id: `msg-${++_seq}`,
@@ -155,20 +268,10 @@ export function useAiAssistant() {
   }
 
   return {
-    isOpen,
-    isThinking,
-    providerStatus,
-    lastError,
-    conversationId,
-    episodeId,
-    lastChatResponse,
-    messages,
-    status,
-    open,
-    close,
-    loadConversation,
-    send,
-    reset,
-    addMessage,
+    isOpen, isThinking, providerStatus, lastError,
+    conversationId, episodeId, streamPhase, healthOk,
+    lastChatResponse, messages, status,
+    open, close, loadConversation, send, sendStream, reset, addMessage,
+    setScrollFn, checkHealth,
   }
 }

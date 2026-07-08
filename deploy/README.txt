@@ -126,18 +126,20 @@ docker compose -f deploy/docker-compose.yml down -v
 ### 架构
 
 ```
-┌─────────────────────────┐      ┌─────────────────────┐
-│  Robot QC 服务器         │      │  AI 模型服务器        │
-│                         │      │                     │
-│  backend (Docker)       │ HTTP │  Ollama serve       │
-│  └─ llm_client.py ──────┼─────▶│  └─ qwen2.5:7b     │
-│     OLLAMA_BASE_URL=    │ LAN  │     :11434          │
-│     http://192.168.x.x  │      │                     │
-│                         │      │  RTX 4090 24GB      │
-└─────────────────────────┘      └─────────────────────┘
+┌─────────────────────────┐      ┌──────────────────────────┐
+│  Robot QC 服务器         │      │  AI 模型服务器             │
+│                         │      │                          │
+│  backend (Docker)       │ HTTP │  Ollama (systemd 服务)    │
+│  └─ llm_client.py ──────┼─────▶│  └─ qwen3-vl-thinking:32b│
+│     http://<host>:11434 │ LAN  │     :11434                │
+│                         │      │                          │
+│  健康检查:               │      │  systemd 开机自启          │
+│  GET /ai-assistant/health│     │  模型常驻 GPU 不卸载        │
+└─────────────────────────┘      └──────────────────────────┘
 ```
 
 模型服务器和平台服务器可部署在同一台或不同机器，仅需局域网互通。
+模型通过 systemd 服务常驻运行，开机自启、崩溃自动重启、模型保持加载不卸载。
 
 ### 安装 Ollama
 
@@ -151,108 +153,173 @@ tar -xf /tmp/ollama.tar -C ~/.local/
 chmod +x ~/.local/bin/ollama
 ```
 
-### 启动 Ollama
+### 配置 systemd 服务（推荐）
+
+将 Ollama 注册为系统服务，实现开机自启、崩溃自动重启、模型常驻 GPU。
 
 ```bash
-# 模型存储目录 + 监听所有网卡（允许其他机器访问）
-OLLAMA_MODELS=/path/to/models OLLAMA_HOST=0.0.0.0:11434 ~/.local/bin/ollama serve &
+sudo tee /etc/systemd/system/ollama.service << 'EOF'
+[Unit]
+Description=Ollama Model Server
+After=network.target
 
-# 仅本机访问（默认行为）
-OLLAMA_MODELS=/path/to/models ~/.local/bin/ollama serve &
+[Service]
+Type=simple
+User=<你的用户名>
+Environment="OLLAMA_MODELS=/home/<用户>/Project/models/qwen2.5"
+Environment="OLLAMA_HOST=0.0.0.0:11434"
+Environment="OLLAMA_KEEP_ALIVE=8760h"
+Environment="OLLAMA_NUM_PARALLEL=1"
+Environment="OLLAMA_CONTEXT_LENGTH=4096"
+ExecStart=/home/<用户>/.local/bin/ollama serve
+ExecStartPost=/bin/bash -c 'sleep 5 && /home/<用户>/.local/bin/ollama run <模型名> "" 2>/dev/null; echo "model warmed"'
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable ollama
+sudo systemctl start ollama
+sudo systemctl status ollama
 ```
 
 关键环境变量：
 
-| 变量 | 作用 | 默认值 |
-|------|------|--------|
-| OLLAMA_MODELS | 模型文件存储目录 | ~/.ollama/models |
-| OLLAMA_HOST | 监听地址和端口 | 127.0.0.1:11434 |
+| 变量 | 作用 | 默认值 | 推荐值 |
+|------|------|--------|--------|
+| OLLAMA_MODELS | 模型文件存储目录 | ~/.ollama/models | /home/xxx/Project/models/qwen2.5 |
+| OLLAMA_HOST | 监听地址和端口 | 127.0.0.1:11434 | 0.0.0.0:11434 |
+| OLLAMA_KEEP_ALIVE | 模型驻留时间 | 5m | 8760h（1年，即常驻）|
+| OLLAMA_NUM_PARALLEL | 并发请求数 | 1 | 1（节省显存）|
+| OLLAMA_CONTEXT_LENGTH | 上下文长度 | 2048 | 4096（32B 模型 24G 显存下安全值）|
+
+> `OLLAMA_KEEP_ALIVE=8760h` 确保模型不卸载。首次推理后模型常驻 GPU，后续请求秒级响应。
+> `ExecStartPost` 在服务启动后自动预热模型，避免用户第一次对话等太久。
 
 ### 下载模型
 
 ```bash
+# 从 HuggingFace 下载 GGUF 量化模型（推荐，需要代理）
+OLLAMA_MODELS=/path/to/models HTTPS_PROXY=http://127.0.0.1:10808 \
+  ~/.local/bin/ollama pull hf.co/unsloth/Qwen3-VL-32B-Thinking-GGUF:Q4_K_M
+
+# 或从 Ollama 官方库下载
 OLLAMA_MODELS=/path/to/models ~/.local/bin/ollama pull qwen2.5:7b
+```
+
+**HuggingFace 下载失败的应急方案：**
+
+如果 HF 签名验证超时（模型数据已下载但注册失败），可用 Modelfile 手动注册：
+
+```bash
+# 找到已下载的 blob hash
+ls -lh $OLLAMA_MODELS/blobs/
+
+# 创建 Modelfile 指向 blob
+cat > /tmp/Modelfile << 'EOF'
+FROM /path/to/models/blobs/sha256-<模型文件的hash>
+EOF
+
+# 注册模型
+OLLAMA_MODELS=/path/to/models ~/.local/bin/ollama create <模型名> -f /tmp/Modelfile
 ```
 
 常用模型：
 
-| 模型 | 大小 | 说明 |
-|------|------|------|
-| qwen2.5:7b | 4.7GB | 推荐，7.6B 参数，Q4_K_M 量化，中文优秀 |
-| qwen2.5:14b | 8.9GB | 更强推理，需更多显存 |
-| qwen2.5:32b | 19GB | 最强，需 RTX 4090 24G 几乎满载 |
+| 模型 | 大小 | 显存 | 说明 |
+|------|------|------|------|
+| qwen2.5:7b | 4.7GB | ~6GB | 轻量，中文好，响应快 |
+| qwen2.5:14b | 8.9GB | ~12GB | 更强的推理能力 |
+| qwen3-vl-thinking:32b | 19GB | ~23GB | 最强，多模态+思维链，需 RTX 4090 24G |
 
 ### 模型管理
 
 ```bash
 ~/.local/bin/ollama list          # 查看已下载的模型
-~/.local/bin/ollama rm qwen2.5:7b # 删除模型
-pkill ollama                       # 停止服务
+~/.local/bin/ollama rm <模型名>    # 删除模型
+sudo systemctl restart ollama     # 重启服务
+sudo systemctl status ollama      # 查看运行状态
+journalctl -u ollama -f           # 查看实时日志
 ```
 
-### 外部访问模型 API
-
-启动后直接 HTTP 请求 11434 端口：
+### 验证模型推理
 
 ```bash
-# 查看模型列表
-curl http://<ip>:11434/api/tags
+# 检查模型是否已加载到 GPU
+curl http://127.0.0.1:11434/api/ps
 
-# 问答
-curl http://<ip>:11434/api/chat -d '{
-  "model": "qwen2.5:7b",
+# 直接测试推理
+curl http://127.0.0.1:11434/api/chat -d '{
+  "model": "qwen3-vl-thinking:32b",
   "messages": [{"role": "user", "content": "你好"}],
   "stream": false
 }'
+
+# 查看 GPU 显存占用
+nvidia-smi
 ```
 
 ### 平台配置
 
 1. 进入设置页 → 通用 tab → "AI 模型服务器"
-2. 填入模型服务器的 IP 和端口（默认 11434）
+2. 配置三要素：
+   - **服务器 IP 地址**：模型服务器的局域网 IP
+   - **端口**：Ollama 端口（默认 11434）
+   - **模型名称**：如 `qwen3-vl-thinking:32b` 或 `qwen2.5:7b`
 3. 保存，立即生效，无需重启
 
 环境变量（在 docker-compose.yml 中配置）：
 
 ```env
 AI_EXPLAIN_ENABLED=true         # 是否启用 LLM 调用
-OLLAMA_MODEL=qwen2.5:7b         # 模型名称
-AI_EXPLAIN_TIMEOUT_SECONDS=30   # 调用超时
+AI_EXPLAIN_TIMEOUT_SECONDS=120  # 调用超时（大模型建议 120s+）
 ```
 
-默认 `AI_EXPLAIN_ENABLED=false`，显式设为 `true` 后才调用 LLM。
-LLM 不可用时自动回退到规则模板解释。
+模型名称通过设置页面配置，存入 GeneralConfig，不再通过环境变量硬编码。
+
+### 健康检查
+
+平台提供快速健康检查端点，前端发送消息前自动检测模型服务是否可达：
+
+```bash
+# 3 秒超时，快速判断 Ollama 是否在线
+curl http://<平台IP>:58080/api/ai-assistant/health
+# → {"ok": true, "models": 2}
+```
 
 ### 调用链
 
 ```
-前端点击 AI 按钮
-  → POST /api/ai/explain
-    → GeneralConfig 读取 host:port
-    → httpx.post(http://<host>:<port>/api/chat)
-      → qwen2.5:7b 返回解释
-    → 前端展示
+前端点击发送
+  → GET /api/ai-assistant/health（3s 超时，检测 Ollama 连通性）
+  → POST /api/ai-assistant/chat/stream（SSE 流式）
+    → GeneralConfig 读取 host:port:model
+    → httpx.stream(http://<host>:<port>/api/chat)
+      → llama-server 推理（GPU 加速）
+      → 逐 token 返回 SSE
+    → validator 校验
+    → 消息持久化到 ai_messages
+  → 前端逐字渲染
 ```
 
-### 常见问题
+### 故障排查
 
-**Q: Ollama 启动后其他机器访问不通？**
-确保 OLLAMA_HOST=0.0.0.0:11434，防火墙放行 11434 端口。
+**Q: 前端提示"无法连接 AI 模型服务"？**
+1. 检查 Ollama 是否运行：`sudo systemctl status ollama`
+2. 检查端口是否监听：`curl http://<IP>:11434/api/tags`
+3. 检查 Docker 容器能否访问宿主机：确保设置页 IP 配置为宿主机局域网 IP（非 127.0.0.1）
 
-**Q: 模型下载慢？**
-使用代理：
-```bash
-HTTPS_PROXY=http://127.0.0.1:10808 ~/.local/bin/ollama pull qwen2.5:7b
-```
+**Q: 每次对话都要等很久？**
+检查 `OLLAMA_KEEP_ALIVE` 是否配置为足够长的时间。如果 Ollama 是手动 `serve &` 启动的，重启后模型会被卸载。
 
-**Q: 显存不够？**
-换更小的量化版本：
-```bash
-~/.local/bin/ollama pull qwen2.5:3b
-```
+**Q: 推理直接报错或返回模板解释？**
+1. 检查显存：`nvidia-smi`，如果接近 24GB 上限，降低 `OLLAMA_CONTEXT_LENGTH`
+2. 检查后端日志：`docker compose -f deploy/docker-compose.yml logs backend | grep -i ollama`
+3. 确认 `AI_EXPLAIN_TIMEOUT_SECONDS` 足够（推荐 120s）
 
-**Q: 如何验证 GPU 推理生效？**
-查看 Ollama 启动日志，应出现：
-```
-msg="inference compute" library=CUDA compute=8.9 name="NVIDIA GeForce RTX 4090"
-```
+**Q: 模型下载完成后 Ollama 不识别？**
+HuggingFace 下载可能因签名验证失败而注册失败。使用 `OLLAMA_MODELS=... ollama list` 检查，如不存在则使用 Modelfile 手动注册。

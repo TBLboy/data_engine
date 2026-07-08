@@ -12,6 +12,9 @@ import { useAiAssistant } from '../composables/useAiAssistant'
 import { useSessionStore } from '../stores/session'
 import { triggerCelebration } from '../composables/useCelebration'
 import { Chart, registerables } from 'chart.js'
+import zoomPlugin from 'chartjs-plugin-zoom'
+
+Chart.register(...registerables, zoomPlugin)
 
 const timelineOverlayPlugin = {
   id: 'timelineOverlay',
@@ -101,22 +104,66 @@ const isManager = computed(() => session.user?.role === 'admin' || session.user?
 const curveData = ref<TelemetryCurve | null>(null)
 const curveError = ref('')
 const curveMode = ref<'arm' | 'hand'>('arm')
-const chartCanvasL = ref<HTMLCanvasElement | null>(null)
-const chartCanvasR = ref<HTMLCanvasElement | null>(null)
 const chartHoverTimeSec = ref<number | null>(null)
 const selectedMetricId = ref('')
 const chartDragging = ref(false)
 const suppressFrameWatcher = ref(false)
-const chartPlaybackCursorLeftPx = ref(0)
-const chartPlaybackCursorLeftPxR = ref(0)
-const chartPlaybackCursorVisible = ref(false)
-const chartHoverCursorLeftPx = ref(0)
-const chartHoverCursorLeftPxR = ref(0)
-const chartHoverCursorVisible = ref(false)
-const chartCursorTopPx = ref(0)
-const chartCursorHeightPx = ref(0)
-let chartL: Chart | null = null
-let chartR: Chart | null = null
+const playbackLeftPx = ref(0)
+const playbackLeftPxR = ref(0)
+const playbackVisibleL = ref(false)
+const playbackVisibleR = ref(false)
+const hoverLeftPx = ref(0)
+const hoverLeftPxR = ref(0)
+const hoverVisibleL = ref(false)
+const hoverVisibleR = ref(false)
+const cursorTopPxL = ref<number[]>([])
+const cursorHeightPxL = ref<number[]>([])
+const cursorTopPxR = ref<number[]>([])
+const cursorHeightPxR = ref<number[]>([])
+const canvasRefs: (HTMLCanvasElement | null)[][] = []
+const charts: (Chart | null)[][] = []
+
+// ── 缩放（所有行联动）──
+const isZoomed = computed(() => {
+  const ch = charts[0]?.[0]
+  if (!ch) return false
+  const x = ch.scales?.x
+  if (!x) return false
+  const maxT = cdTimestamps.value.length ? cdTimestamps.value[cdTimestamps.value.length - 1] : 0
+  return (x.min ?? 0) > 0.001 || (x.max ?? maxT) < maxT - 0.001
+})
+
+let _zoomSync = false
+function syncZoomFrom(chart: Chart) {
+  if (_zoomSync) return
+  _zoomSync = true
+  const srcX = chart.scales?.x
+  if (!srcX) { _zoomSync = false; return }
+  const xMin = srcX.min, xMax = srcX.max
+  for (const row of charts) {
+    for (const ch of row) {
+      if (!ch || ch === chart) continue
+      const x = ch.options.scales?.x
+      if (x) { x.min = xMin; x.max = xMax }
+      ch.update('none')
+    }
+  }
+  _zoomSync = false
+  updateChartCursorPosition()
+}
+
+function resetZoom() {
+  for (const row of charts) {
+    for (const ch of row) {
+      if (ch) ch.resetZoom()
+    }
+  }
+  updateChartCursorPosition()
+}
+
+function preventBrowserZoom(e: WheelEvent) {
+  if (e.ctrlKey) e.preventDefault()
+}
 let playbackLoopId: number | null = null
 let lastScrubMs = 0
 
@@ -150,21 +197,83 @@ const activeTimelineSegments = computed(() => normalizedTimelineSegments.value.f
 }))
 
 const activeTimelineSegmentIds = computed(() => new Set(activeTimelineSegments.value.map((segment: any) => segmentKey(segment))))
+const COLORS = ['#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#909399', '#00D4AA', '#B37FEB', '#FF85C0', '#7EC8E3', '#FFD700', '#CD5C5C', '#8FBC8F']
+
 const chartLegendItems = computed(() => {
   const cd = curveData.value
   if (!cd) return [] as Array<{ key: string; label: string; color: string; dashed: boolean }>
   const isArm = curveMode.value === 'arm'
   const dimCount = isArm ? cd.armDims : cd.handDims
   const perSideCount = Math.round(dimCount / 2)
-  const colors = ['#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#909399', '#00D4AA', '#B37FEB', '#FF85C0', '#7EC8E3', '#FFD700', '#CD5C5C', '#8FBC8F']
   const items: Array<{ key: string; label: string; color: string; dashed: boolean }> = []
   for (let d = 0; d < perSideCount; d++) {
-    const color = colors[d % colors.length]
+    const color = COLORS[d % COLORS.length]
     items.push({ key: `actual-${d}`, label: `J${d + 1} 实际`, color, dashed: false })
     items.push({ key: `target-${d}`, label: `J${d + 1} 目标`, color, dashed: true })
   }
   return items
 })
+
+interface SignalRow {
+  key: string
+  yLabel: string
+  height: number
+  title: string
+  dataLeft: number[][]
+  dataRight: number[][]
+  actLeft: number[][] | null
+  actRight: number[][] | null
+}
+
+const signalRows = computed<SignalRow[]>(() => {
+  const cd = curveData.value
+  if (!cd) return []
+  const isArm = curveMode.value === 'arm'
+  const perSide = Math.round((isArm ? cd.armDims : cd.handDims) / 2)
+  const rows: SignalRow[] = []
+
+  const posData = isArm ? cd.qposArm : cd.qposHand
+  const actData = isArm ? cd.actionsArm : cd.actionsHand
+  const velData = isArm ? cd.qvelArm : cd.qvelHand
+
+  const _hasData = (arr: number[][]) => arr.length > 0 && arr.some(row => row.some(v => v !== 0))
+
+  rows.push({
+    key: 'position', yLabel: isArm ? '位置 (rad)' : '位置',
+    height: 280, title: '关节位置',
+    dataLeft: posData.map(r => r.slice(0, perSide)),
+    dataRight: posData.map(r => r.slice(perSide)),
+    actLeft: actData.map(r => r.slice(0, perSide)),
+    actRight: actData.map(r => r.slice(perSide)),
+  })
+
+  if (_hasData(velData)) {
+    rows.push({
+      key: 'velocity', yLabel: isArm ? '速度 (rad/s)' : '速度',
+      height: 200, title: '关节速度',
+      dataLeft: velData.map(r => r.slice(0, perSide)),
+      dataRight: velData.map(r => r.slice(perSide)),
+      actLeft: null, actRight: null,
+    })
+  }
+
+  if (isArm && _hasData(cd.effortArm)) {
+    rows.push({
+      key: 'effort', yLabel: '力矩 (N·m)',
+      height: 200, title: '关节力矩',
+      dataLeft: cd.effortArm.map(r => r.slice(0, perSide)),
+      dataRight: cd.effortArm.map(r => r.slice(perSide)),
+      actLeft: null, actRight: null,
+    })
+  }
+
+  return rows
+})
+
+function setCanvasRef(rowIdx: number, side: 0 | 1, el: any) {
+  if (!canvasRefs[rowIdx]) canvasRefs[rowIdx] = [null, null]
+  canvasRefs[rowIdx][side] = el instanceof HTMLCanvasElement ? el : null
+}
 const qcRevisions = computed(() => payload.value?.revisions ?? [])
 const episode = computed(() => payload.value?.episode)
 const episodeNumber = computed(() => {
@@ -224,9 +333,15 @@ const scrubToTime = (targetSec: number) => {
 
 const chartTimeFromPointer = (event: MouseEvent, chart: Chart | null, canvas: HTMLCanvasElement | null) => {
   const xScale = chart?.scales?.x
+  const chartArea = chart?.chartArea
   const rect = canvas?.getBoundingClientRect()
-  if (!xScale || !rect) return null
-  const pixelX = event.clientX - rect.left
+  if (!xScale || !chartArea || !rect || !chart) return null
+
+  const scaleX = rect.width / (chart.width || rect.width || 1)
+  const pixelX = (event.clientX - rect.left) / scaleX
+  // 只允许在真实绘图区内取时间。左侧 y 轴和右侧 padding 都不属于坐标系。
+  if (pixelX < chartArea.left || pixelX > chartArea.right) return null
+
   const nextTime = Number(xScale.getValueForPixel(pixelX))
   if (!Number.isFinite(nextTime)) return null
   return Math.max(0, Math.min(durationSec.value || nextTime, nextTime))
@@ -234,9 +349,15 @@ const chartTimeFromPointer = (event: MouseEvent, chart: Chart | null, canvas: HT
 
 const handleChartPointerMove = (event: MouseEvent, chart: Chart | null, canvas: HTMLCanvasElement | null) => {
   const nextTime = chartTimeFromPointer(event, chart, canvas)
+  if (nextTime == null) {
+    chartHoverTimeSec.value = null
+    updateCursorOnly()
+    return
+  }
+
   chartHoverTimeSec.value = nextTime
-  drawChartOverlay()
-  if (chartDragging.value && nextTime != null) {
+  updateCursorOnly()
+  if (chartDragging.value) {
     const now = performance.now()
     if (now - lastScrubMs < 16) return
     lastScrubMs = now
@@ -247,10 +368,12 @@ const handleChartPointerMove = (event: MouseEvent, chart: Chart | null, canvas: 
 const handleChartPointerLeave = () => {
   if (chartDragging.value) return
   chartHoverTimeSec.value = null
-  drawChartOverlay()
+  updateCursorOnly()
 }
 
 const handleChartPointerDown = (event: MouseEvent, chart: Chart | null, canvas: HTMLCanvasElement | null) => {
+  if (event.button !== 1) return  // 仅中键拖动游标
+  event.preventDefault()
   const nextTime = chartTimeFromPointer(event, chart, canvas)
   if (nextTime == null) return
   chartDragging.value = true
@@ -264,7 +387,7 @@ const stopChartDragging = () => {
   chartDragging.value = false
   suppressFrameWatcher.value = false
   lastScrubMs = 0
-  drawChartOverlay()
+  updateCursorOnly()
 }
 
 const jumpToSegment = async (segment: any) => {
@@ -272,57 +395,95 @@ const jumpToSegment = async (segment: any) => {
 }
 
 const drawChartOverlay = () => {
-  for (const ch of [chartL, chartR]) {
-    if (!ch) continue
-    const pluginOptions = ((ch.options.plugins as any).timelineOverlay ??= {})
-    pluginOptions.segments = normalizedTimelineSegments.value
-    ch.update('none')
+  for (const row of charts) {
+    for (const ch of row) {
+      if (!ch) continue
+      const pluginOptions = ((ch.options.plugins as any).timelineOverlay ??= {})
+      pluginOptions.segments = normalizedTimelineSegments.value
+      ch.update('none')
+    }
   }
   updateChartCursorPosition()
 }
 
+/** 仅更新游标位置，不触发 chart 重绘（鼠标移动时高频调用） */
+const updateCursorOnly = () => {
+  updateChartCursorPosition()
+}
+
 const updateChartCursorPosition = () => {
-  const canvasL = chartCanvasL.value
-  const canvasR = chartCanvasR.value
-  if (!canvasL || !canvasR) {
-    chartPlaybackCursorVisible.value = false
-    chartHoverCursorVisible.value = false
+  const rows = signalRows.value
+  if (!rows.length) {
+    playbackVisibleL.value = false
+    playbackVisibleR.value = false
+    hoverVisibleL.value = false
+    hoverVisibleR.value = false
     return
   }
 
-  const calcCursor = (ch: Chart, canvas: HTMLCanvasElement, time: number) => {
-    const xScale = ch.scales.x
-    const chartArea = ch.chartArea
-    if (!xScale || !chartArea) return null
-    const displayWidth = canvas.getBoundingClientRect().width || ch.width || 1
+  const calcArea = (ch: Chart | null, canvas: HTMLCanvasElement | null) => {
+    const chartArea = ch?.chartArea
+    if (!chartArea || !canvas) return null
     const displayHeight = canvas.getBoundingClientRect().height || ch.height || 1
-    const scale = displayWidth / (ch.width || displayWidth || 1)
     const scaleY = displayHeight / (ch.height || displayHeight || 1)
+    return { top: chartArea.top * scaleY, height: Math.max((chartArea.bottom - chartArea.top) * scaleY, 0) }
+  }
+
+  const calcCursor = (ch: Chart | null, canvas: HTMLCanvasElement | null, time: number) => {
+    const xScale = ch?.scales?.x
+    const chartArea = ch?.chartArea
+    if (!xScale || !chartArea || !canvas) return null
+    const displayWidth = canvas.getBoundingClientRect().width || ch.width || 1
+    const scaleX = displayWidth / (ch.width || displayWidth || 1)
     const pixel = Number(xScale.getPixelForValue(time))
     if (!Number.isFinite(pixel)) return null
-    return { left: pixel * scale, top: chartArea.top * scaleY, height: Math.max((chartArea.bottom - chartArea.top) * scaleY, 0) }
+    const left = pixel * scaleX
+    const chartLeft = chartArea.left * scaleX
+    const chartRight = chartArea.right * scaleX
+    // 只在真实绘图区内显示游标。缩放/平移后时间落到视窗外时隐藏，不能画到 y 轴或右侧 padding。
+    if (left < chartLeft || left > chartRight) return null
+    return { left }
   }
 
-  const playbackL = chartL ? calcCursor(chartL, canvasL, currentTimeSec.value) : null
-  const playbackR = chartR ? calcCursor(chartR, canvasR, currentTimeSec.value) : null
-  chartPlaybackCursorVisible.value = playbackL != null && playbackR != null
-  if (playbackL) {
-    chartPlaybackCursorLeftPx.value = playbackL.left
-    chartCursorTopPx.value = playbackL.top
-    chartCursorHeightPx.value = playbackL.height
-  }
-  if (playbackR) chartPlaybackCursorLeftPxR.value = playbackR.left
+  const topL: number[] = [], heightL: number[] = [], topR: number[] = [], heightR: number[] = []
 
-  const hoverTime = chartHoverTimeSec.value
-  if (hoverTime == null || !Number.isFinite(hoverTime)) {
-    chartHoverCursorVisible.value = false
-    return
+  // 所有行共享缩放，用第一行的 canvas 算 left 像素，各行独立算 top/height
+  const chL0 = charts[0]?.[0] ?? null
+  const chR0 = charts[0]?.[1] ?? null
+  const cvL0 = canvasRefs[0]?.[0] ?? null
+  const cvR0 = canvasRefs[0]?.[1] ?? null
+
+  const ppL = chL0 ? calcCursor(chL0, cvL0, currentTimeSec.value) : null
+  const ppR = chR0 ? calcCursor(chR0, cvR0, currentTimeSec.value) : null
+  if (ppL) playbackLeftPx.value = ppL.left
+  if (ppR) playbackLeftPxR.value = ppR.left
+  playbackVisibleL.value = ppL != null
+  playbackVisibleR.value = ppR != null
+
+  const ht = chartHoverTimeSec.value
+  let hpL: ReturnType<typeof calcCursor> = null
+  let hpR: ReturnType<typeof calcCursor> = null
+  if (ht != null && Number.isFinite(ht)) {
+    hpL = chL0 ? calcCursor(chL0, cvL0, ht) : null
+    hpR = chR0 ? calcCursor(chR0, cvR0, ht) : null
+    if (hpL) hoverLeftPx.value = hpL.left
+    if (hpR) hoverLeftPxR.value = hpR.left
   }
-  const hoverL = chartL ? calcCursor(chartL, canvasL, hoverTime) : null
-  const hoverR = chartR ? calcCursor(chartR, canvasR, hoverTime) : null
-  chartHoverCursorVisible.value = hoverL != null && hoverR != null
-  if (hoverL) chartHoverCursorLeftPx.value = hoverL.left
-  if (hoverR) chartHoverCursorLeftPxR.value = hoverR.left
+  hoverVisibleL.value = hpL != null
+  hoverVisibleR.value = hpR != null
+
+  // 逐行算 top/height；高度只取当前行绘图区，不再受当前时间是否可见影响。
+  for (let i = 0; i < rows.length; i++) {
+    const cl = charts[i]?.[0] ?? null, cr = charts[i]?.[1] ?? null
+    const cvl = canvasRefs[i]?.[0] ?? null, cvr = canvasRefs[i]?.[1] ?? null
+    const areaL = calcArea(cl, cvl)
+    const areaR = calcArea(cr, cvr)
+    topL.push(areaL?.top ?? 0); heightL.push(areaL?.height ?? 0)
+    topR.push(areaR?.top ?? 0); heightR.push(areaR?.height ?? 0)
+  }
+
+  cursorTopPxL.value = topL; cursorHeightPxL.value = heightL
+  cursorTopPxR.value = topR; cursorHeightPxR.value = heightR
 }
 
 const stopPlaybackLoop = () => {
@@ -414,8 +575,18 @@ const loadContext = async () => {
 }
 
 const destroyChart = () => {
-  if (chartL) { chartL.destroy(); chartL = null }
-  if (chartR) { chartR.destroy(); chartR = null }
+  for (const row of charts) {
+    if (row) {
+      row[0]?.destroy()
+      row[1]?.destroy()
+    }
+  }
+  charts.length = 0
+  canvasRefs.length = 0
+  cursorTopPxL.value = []
+  cursorHeightPxL.value = []
+  cursorTopPxR.value = []
+  cursorHeightPxR.value = []
 }
 
 const loadCurveData = async () => {
@@ -481,7 +652,7 @@ function buildPageState() {
 async function handleAiSend(prompt: string) {
   const payload = buildAiPayload()
   if (!payload) return
-  await ai.send(prompt, payload, buildPageState())
+  await ai.sendStream(prompt, payload, buildPageState())
 }
 
 async function handleAiOpen() {
@@ -492,49 +663,51 @@ async function handleAiOpen() {
   await ai.loadConversation(payload.episodeId)
   // 如果恢复后消息只有默认欢迎语，自动请求首次解释
   if (ai.messages.value.length <= 1) {
-    await ai.send(payload.episodeId ? '' : '解释本条检测结果', payload, buildPageState())
+    await ai.sendStream(payload.episodeId ? '' : '解释本条检测结果', payload, buildPageState())
   }
 }
 
-const renderChart = () => {
-  if (!chartCanvasL.value || !chartCanvasR.value || !curveData.value) return
-  const cd = curveData.value
-  const isArm = curveMode.value === 'arm'
-  const qpos = isArm ? cd.qposArm : cd.qposHand
-  const actions = isArm ? cd.actionsArm : cd.actionsHand
-  const dimCount = isArm ? cd.armDims : cd.handDims
-  if (!dimCount || !qpos.length) return
+const yAxisWidth = computed(() => curveMode.value === 'arm' ? 76 : 56)
 
-  const colors = ['#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#909399', '#00D4AA', '#B37FEB', '#FF85C0', '#7EC8E3', '#FFD700', '#CD5C5C', '#8FBC8F']
-  const perSideCount = Math.round(dimCount / 2)
-  const yTitle = isArm ? '位置 (rad)' : '位置 (0-255)'
-
-  const sideLabels = isArm ? ['左臂', '右臂'] : ['左手', '右手']
-
-  const buildDatasets = (dStart: number) => {
-    const ds: any[] = []
-    for (let d = dStart; d < dStart + perSideCount; d++) {
-      const c = colors[(d - dStart) % colors.length]
+const buildDatasets = (dataArr: number[][], actArr: number[][] | null, dStart: number, perSide: number) => {
+  const ds: any[] = []
+  for (let d = 0; d < perSide; d++) {
+    const c = COLORS[d % COLORS.length]
+    ds.push({
+      label: `J${dStart + d + 1} 实际`,
+      data: dataArr.map((row, i) => ({ x: cdTimestamps.value[i], y: row[d] })),
+      borderColor: c, backgroundColor: 'transparent',
+      borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 3, pointHitRadius: 8, tension: 0.1,
+    })
+    if (actArr) {
       ds.push({
-        label: `J${d + 1} 实际`,
-        data: qpos.map((row, i) => ({ x: cd.timestamps[i], y: row[d] })),
-        borderColor: c, backgroundColor: 'transparent',
-        borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 3, pointHitRadius: 8, tension: 0.1,
-      })
-      ds.push({
-        label: `J${d + 1} 目标`,
-        data: actions.map((row, i) => ({ x: cd.timestamps[i], y: row[d] })),
+        label: `J${dStart + d + 1} 目标`,
+        data: actArr.map((row, i) => ({ x: cdTimestamps.value[i], y: row[d] })),
         borderColor: c, backgroundColor: 'transparent',
         borderWidth: 1, borderDash: [4, 3], pointRadius: 0, pointHoverRadius: 3, pointHitRadius: 8, tension: 0.1,
       })
     }
-    return ds
   }
+  return ds
+}
 
-  const maxTime = cd.timestamps.length ? cd.timestamps[cd.timestamps.length - 1] : 0
-  const yAxisWidth = isArm ? 72 : 56
+const cdTimestamps = computed(() => curveData.value?.timestamps ?? [])
 
-  const baseOptions = (title: string): any => ({
+const renderChart = () => {
+  const rows = signalRows.value
+  if (!rows.length || !curveData.value) return
+
+  const maxTime = cdTimestamps.value.length ? cdTimestamps.value[cdTimestamps.value.length - 1] : 0
+  const perSide = Math.round((curveMode.value === 'arm' ? curveData.value.armDims : curveData.value.handDims) / 2)
+
+  // Clear old charts
+  for (const row of charts) {
+    row[0]?.destroy()
+    row[1]?.destroy()
+  }
+  charts.length = 0
+
+  const makeOptions = (title: string, yLabel: string): any => ({
     responsive: true,
     maintainAspectRatio: false,
     animation: false,
@@ -542,36 +715,62 @@ const renderChart = () => {
     scales: {
       x: { type: 'linear', min: 0, max: maxTime, title: { display: true, text: '时间 (s)' } },
       y: {
-        title: { display: true, text: yTitle },
-        afterFit(scale: any) {
-          scale.width = yAxisWidth
-        }
-      }
+        title: { display: true, text: yLabel },
+        afterFit(scale: any) { scale.width = yAxisWidth.value },
+      },
     },
     plugins: {
       legend: { display: false },
       tooltip: { enabled: false },
-      title: { display: true, text: title, position: 'top' as const, font: { size: 13 } },
+      title: { display: true, text: title, position: 'top' as const, font: { size: 12 } },
+      zoom: {
+        zoom: {
+          wheel: { enabled: true, modifierKey: 'ctrl' as const, speed: 0.08 },
+          pinch: { enabled: true },
+          drag: { enabled: false },
+          mode: 'x' as const,
+          onZoom: ({ chart }: any) => { syncZoomFrom(chart) },
+        },
+        pan: {
+          enabled: true,
+          mode: 'xy' as const,
+          onPan: ({ chart }: any) => { syncZoomFrom(chart) },
+        },
+      },
     },
-    interaction: { mode: 'nearest', axis: 'x', intersect: false },
+    interaction: { mode: 'nearest' as const, axis: 'x' as const, intersect: false },
   })
 
-  chartL = new Chart(chartCanvasL.value, {
-    type: 'line',
-    data: { datasets: buildDatasets(0) },
-    options: baseOptions(sideLabels[0]),
-  })
-  ;((chartL.options.plugins as any).timelineOverlay ??= {}).segments = normalizedTimelineSegments.value
+  for (const row of rows) {
+    const chartRowIdx = charts.length
 
-  chartR = new Chart(chartCanvasR.value, {
-    type: 'line',
-    data: { datasets: buildDatasets(perSideCount) },
-    options: baseOptions(sideLabels[1]),
-  })
-  ;((chartR.options.plugins as any).timelineOverlay ??= {}).segments = normalizedTimelineSegments.value
+    const canvasL = canvasRefs[chartRowIdx]?.[0]
+    const canvasR = canvasRefs[chartRowIdx]?.[1]
+    if (!canvasL || !canvasR) continue
 
-  chartCanvasL.value.style.cursor = 'crosshair'
-  chartCanvasR.value.style.cursor = 'crosshair'
+    const rowCharts: (Chart | null)[] = [null, null]
+    const sideLabels = curveMode.value === 'arm' ? ['左臂', '右臂'] : ['左手', '右手']
+
+    rowCharts[0] = new Chart(canvasL, {
+      type: 'line',
+      data: { datasets: buildDatasets(row.dataLeft, row.actLeft, 0, perSide) },
+      options: makeOptions(row.title + ' — ' + sideLabels[0], row.yLabel),
+    })
+    ;((rowCharts[0].options.plugins as any).timelineOverlay ??= {}).segments = normalizedTimelineSegments.value
+
+    rowCharts[1] = new Chart(canvasR, {
+      type: 'line',
+      data: { datasets: buildDatasets(row.dataRight, row.actRight, perSide, perSide) },
+      options: makeOptions(row.title + ' — ' + sideLabels[1], row.yLabel),
+    })
+    ;((rowCharts[1].options.plugins as any).timelineOverlay ??= {}).segments = normalizedTimelineSegments.value
+
+    canvasL.style.cursor = 'crosshair'
+    canvasR.style.cursor = 'crosshair'
+    charts.push(rowCharts)
+  }
+
+  resetZoom()
   drawChartOverlay()
 }
 
@@ -688,8 +887,9 @@ watch(selectedVariant, async () => {
   await syncVideosToFrame()
 })
 
-watch(curveMode, () => {
+watch(curveMode, async () => {
   destroyChart()
+  await nextTick()
   renderChart()
 })
 
@@ -709,10 +909,12 @@ onBeforeUnmount(() => {
 
 onMounted(() => {
   window.addEventListener('mouseup', stopChartDragging)
+  document.addEventListener('wheel', preventBrowserZoom, { passive: false })
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('mouseup', stopChartDragging)
+  document.removeEventListener('wheel', preventBrowserZoom)
 })
 
 const submit = async () => {
@@ -893,42 +1095,42 @@ const submit = async () => {
                 <span class="chart-legend-swatch" :style="{ borderColor: item.color }" :class="{ dashed: item.dashed }"></span>
                 <span>{{ item.label }}</span>
               </div>
+              <button v-if="isZoomed" class="zoom-reset-btn" @click="resetZoom" title="重置缩放">↺ 重置</button>
             </div>
-            <div class="chart-canvas-shell" style="height: 280px; position: relative; margin-bottom: 12px">
-              <div
-                v-show="chartPlaybackCursorVisible"
-                class="chart-cursor-line playback"
-                :style="{ left: `${chartPlaybackCursorLeftPx}px`, top: `${chartCursorTopPx}px`, height: `${chartCursorHeightPx}px` }"
-              ></div>
-              <div
-                v-show="chartHoverCursorVisible"
-                class="chart-cursor-line hover"
-                :style="{ left: `${chartHoverCursorLeftPx}px`, top: `${chartCursorTopPx}px`, height: `${chartCursorHeightPx}px` }"
-              ></div>
-              <canvas
-                ref="chartCanvasL"
-                @mousemove="e => handleChartPointerMove(e, chartL, chartCanvasL)"
-                @mouseleave="handleChartPointerLeave"
-                @mousedown="e => handleChartPointerDown(e, chartL, chartCanvasL)"
-              ></canvas>
-            </div>
-            <div class="chart-canvas-shell" style="height: 280px; position: relative">
-              <div
-                v-show="chartPlaybackCursorVisible"
-                class="chart-cursor-line playback"
-                :style="{ left: `${chartPlaybackCursorLeftPxR}px`, top: `${chartCursorTopPx}px`, height: `${chartCursorHeightPx}px` }"
-              ></div>
-              <div
-                v-show="chartHoverCursorVisible"
-                class="chart-cursor-line hover"
-                :style="{ left: `${chartHoverCursorLeftPxR}px`, top: `${chartCursorTopPx}px`, height: `${chartCursorHeightPx}px` }"
-              ></div>
-              <canvas
-                ref="chartCanvasR"
-                @mousemove="e => handleChartPointerMove(e, chartR, chartCanvasR)"
-                @mouseleave="handleChartPointerLeave"
-                @mousedown="e => handleChartPointerDown(e, chartR, chartCanvasR)"
-              ></canvas>
+
+            <div v-for="(row, rowIdx) in signalRows" :key="row.key"
+                 class="chart-canvas-shell"
+                 :style="{ height: `${row.height}px`, position: 'relative', marginBottom: '8px' }">
+              <div style="display:flex; gap: 12px; height: 100%">
+                <div style="flex:1; position:relative; overflow:hidden">
+                  <div v-show="playbackVisibleL"
+                       class="chart-cursor-line playback"
+                       :style="{ left: `${playbackLeftPx}px`, top: `${cursorTopPxL[rowIdx] ?? 0}px`, height: `${cursorHeightPxL[rowIdx] ?? 0}px` }"></div>
+                  <div v-show="hoverVisibleL"
+                       class="chart-cursor-line hover"
+                       :style="{ left: `${hoverLeftPx}px`, top: `${cursorTopPxL[rowIdx] ?? 0}px`, height: `${cursorHeightPxL[rowIdx] ?? 0}px` }"></div>
+                  <canvas
+                    :ref="(el: any) => setCanvasRef(rowIdx, 0, el)"
+                    @mousemove="e => handleChartPointerMove(e, charts[rowIdx]?.[0] ?? null, canvasRefs[rowIdx]?.[0] ?? null)"
+                    @mouseleave="handleChartPointerLeave"
+                    @mousedown="e => handleChartPointerDown(e, charts[rowIdx]?.[0] ?? null, canvasRefs[rowIdx]?.[0] ?? null)"
+                  ></canvas>
+                </div>
+                <div style="flex:1; position:relative; overflow:hidden">
+                  <div v-show="playbackVisibleR"
+                       class="chart-cursor-line playback"
+                       :style="{ left: `${playbackLeftPxR}px`, top: `${cursorTopPxR[rowIdx] ?? 0}px`, height: `${cursorHeightPxR[rowIdx] ?? 0}px` }"></div>
+                  <div v-show="hoverVisibleR"
+                       class="chart-cursor-line hover"
+                       :style="{ left: `${hoverLeftPxR}px`, top: `${cursorTopPxR[rowIdx] ?? 0}px`, height: `${cursorHeightPxR[rowIdx] ?? 0}px` }"></div>
+                  <canvas
+                    :ref="(el: any) => setCanvasRef(rowIdx, 1, el)"
+                    @mousemove="e => handleChartPointerMove(e, charts[rowIdx]?.[1] ?? null, canvasRefs[rowIdx]?.[1] ?? null)"
+                    @mouseleave="handleChartPointerLeave"
+                    @mousedown="e => handleChartPointerDown(e, charts[rowIdx]?.[1] ?? null, canvasRefs[rowIdx]?.[1] ?? null)"
+                  ></canvas>
+                </div>
+              </div>
             </div>
           </div>
         </el-card>
@@ -966,7 +1168,10 @@ const submit = async () => {
                 :messages="ai.messages.value"
                 :is-thinking="ai.isThinking.value"
                 :provider-status="ai.providerStatus.value"
+                :stream-phase="ai.streamPhase.value"
+                :health-ok="ai.healthOk.value"
                 @send="handleAiSend"
+                @ready="(fn: any) => ai.setScrollFn(fn)"
                 @close="ai.close"
               />
             </div>
@@ -1197,6 +1402,23 @@ const submit = async () => {
   height: 0;
   border-top: 2px solid currentColor;
   display: inline-block;
+}
+
+.zoom-reset-btn {
+  margin-left: auto;
+  padding: 2px 10px;
+  font-size: 11px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #fff;
+  color: #475569;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.zoom-reset-btn:hover {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+  color: #1e293b;
 }
 
 .chart-legend-swatch.dashed {

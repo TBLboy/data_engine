@@ -297,6 +297,17 @@ onMounted(load)
                 <div class="field-hint">Ollama 默认端口为 11434</div>
               </el-col>
             </el-row>
+            <el-row :gutter="20" style="margin-top: 16px">
+              <el-col :span="12">
+                <div class="field-label">模型名称</div>
+                <el-input
+                  v-model="generalConfig.ai_model_name"
+                  placeholder="qwen2.5:7b"
+                  style="width: 100%"
+                />
+                <div class="field-hint">如 qwen2.5:7b、qwen3-vl-thinking:32b，使用 ollama list 查看可用模型</div>
+              </el-col>
+            </el-row>
           </el-card>
         </el-tab-pane>
 

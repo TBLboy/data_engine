@@ -1026,11 +1026,11 @@ def telemetry_curve(episode_id: str, db: Session = Depends(get_db), current_user
         t_rel = (ts - ts[0]).tolist()
         qpos = telemetry['qpos'].astype(np.float64)
         actions = telemetry['actions'].astype(np.float64)
+        qvel = telemetry.get('qvel', np.zeros_like(qpos)).astype(np.float64)
+        effort = telemetry.get('effort', np.zeros_like(qpos)).astype(np.float64)
 
         arm_total = arm_left_dof + arm_right_dof
         hand_total = hand_left_dof + hand_right_dof
-        arm_dims = list(range(arm_total))
-        hand_dims = list(range(arm_total, arm_total + hand_total))
 
         # Downsample if > 500 frames
         n = len(t_rel)
@@ -1038,19 +1038,36 @@ def telemetry_curve(episode_id: str, db: Session = Depends(get_db), current_user
         idx = list(range(0, n, stride))
         t_sampled = [t_rel[i] for i in idx]
 
-        qpos_arm = qpos[:, :arm_total][idx, :].tolist() if arm_total else []
-        qpos_hand = qpos[:, arm_total:arm_total + hand_total][idx, :].tolist() if hand_total else []
-        actions_arm = actions[:, :arm_total][idx, :].tolist() if arm_total else []
-        actions_hand = actions[:, arm_total:arm_total + hand_total][idx, :].tolist() if hand_total else []
+        def _slice(arr, start, count):
+            if not count:
+                return []
+            return arr[:, start:start + count][idx, :].tolist()
+
+        qpos_arm = _slice(qpos, 0, arm_total)
+        qpos_hand = _slice(qpos, arm_total, hand_total)
+        actions_arm = _slice(actions, 0, arm_total)
+        actions_hand = _slice(actions, arm_total, hand_total)
+        qvel_arm = _slice(qvel, 0, arm_total)
+        qvel_hand = _slice(qvel, arm_total, hand_total)
+        effort_arm = _slice(effort, 0, arm_total)
+        effort_hand = _slice(effort, arm_total, hand_total)
 
     return {
         'timestamps': t_sampled,
         'armDims': arm_total,
         'handDims': hand_total,
+        'armLeftDof': arm_left_dof,
+        'armRightDof': arm_right_dof,
+        'handLeftDof': hand_left_dof,
+        'handRightDof': hand_right_dof,
         'qposArm': qpos_arm,
         'qposHand': qpos_hand,
         'actionsArm': actions_arm,
         'actionsHand': actions_hand,
+        'qvelArm': qvel_arm,
+        'qvelHand': qvel_hand,
+        'effortArm': effort_arm,
+        'effortHand': effort_hand,
     }
 
 
@@ -1820,11 +1837,12 @@ def ai_explain(
     host = str(gen_cfg.get('ai_model_host', '127.0.0.1'))
     port = int(gen_cfg.get('ai_model_port', 11434))
     ollama_url = f"http://{host}:{port}"
+    model_name = str(gen_cfg.get('ai_model_name', settings.ollama_model))
 
     svc = AiQcService(
         enabled=settings.ai_explain_enabled,
         ollama_base_url=ollama_url,
-        ollama_model=settings.ollama_model,
+        ollama_model=model_name,
         timeout_seconds=settings.ai_explain_timeout_seconds,
     )
     request = AiExplainRequest(**payload)
@@ -1867,6 +1885,22 @@ def ai_create_conversation(
     ).model_dump()
 
 
+@router.get('/ai-assistant/health')
+def ai_health(db: Session = Depends(get_db)):
+    """快速检测 Ollama 模型服务是否可达（3 秒超时）。"""
+    import httpx
+    gen_cfg = GeneralConfig.get_params(db)
+    host = str(gen_cfg.get('ai_model_host', '127.0.0.1'))
+    port = int(gen_cfg.get('ai_model_port', 11434))
+    try:
+        resp = httpx.get(f"http://{host}:{port}/api/tags", timeout=3.0)
+        if resp.status_code == 200:
+            return {"ok": True, "models": len(resp.json().get("models", []))}
+        return {"ok": False, "detail": f"status {resp.status_code}"}
+    except Exception as e:
+        return {"ok": False, "detail": str(e)[:100]}
+
+
 @router.get('/ai-assistant/conversations/{conversation_id}/messages')
 def ai_get_messages(
     conversation_id: str,
@@ -1899,7 +1933,7 @@ def ai_chat(
     svc = AiChatService(
         enabled=settings.ai_explain_enabled,
         ollama_base_url=f"http://{host}:{port}",
-        ollama_model=settings.ollama_model,
+        ollama_model=str(gen_cfg.get('ai_model_name', settings.ollama_model)),
         timeout_seconds=settings.ai_explain_timeout_seconds,
     )
     request = AiChatRequest(**payload)
@@ -1925,7 +1959,7 @@ def ai_chat_stream(
     svc = AiChatService(
         enabled=settings.ai_explain_enabled,
         ollama_base_url=f"http://{host}:{port}",
-        ollama_model=settings.ollama_model,
+        ollama_model=str(gen_cfg.get('ai_model_name', settings.ollama_model)),
         timeout_seconds=settings.ai_explain_timeout_seconds,
     )
     request = AiChatRequest(**payload)
@@ -1935,6 +1969,6 @@ def ai_chat_stream(
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # 禁用 nginx 缓冲
+            "X-Accel-Buffering": "no",
         },
     )

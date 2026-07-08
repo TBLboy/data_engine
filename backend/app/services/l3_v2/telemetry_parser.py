@@ -21,10 +21,12 @@ class ParsedTelemetry:
     qpos_arm: np.ndarray
     qpos_hand: np.ndarray
     qvel_arm: np.ndarray
+    qvel_hand: np.ndarray
     actions_arm: np.ndarray
     actions_hand_raw: np.ndarray
     actions_hand: np.ndarray
     effort_arm: np.ndarray
+    effort_hand: np.ndarray
     ee_poses_qpos_left: np.ndarray | None = None
     ee_poses_qpos_right: np.ndarray | None = None
     ee_poses_actions_left: np.ndarray | None = None
@@ -107,9 +109,11 @@ class TelemetryParser:
         qpos_arm = qpos[:, arm_dims] if arm_dims else np.zeros((len(ts), 0), dtype=np.float64)
         qpos_hand_raw = qpos[:, hand_dims] if hand_dims else np.zeros((len(ts), 0), dtype=np.float64)
         qvel_arm = qvel[:, arm_dims] if arm_dims else np.zeros((len(ts), 0), dtype=np.float64)
+        qvel_hand_raw = qvel[:, hand_dims] if hand_dims else np.zeros((len(ts), 0), dtype=np.float64)
         actions_arm = actions[:, arm_dims] if arm_dims else np.zeros((len(ts), 0), dtype=np.float64)
         actions_hand_raw = actions[:, hand_dims] if hand_dims else np.zeros((len(ts), 0), dtype=np.float64)
         effort_arm = effort[:, arm_dims] if arm_dims else np.zeros((len(ts), 0), dtype=np.float64)
+        effort_hand_raw = effort[:, hand_dims] if hand_dims else np.zeros((len(ts), 0), dtype=np.float64)
 
         return ParsedTelemetry(
             timestamps=ts,
@@ -126,10 +130,13 @@ class TelemetryParser:
             # Hand raw→normalized: 0-255 range division (Linker Hand hardware spec, see requirements.md)
             qpos_hand=qpos_hand_raw / 255.0 if hand_dims else np.zeros((len(ts), 0), dtype=np.float64),
             qvel_arm=qvel_arm,
+            # Hand raw→normalized: 0-255 range division (Linker Hand hardware spec)
+            qvel_hand=qvel_hand_raw / 255.0 if hand_dims else np.zeros((len(ts), 0), dtype=np.float64),
             actions_arm=actions_arm,
             actions_hand_raw=actions_hand_raw,
             actions_hand=actions_hand_raw / 255.0 if hand_dims else np.zeros((len(ts), 0), dtype=np.float64),
             effort_arm=effort_arm,
+            effort_hand=effort_hand_raw / 255.0 if hand_dims else np.zeros((len(ts), 0), dtype=np.float64),
             ee_poses_qpos_left=self._get_optional('ee_poses_qpos_left'),
             ee_poses_qpos_right=self._get_optional('ee_poses_qpos_right'),
             ee_poses_actions_left=self._get_optional('ee_poses_actions_left'),

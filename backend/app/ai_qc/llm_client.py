@@ -33,7 +33,7 @@ def call_ollama(prompt: str, *, base_url: str, model: str, timeout_seconds: int)
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
-                "options": {"temperature": 0.3, "num_predict": 512},
+                "options": {"temperature": 0.3, "num_predict": 1024},
             },
             timeout=timeout_seconds,
         )
@@ -75,7 +75,7 @@ def call_ollama_stream(
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": True,
-                "options": {"temperature": 0.3, "num_predict": 512},
+                "options": {"temperature": 0.3, "num_predict": 1024},
             },
             timeout=timeout_seconds,
         ) as resp:

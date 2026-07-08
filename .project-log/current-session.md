@@ -2,7 +2,11 @@
 
 ## Last Updated
 
-- 2026-07-08 (QC Agent Phase 1 落地：持久化聊天 + conversation API + 流式 SSE + pageState 上下文，qwen3-vl:32b 模型下载中)
+- 2026-07-08 19:25 CST (QC Agent Phase 1 + SSE 流式 + Ollama/Qwen3-VL-32B 服务化 + 曲线多信号/缩放/游标边界修复，已构建并重启前端容器)
+- 2026-07-08 (Ollama systemd 服务化 + 模型常驻 + 健康检查 + 自动滚动 + 部署文档更新，Qwen3-VL-32B-Thinking 已上线)
+- 2026-07-08 (曲线图多信号行：速度+力矩+缩放+中键拖动+xy 平移，已部署)
+- 2026-07-08 (SSE 流式输出落地：前端 postChatStream + sendStream 逐 token 渲染，已部署)
+- 2026-07-08 (QC Agent Phase 1 落地：持久化聊天 + conversation API + 流式 SSE + pageState 上下文)
 - 2026-07-08 (AI 助手对话体验修复：prompt 重写为文本摘要+对话式指令+对话历史，qwen2.5:7b 不再千篇一律回复，已部署)
 - 2026-07-08 (manual QC 遥操作曲线图坐标轴对齐修复：固定 y 轴宽度 + 双图光标解耦 + 拖拽优化，已 push main)
 - 2026-07-08 (lerobot-doctor 全部 11 条对标审查完成：5 改造 + 4 不适用 + 2 已有覆盖，DI-01~04 体系完整闭环)
@@ -31,14 +35,17 @@
 ## Current Objective
 
 - 以公司内网可直接投入使用为标准推进 Robot QC V1
-- 完成 RDDQF L3 v2 MVP 迁移，将 L3 从单层指标引擎升级为四层训练数据质量评估引擎
-- 收口任务类型 arm_mode 单/双臂配置，把单臂任务从 L3 统计口径中正确剥离无关手臂维度
+- AI 质检助手已推进到 QC Agent Phase 1：持久化对话、SSE 流式输出、pageState 上下文、模型健康检查和自动滚动均已落地
+- 本地大模型服务已改为 Ollama systemd 常驻部署，Qwen3-VL-32B-Thinking Q4_K_M 已上线并通过设置页动态配置模型名
+- manual QC 遥操作曲线已扩展为位置/速度/力矩多信号行，支持 Ctrl+滚轮缩放、xy 平移、中键拖动游标 seek，最新修复已按真实 chartArea 裁剪左右边界
 
 ## Current Status
 
-- 2026-07-07: 已完成任务类型 arm_mode 第一轮代码落地：TaskType 新增 `both_arms / left_arm / right_arm`，后端 task-types API 与前端任务类型管理页已打通配置入口
-- 2026-07-07: L3 真实计算链路已改为从 `episode -> batch -> task_type` 读取 `arm_mode`，并在 `TelemetryParser / L3V2Engine` 中按 arm_mode 过滤 arm/hand 维度；manual QC 展示层按当前决策保持不变
-- 2026-07-07: backend `python -m compileall backend/app` 已通过，frontend `npm --prefix frontend run build` 已通过
+- 2026-07-08: QC Agent Phase 1 已落地：新增 episode 级 conversation/message 持久化、conversation API、SSE 流式输出、pageState 上下文、前端恢复历史对话与逐 token 渲染
+- 2026-07-08: Ollama 已改为 systemd 服务常驻运行，Qwen3-VL-32B-Thinking Q4_K_M 已注册上线；平台设置页可配置模型 IP/端口/名称，发送前会快速健康检查
+- 2026-07-08: manual QC 曲线视图已扩展为位置/速度/力矩多信号行，接入 `chartjs-plugin-zoom` 支持 Ctrl+滚轮缩放、xy 平移、所有行联动同步和中键拖动游标 seek
+- 2026-07-08: 已修复缩放/平移后游标左右边界问题：鼠标取时和蓝/黑游标显示均按 Chart.js `chartArea.left/right` 裁剪，左右图 visibility 独立，避免旧 left 残留穿出坐标系
+- 2026-07-08: `npm --prefix frontend run build` 已通过，`docker compose -f deploy/docker-compose.yml up --build -d frontend` 已重建并重启前端容器；backend recreate 后 healthy
 
 - 前端页面已从 mock 迁移到后端 API
 - 手动 QC 页面已接入真实上下文和提交接口
