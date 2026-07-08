@@ -1,0 +1,2875 @@
+## 2026-07-08 (manual QC 遥操作曲线图左侧坐标轴对齐修复)
+
+- Type: frontend bugfix + deployment
+- Status: frontend rebuilt, Docker deployed, user verified effective
+- Importance: medium
+- Reusable: yes
+- Objective: 修复 manual QC 页面中机械臂双面板曲线图左侧坐标轴未对齐的问题，确保上下两张图的绘图区左边界一致
+- Root cause:
+  - 问题并不在 x 轴时间范围，而在 y 轴自动布局
+  - 机械臂图的 y 轴刻度文本更长（如 `0.0020 / -0.0010`），Chart.js 会自动分配更宽的左侧轴区域
+  - 结果是上下两张机械臂图虽然 `x.min/x.max` 一致，但绘图区 `chartArea.left` 不一致，视觉上表现为左侧不对齐
+  - 灵巧手图之所以正常，是因为其 y 轴刻度文本更短，自动布局碰巧一致
+- Work completed:
+  - **时间轴范围对齐**：两张图统一显式设置 `x.min = 0`、`x.max = maxTime`
+  - **双图光标解耦**：左右图分别计算 playback / hover cursor 像素位置，不再错误复用左图坐标
+  - **拖拽体验优化**：scrub 改为 16ms 节流的同步 `video.currentTime` 更新，快速拖动时不再明显掉帧
+  - **最终对齐修复**：为 Chart.js y 轴增加 `afterFit()`，固定机械臂图的 y 轴宽度，消除因刻度文本长度差异带来的左边距漂移
+  - **部署补齐**：确认前端容器最初未包含最新 bundle 后，重新 build frontend 并重建 `robot-qc-frontend` 容器
+- Files changed:
+  - `frontend/src/pages/manual-qc.vue` — 统一 x 轴范围、分离双图 cursor、固定机械臂 y 轴宽度、优化 scrub 逻辑
+- Verification:
+  - `npm --prefix frontend run build` ✅
+  - `docker compose -f deploy/docker-compose.yml build frontend && up -d frontend` ✅
+  - 用户刷新页面后确认修复生效 ✅
+- Next steps:
+  - 当前问题已收口，无额外跟进项
+
+## 2026-07-08 (lerobot-doctor 全部 11 条对标审查完成)
+
+- Type: review + benchmark
+- Status: 审查完成，对标改造全部落地
+- Importance: high
+- Reusable: yes
+- Objective: 以 lerobot-doctor 为参照基准，逐条审查 Robot QC L3 引擎覆盖度，补齐数据质量缺口
+- Summary: 11 条中 5 条已对标改造、4 条不适用、2 条已有覆盖
+
+| # | lerobot check | Robot QC | 结论 |
+|---|---------------|----------|------|
+| 1 | metadata | manifest 格式不同 | ❌ 不适用 |
+| 2 | temporal | DI-01 重写（声明FPS+抖动+丢帧+FPS一致性） | ✅ 改造完成 |
+| 3 | actions | MQ-01/02/03 + DX-02 NaN/Inf | ✅ 已对标 |
+| 4 | videos | 后端不解码视频，浏览器播放 | ✅ 已有覆盖 |
+| 5 | statistics | DI-03 维度健康 + DX-02 扩展 | ✅ 改造完成 |
+| 6 | episodes | DI-04 Episode 完整性 | ✅ 改造完成 |
+| 7 | consistency | npz 固定 schema | ❌ 不适用 |
+| 8 | training | LeRobot 训练框架概念 | ❌ 不适用 |
+| 9 | anomalies | DI-03 + arm_mode 过滤 | ✅ 已有覆盖 |
+| 10 | portability | MinIO 对象存储 | ❌ 不适用 |
+| 11 | per_episode | manual QC 逐 episode 页面 | ✅ 已有覆盖 |
+
+- Next steps:
+  - 部署验证 + 参数调优
+  - 考虑 batch 级跨 episode 统计（分布漂移、长度方差等）
+
+## 2026-07-07 (DI-03 维度健康 + DX-02 扩展：zero-variance / MAD outliers / effort+qvel NaN/Inf)
+
+- Type: enhancement
+- Status: backend compile passed, Docker deployed, healthy
+- Importance: high
+- Reusable: yes
+- Objective: 对标 lerobot-doctor statistics 检查项（NaN/Inf in observations、zero-variance、extreme outliers），补齐 Robot QC 逐维度统计异常检测
+- Decisions confirmed:
+  - **NaN/Inf**：扩展现有 DX-02，补 effort + qvel 数组扫描（原来只扫了 actions + qpos）
+  - **Zero-variance**：逐维度查 std==0，直接定位故障传感器或填充假数据维度
+  - **Extreme outliers**：用 MAD（中位数绝对偏差）替代 mean/std 计算 robust z-score，避免异常值自污染
+  - **指标归属**：Zero-variance + outliers 合并为 DI-03 Dimension Health，归入 data_integrity 维度
+  - **DI-03 不参与 Q_motion**：weight=0，作为独立诊断展示
+- Work completed:
+  - **feature_extractor.py**：
+    - NaN/Inf 扫描扩展为 actions / qpos / effort / qvel 四数组全覆盖
+    - 新增 `_compute_dim_health()`：遍历 arm_qpos / arm_actions / arm_effort / arm_qvel / hand_qpos / hand_actions 每个维度，算 std（零方差检测）+ MAD robust_z（异常值检测），单臂模式自动跳过手部维度
+  - **metric_engine.py**：
+    - DX-02 `_data_validity()` 纳总加入 effort/qvel NaN/Inf，描述同步更新
+    - 新增 `_dimension_health()` → DI-03：汇总零方差维度 + 异常值超标维度，按问题维度占比衰减评分，零方差=bad，仅异常值=warn
+  - **l3_v2_config.py**：新增 `di03_outlier_z`（默认 10）、`di03_outlier_ratio_warn`（默认 0.01）
+- Key design decisions:
+  - **为什么用 MAD 而非 mean/std**：单条 episode 内如果异常帧占比高，mean/std 会被污染导致 z-score 失效；MAD 基于中位数，不受异常值影响
+  - **robust_z 阈值 10**：乘以 0.6745 后与传统 z-score 尺度对齐，10 是保守阈值，减少误报
+  - **outlier_ratio_warn=0.01**：容忍 1% 偶发噪声，超过才报警
+- Files changed:
+  - `backend/app/services/l3_v2/feature_extractor.py` — dim_health_records + effort/qvel NaN/Inf + _compute_dim_health()
+  - `backend/app/services/l3_v2/metric_engine.py` — DX-02 扩展 + DI-03 _dimension_health()
+  - `backend/app/models/l3_v2_config.py` — di03_outlier_z / di03_outlier_ratio_warn
+- Verification:
+  - `python -m compileall backend/app/services/l3_v2` ✅
+  - `docker compose build backend && up -d backend` ✅, healthy
+- Unverified items:
+  - 尚未在真实异常 episode 上验证 MAD outlier 检测效果
+  - 尚未对零方差维度做真实数据验证
+- Next steps:
+  - 继续对标 lerobot-doctor 下一 check 条目
+
+## 2026-07-08 (DI-03/DI-04 新增 + 全指标中文化 + DI 截断机制重构)
+
+- Type: feature + enhancement + bugfix
+- Status: backend compile passed, Docker deployed, healthy
+- Importance: high
+- Reusable: yes
+- Objective: 对标 lerobot-doctor episodes/anomalies 检查项，补齐维度健康、episode 完整性检测；同步 DI-01 深度路径；全指标中文化；修复 Q_motion 截断逻辑
+- Decisions confirmed:
+  - **DI-03 Dimension Health**：逐维度零方差检测（所有维度）+ MAD outlier 检测（仅 arm_qpos/arm_actions，原因见下）
+  - **DI-04 Episode Completeness**：帧数过短（<10）+ manifest 声明-实际帧数不一致（>5%）
+  - **DI-03 outlier 范围三次收紧**：
+    1. 初始覆盖 arm_qpos/actions/effort/qvel + hand_qpos/actions
+    2. → 移除 qvel/effort（速度/力矩天然有尖峰，误报严重）
+    3. → 移除 hand_qpos/actions（手部从全开到全闭瞬间完成，天然产生大跳变）
+    4. → 最终只保留 arm_qpos + arm_actions
+  - **Q_motion 截断机制重构**：从"维度均分低于阈值"改为"任一 DI 指标低于阈值"
+    - 旧：data_integrity 维度均分 < 3 → 封顶 4.5；< 5 → 封顶 6.0
+    - 新：任一 DI 指标 < 3.0 → 封顶 3.0；< 5.0 → 封顶 6.0
+    - 理由：DI-01=10, DI-03=10, DI-04=10 不应该给 DI-02=1.6 做掩护
+  - **DI-01 深度相机路径同步**：丢帧阈值从 2.0→1.5，权重从 0.5/0.3/0.2→0.35/0.25/0.15，与主路径一致
+  - **全指标中文化**：12 个指标的 name/unit/description + 14 条 timeline label + 8 条 evidence 标签全部中文化
+- Work completed:
+  - **DI-03 新建**：feature_extractor._compute_dim_health() 逐维度扫描 + metric_engine._dimension_health()
+  - **DI-04 新建**：metric_engine._episode_completeness()，manifest frame_count 经 engine→features 传入
+  - **DI-01 深度路径同步**：_timestamp_regularity_depth 逻辑对齐主路径
+  - **全指标中文化**：metric_engine 全部 name/unit + quality_engine EVIDENCE_META 补 DI-03/DI-04 条目
+  - **证据分修复**：weight=0 指标的证据组评分从加权平均改为等权平均
+  - **Q_motion 截断重构**：逐指标判定替代维度均分判定，新增 qf_data_cap_metric_bad/warn 参数
+- Files changed:
+  - `backend/app/services/l3_v2/feature_extractor.py` — DI-03 _compute_dim_health + manifest_frame_count
+  - `backend/app/services/l3_v2/metric_engine.py` — DI-01 depth 同步 + DI-03 + DI-04 + 全中文化
+  - `backend/app/services/l3_v2/engine.py` — manifest_frame_count 透传
+  - `backend/app/services/l3_v2/quality_engine.py` — EVIDENCE_META 补条目 + 证据分修复 + 截断重构
+  - `backend/app/services/payloads.py` — manifest frame_count 传入
+  - `backend/app/models/l3_v2_config.py` — DI-03/DI-04 参数 + 截断参数更新
+- Unverified items:
+  - DI-03/DI-04 在真实异常数据上的效果尚未验证
+  - 新截断逻辑在不同 episode 上的表现尚未全面比对
+- Next steps:
+  - 继续对标 lerobot-doctor 剩余条目（consistency/training/portability/per_episode）
+
+## 2026-07-07 (DI-01 丢帧检测改用声明 FPS + FPS 一致性 + DX-02 NaN/Inf 检测)
+
+- Type: enhancement
+- Status: backend compile passed, Docker deployed, healthy
+- Importance: high
+- Reusable: yes
+- Objective: 对标 lerobot-doctor temporal/actions 检查项，补齐 Robot QC 数据质量检测缺口
+- Decisions confirmed:
+  - **丢帧检测基准**：从 `dt_median`（自适应中位数）改为 `1.0 / declared_fps`（manifest 声明帧率），阈值 1.5 倍
+  - **FPS 一致性检查**：新增 `abs(dt_median - expected_interval) > expected_interval × 0.1` 全段时序警告
+  - **NaN/Inf 兜底**：在特征提取阶段扫描 actions/qpos 数组，作为 DX-02 诊断指标展示
+  - **frame_index/episode_index/global_index**：TeleDex 数据结构不需要，不加
+  - **Clipping 饱和检测**：灵巧手顶到边界属正常操作，不加
+- Work completed:
+  - **DI-01 重写**：丢帧检测改用 `1.5 / declared_fps`，抖动检测改用 `expected_interval` 基准，新增 FPS 一致性偏差项（权重 0.25）
+  - **DI-01 自适应降级**：无声明 FPS 时自动回退到 dt_median 模式，不影响旧数据评分
+  - **DI-01 参数重组**：`di01_jitter=0.35, di01_gap=0.25, di01_invalid=0.15, di01_fps=0.25`；`di01_drop_multiplier` 替代旧 `di01_gap_multiplier`
+  - **DX-02 Data Validity 新增**：扫描 actions/qpos NaN/Inf，无异常=10 分，有异常=按异常数量衰减；独立诊断，不参与 Q_motion 总分
+  - **数据链路**：manifest fps → payloads → L3V2Engine → FeatureExtractor → L3V2Features.declared_fps → MetricEngine DI-01
+- Files changed:
+  - `backend/app/services/l3_v2/feature_extractor.py` — L3V2Features 新增 declared_fps/NaN/Inf 字段 + 扫描逻辑
+  - `backend/app/services/l3_v2/metric_engine.py` — DI-01 重写 + DX-02 _data_validity 新增
+  - `backend/app/services/l3_v2/engine.py` — declared_fps 透传
+  - `backend/app/models/l3_v2_config.py` — DI-01 参数默认值更新
+  - `backend/app/services/payloads.py` — manifest fps 传入 L3V2Engine
+- Verification:
+  - `python -m compileall backend/app/services/l3_v2` ✅
+  - `docker compose build backend && up -d backend` ✅, healthy
+- Unverified items:
+  - 尚未对真实有丢帧或 FPS 不一致的 episode 做人工比对
+  - NaN/Inf 检测在健康数据上已验证不误报，尚未对损坏数据做验证
+- Next steps:
+  - 继续对标 lerobot-doctor 剩余 check 条目，确定下一批改动
+  - push 一版代码
+
+## 2026-07-07 (任务类型 arm_mode 落地：按任务类型过滤 L3 单/双臂维度)
+
+- Type: feature + business-logic refinement
+- Status: backend compile passed, frontend build passed
+- Importance: high
+- Reusable: yes
+- Objective: 解决单臂任务被双臂统一口径误判的问题，在任务类型层新增 arm_mode，并让 L3 计算仅统计当前任务实际应使用的 arm/hand 维度
+- Decisions confirmed:
+  - **配置层级**：arm_mode 仅挂在 TaskType，不下沉到每条 episode
+  - **字段枚举**：固定三值 `both_arms / left_arm / right_arm`
+  - **展示边界**：本轮不改 manual QC 展示层，只修正后端计算口径与任务类型管理配置入口
+- Work completed:
+  - **后端模型与迁移**：`TaskType` 新增 `arm_mode` 字段，默认 `both_arms`；新增 migration `20260707_0017_task_type_arm_mode.py`
+  - **后端 schema/API**：任务类型 `create / update / list / detail` 全链路已打通 `armMode` 字段，并对非法值做校验
+  - **L3 计算链路修正**：`payloads.py` 在构建 manual QC 真实上下文时，已从 `episode -> batch -> task_type` 读取 `arm_mode`
+  - **Telemetry 维度过滤**：`TelemetryParser.parse()` 与 `L3V2Engine` 已支持 `arm_mode` 入参，并按 `left_arm / right_arm / both_arms` 过滤 arm/hand 维度，不再默认把左右臂全部纳入计算
+  - **前端任务类型管理页**：创建/编辑任务类型弹窗已增加手臂模式单选项，详情区已展示当前任务类型的手臂模式
+  - **类型同步**：前端 `TaskType` / API request 类型与 mock 数据已同步 `armMode`
+- Files changed:
+  - `backend/app/models/task_type.py` — 新增 `arm_mode`
+  - `backend/migrations/versions/20260707_0017_task_type_arm_mode.py` — 新建 migration
+  - `backend/app/schemas/qc.py` — TaskType schema / request 增加 `armMode`
+  - `backend/app/api/routes/qc.py` — task-types API 增加 `armMode` 校验与写入
+  - `backend/app/services/payloads.py` — manual QC 真实上下文读取 task_type.arm_mode 并传给 L3
+  - `backend/app/services/l3_v2/engine.py` — 透传 `arm_mode`
+  - `backend/app/services/l3_v2/telemetry_parser.py` — 按 arm_mode 过滤 arm/hand dims
+  - `frontend/src/types/qc.ts` — 新增 `TaskTypeArmMode` 与 `TaskType.armMode`
+  - `frontend/src/api/client.ts` — task type create/update request 增加 `armMode`
+  - `frontend/src/pages/task-types.vue` — 新增手臂模式配置与详情展示
+  - `frontend/src/api/mock.ts` — mock taskTypes 补齐 `armMode`
+- Verification:
+  - `python -m compileall backend/app` ✅
+  - `npm --prefix frontend run build` ✅
+  - `docker compose build frontend && docker compose up -d frontend` ✅
+- Problems encountered:
+  - **部署后全站接口 500**：前端重建部署后，backed 代码已升级为读取 `task_types.arm_mode`，但生产数据库尚未执行 migration `20260707_0017`，导致 `/api/dashboard`、`/api/database` 等接口全部抛出 `UndefinedColumn`，页面表现为数据全空
+  - **根因**：代码发布与数据库 migration 未同步执行，Alembic migration 文件已存在于代码仓库，但未在容器内执行 `alembic upgrade head`
+- Resolution:
+  - 在生产容器内执行 `alembic upgrade head`，成功应用 `20260707_0016 -> 20260707_0017`
+  - 重启 backend 容器，`/api/dashboard` 恢复正常返回 14 个 taskTypes
+  - 数据库验证：`task_types` 表已包含 `arm_mode` 列，既存数据默认 `both_arms`
+- Verified: backend healthy, dashboard API 正常返回
+- Lesson: 今后任何涉及新增数据库列的改动，部署流程必须是：**先跑 migration → 再重启 backend**，否则代码读到不存在的列就会全站 500
+- Unverified items:
+  - 尚未做真实浏览器下的任务类型编辑联调
+  - 尚未对具体单臂 episode 做一轮人工比对验证 L3 指标变化是否符合预期
+- Next steps:
+  - 选一个明确右臂任务样本，验证 arm_mode=right_arm 后动作密度等指标不再被左臂静止维度稀释
+
+## 2026-07-07 (BUG提交增强：多图粘贴+暂存草稿)
+
+- Type: feature (enhancement)
+- Status: backend compile passed, frontend build passed, Docker deployed
+- Importance: high
+- Reusable: no
+- Objective: 将 BUG 提交从单图升级为多图粘贴，并支持 localStorage 暂存草稿，避免填写过程中意外关窗丢失内容
+- Work completed:
+  - **多图上传**：后端 `POST /api/bug-reports` 从 `image: UploadFile | None` 改为 `images: list[UploadFile]`，每张存为 `{report_id}_{idx}.{ext}`，`image_filename` 存 JSON 数组
+  - **多图读取**：图片接口改为 `GET /api/bug-reports/{id}/image/{index}`，按索引访问
+  - **序列化兼容**：`serialize_bug_report` 返回 `imageUrls: list[str]`，兼容旧单字符串格式
+  - **Schema 更新**：`BugReportSchema.imageUrl` 改为 `imageUrls: list[str]`
+  - **前端多图粘贴**：BugReportDialog 粘贴追加而非替换，网格预览 + 单张删除按钮 + 文件选择器入口
+  - **前端暂存草稿**：新增"暂存"按钮，描述 + 图片 base64 写入 localStorage key `bug-report-draft`；下次打开弹窗自动恢复并显示黄色提示；提交成功后自动清除草稿
+  - **管理页适配**：bug-management 截图列改为 `图1 图2 ...` 多链接
+  - **依赖补全**：requirements.txt 新增 `python-multipart`（FormData 上传必需）
+- Files changed:
+  - `backend/app/api/routes/qc.py` — 多图上传 + 按索引读取 + 清理 Path 死代码
+  - `backend/app/schemas/qc.py` — BugReportSchema.imageUrls
+  - `backend/app/services/payloads.py` — serialize_bug_report 多图 + 兼容旧格式
+  - `backend/requirements.txt` — +python-multipart
+  - `frontend/src/components/BugReportDialog.vue` — 多图网格 + 暂存草稿
+  - `frontend/src/pages/bug-management.vue` — 多图链接展示
+  - `frontend/src/api/client.ts` — CreateBugReportRequest.imageFiles + FormData append
+  - `frontend/src/types/qc.ts` — BugReport.imageUrls
+- Commit: pending
+
+## 2026-07-07 (BUG提交/管理完整落地：后端表+API+图片存储，前端提交弹窗+admin管理页)
+
+- Type: feature (new)
+- Status: backend compile passed, frontend build passed
+- Importance: high
+- Reusable: yes
+- Objective: 为局域网使用中的问题反馈建立内置闭环：普通用户可随手提交 BUG（截图+描述），admin 可统一查看、标记已修复或删除
+- Decisions confirmed:
+  - **用户侧入口**：顶部栏在 `LAN 内网访问` 与 `任务派发` 之间新增 `BUG提交` 按钮
+  - **交互形式**：点击按钮弹出浮窗，支持粘贴图片、填写描述文字、提交到服务器
+  - **管理侧入口**：admin 右上角用户下拉菜单中，命名为 `BUG管理`
+  - **管理能力**：admin 可查看全部 BUG 提交，支持标记状态（open/fixed）与删除记录
+  - **存储方案**：元数据存 bug_reports 表，截图文件存服务器本地 backend/data/bug_reports/，数据库仅存文件名
+- Work completed:
+  - **后端模型与迁移**：新增 BugReport 模型（qc.py），migration 20260707_0016 建表（id/description/status/image_filename/image_content_type/reporter_user_id/reporter_name/created_at/updated_at），status 和 reporter_user_id 建索引
+  - **后端 API**：`GET /api/bug-reports`（admin 列表）、`POST /api/bug-reports`（multipart 表单提交，支持图片 upload）、`PATCH /api/bug-reports/{id}/status`（admin 改状态）、`DELETE /api/bug-reports/{id}`（admin 删除）、`GET /api/bug-reports/{id}/image`（读取截图 FileResponse）；所有写操作附带 AuditEvent
+  - **后端配置**：config.py 新增 BUG_REPORT_UPLOAD_DIR 常量指向 backend/data/bug_reports/，main.py 启动时自动创建目录
+  - **后端序列化**：payloads.py 新增 serialize_bug_report，返回 imageUrl 指向受控图片接口
+  - **前端模板改造**：AppLayout.vue 顶部栏新增 `BUG提交` 按钮，右上角用户区改为 el-dropdown（admin 可见 BUG管理+设置，普通用户仅退出登录），引入 BugReportDialog 组件，vue-tsc 通过
+  - **前端提交弹窗**：新增 BugReportDialog.vue，支持 textarea 描述 + 剪贴板图片粘贴/预览 + FormData multipart 提交
+  - **前端管理页**：新增 bug-management.vue，el-table 展示提交时间/提交人/状态/描述/截图链接，支持标记已修复/重新打开/删除
+  - **前端路由**：新增 /bug-management 路由，meta.roles=['admin']
+- Files changed:
+  - `backend/app/models/qc.py` — 新增 BugReport 模型
+  - `backend/app/models/__init__.py` — 注册 BugReport
+  - `backend/migrations/versions/20260707_0016_bug_reports.py` — 新建 migration
+  - `backend/app/schemas/qc.py` — 新增 BugReportSchema / BugReportListPayloadSchema / BugReportStatusUpdateRequest
+  - `backend/app/api/routes/qc.py` — 新增 5 个 BUG 相关 endpoint + 导入
+  - `backend/app/services/payloads.py` — 新增 serialize_bug_report
+  - `backend/app/core/config.py` — 新增 BUG_REPORT_UPLOAD_DIR
+  - `backend/app/main.py` — startup 时 mkdir bug_reports 目录
+  - `frontend/src/components/AppLayout.vue` — 顶部 BUG提交 按钮 + 用户下拉菜单
+  - `frontend/src/components/BugReportDialog.vue` — 新建提交弹窗
+  - `frontend/src/pages/bug-management.vue` — 新建管理页
+  - `frontend/src/router/index.ts` — 新增 /bug-management 路由
+  - `frontend/src/api/client.ts` — 新增 createBugReport/fetchBugReports/updateBugReportStatus/deleteBugReport
+  - `frontend/src/types/qc.ts` — 新增 BugReport / BugReportListPayload 类型
+  - `.project-log/requirements.md`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Commit: pending
+
+## 2026-07-07 (清除所有启发式猜测逻辑：DOF路径修复 + 删除_detect_dims + manifest替代硬编码匹配)
+
+- Type: refactoring
+- Status: backend compile passed, Docker deployed
+- Importance: high
+- Reusable: yes
+- Objective: 彻底清除代码中所有"猜测数据结构"的逻辑，改为读取 metadata.json/manifest.json 中的明确定义
+- Work completed:
+  - **DOF 路径 BUG 修复**（qc.py/payloads.py）：`hw.get('arm')` → `dev.get('arm')`。arm/hand 节点是 device 的兄弟节点，不在 hardware_specs 内，原代码永不命中，始终回退到硬编码默认值 7/7/6/6
+  - **删除 `_detect_dims()`**（telemetry_parser.py）：移除 ~15 行启发式扫描代码（`qpos_active_max <= 3.5` 阈值猜测），改为强制要求 dof_config 参数，缺失时抛出 ValueError
+  - **_media_slot_and_label() 改用 manifest**（payloads.py）：不再用 `'left' in key` 子串匹配猜相机槽位，改为从 manifest `files.cameras` 构建精确映射
+  - **FPS 硬编码修复**（payloads.py）：`30.0` 硬编码 → 从 `episode.frame_count / duration_sec` 计算
+  - **深度时间戳匹配**（payloads.py）：优先从 manifest `cam_top.timestamps` 精确匹配，fallback 仍保留子串匹配
+  - **_derive_state() 改用 manifest**（scanner.py）：RGB 视频存在性判断从文件名后缀匹配 → manifest `files.cameras.{name}.video` 检查
+  - **相机排序权重动态化**（payloads.py）：从 `{top:10, left:20, right:30}` 硬编码 → 从 manifest cameras 枚举顺序动态生成
+  - **手部值域标注**（telemetry_parser.py）：`/255.0` 归一化补充注释说明为 Linker Hand 硬件事实
+- Files changed:
+  - `backend/app/api/routes/qc.py` — DOF 路径修复
+  - `backend/app/services/payloads.py` — _media_slot_and_label + 深度时间戳 + FPS + 排序权重改用 manifest
+  - `backend/app/services/scanner.py` — _derive_state 改用 manifest + 调用点传入 manifest_data
+  - `backend/app/services/l3_v2/telemetry_parser.py` — 删除 _detect_dims + dof_config 必传 + 注释标注
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Commit: pending
+
+## 2026-07-07 (遥操作曲线视图重构：双面板拆分 + 异常段背景叠加 + DOF检测改用metadata)
+
+- Type: feature + refactoring
+- Status: backend compile passed, frontend build passed, Docker deployed
+- Importance: high
+- Reusable: yes
+- Objective: 遥操作曲线视图从单面板升为左右双面板（机械臂：左臂/右臂，灵巧手：左手/右手），异常段背景色改为叠加逻辑，修复维度检测依赖 metadata.json 替代启发式扫描
+- Work completed:
+  - **异常段背景色取消游标高亮**：timelineOverlayPlugin 移除 active 逻辑，异常段背景色固定不再随播放位置变化
+  - **异常段背景色叠加逻辑**：改为逐像素列扫描——先统计每列 bad/warn/good 段重叠数，红色覆盖黄色（同一位置有 bad 时只画红），透明度随重叠数叠加（红: base 0.15 + 0.12/层 cap 0.60, 黄: base 0.10 + 0.08/层 cap 0.45），红色底色更深 `rgba(220,38,38,...)`
+  - **删除异常段核查清单面板**：移除 el-card + el-check-tag 列表，清理 segmentSource/segmentHasSource 死代码
+  - **双面板拆分**（renderChart）：替换单一 chartCanvas/chartInstance → chartL/R 双实例。每侧 perSideCount = Math.round(dimCount/2)；arm 模式左臂 dims 0:7 右臂 dims 7:14；hand 模式左手 dims 0:6 右手 dims 6:12。模板改为两个 canvas 上下垂直排列（280px 高 + 12px 间距），图例统一在顶部仅显示左侧维度配色
+  - **指针事件重构**：chartTimeFromPointer / handleChartPointerMove/Down 接受 (event, chart, canvas) 参数，两个 canvas 独立绑定，共享 currentTimeSec 游标。drawChartOverlay 同时更新两个 chart 插件；updateChartCursorPosition 基于左 chart 计算光标位置
+  - **维度标签修正**：机械臂按钮 `armDims / 2` 显示每臂维度（14→7），灵巧手不除（handDims 本身就是单手维度）
+  - **DOF 检测改为 metadata**（关键修复）：
+    - 原 `_detect_dims()` 启发式扫描 qpos 值域猜测维度，导致 handDims 返回 6 而非 12，灵巧手每侧只显示 3 DOF
+    - 后端 `routes/qc.py` telemetry-curve API：改为读取 metadata.json → hardware_specs → arm/hand joints left/right_dof，按已知列序切分 qpos/actions
+    - `telemetry_parser.py`：parse() 新增 dof_config 参数，传入时跳过 _detect_dims() 直接按配置索引切片
+    - `engine.py` / `payloads.py`：从 metadata.json 提取 DOF 配置传入 L3V2Engine
+    - 修复后 armDims=14 (7+7), handDims=12 (6+6)，每侧显示正确的维度数
+- Files changed:
+  - `frontend/src/pages/manual-qc.vue` — 双面板拆分 + 图例重构 + 异常段叠加 + 核查清单删除 + 维度/指针重构
+  - `backend/app/api/routes/qc.py` — telemetry-curve DOF 改为读 metadata.json
+  - `backend/app/services/l3_v2/telemetry_parser.py` — parse() 支持 dof_config 参数
+  - `backend/app/services/l3_v2/engine.py` — 接收 dof_config 传入 TelemetryParser
+  - `backend/app/services/payloads.py` — 从 metadata.json 提取 DOF 配置传入引擎
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Commit: pending
+
+## 2026-07-06 (扫描器填充时长/帧数 + 定时时区修正 + 审核锁去重 + 锁面板样式修复)
+
+- Type: bugfix + polish
+- Status: backend compile passed, frontend build passed, Docker deployed
+- Importance: medium
+- Reusable: no
+- Objective: 修复数据总库时长/帧数始终为 0；定时扫描北京时间触发；审核锁多处重复显示；人工质检锁面板布局混乱
+- Work completed:
+  - **扫描器增强**（scanner.py）：对象遍历阶段记录 manifest_key，遍历结束后下载 manifest.json 解析 duration/frame_count，写入 Episode 和 EpisodeInventory
+  - **定时任务时区**（scan_scheduler.py）：CronTrigger 增加 timezone='Asia/Shanghai'
+  - **审核锁去重 1**（manual-qc.vue）：无人认领时 strong fallback 从 '待认领' 改为 '-'，避免与 el-tag 重复
+  - **审核锁去重 2**（task-pool.vue）：移除审核锁列的 v-else span 硬编码"未认领"，仅保留 el-tag
+  - **锁面板样式修复**（manual-qc.vue）：scoped CSS 仅设置了 position/z-index，覆盖了全局的 display:flex 等属性。恢复 flex 水平布局 + align-items:center，lock-panel 背景改为 transparent 与 bar 渐变融合，新增 .lock-actions flex 居中样式
+- Verification: backend compileall 通过，frontend vue-tsc + vite build 通过，Docker 部署成功
+- Files changed:
+  - backend/app/services/scanner.py — manifest 下载解析
+  - backend/app/services/scan_scheduler.py — 时区修正
+  - frontend/src/pages/manual-qc.vue — 锁面板去重 + 样式修复
+  - frontend/src/pages/task-pool.vue — 审核锁列去重
+- Commit: pending
+
+## 2026-07-01 (三层日志系统落地：DB审计 + 文件日志 + Docker轮转)
+
+- Type: feature (new)
+- Status: backend compile + migration passed, Docker rebuilt + deployed, all 3 tiers verified
+- Importance: high
+- Reusable: yes (middleware pattern + logging config)
+- Objective: 建立专业项目级日志系统，覆盖远程网页操作和本机部署操作
+- Work completed:
+  - **Tier 1 — 数据库审计日志**:
+    - Migration `20260701_0015` 增强 `audit_events` 表：新增 event_type/severity/operator_id/ip_address/user_agent/duration_ms 字段
+    - 新建 `app/middleware/audit_middleware.py`：BaseHTTPMiddleware 自动捕获所有 API 请求（method/path/status/duration/user/ip/ua），排除 /api/health 和 /api/auth/session
+    - `get_current_user` 增加 `request.state.user = user` 使中间件能识别已认证用户
+    - 补齐缺失审计点：auth login/logout、ReviewerTaskManager (revoke/reassign/release)、batch_adjudication (批次判定)、dataset_service (导出)
+  - **Tier 2 — 应用文件日志**:
+    - 新建 `app/core/logging_config.py`：TimedRotatingFileHandler 按天轮转，保留 30 天，写入 `/app/logs/app.log`
+    - 纯文本格式：`2026-07-01 00:00:01 [INFO] app.services.scanner: 消息`
+    - `scan_scheduler.py` 和 `scan_queue.py` 的 `print()` 替换为 `logger.info()`
+  - **Tier 3 — Docker 日志轮转**:
+    - docker-compose.yml 添加 `logging: driver: json-file, max-size: 50m, max-file: 5`
+  - Schema/Type 更新：serialize_audit、AuditRecordSchema、AuditRecord TS 类型全部新增对应字段
+- Verification:
+  - health endpoint 正确跳过（不产生 audit 记录）
+  - login 产生 api_request + auth_event 两条记录
+  - 已认证 dashboard 请求正确识别 operator=admin，带 ip_address 和 duration_ms
+  - `/app/logs/app.log` 正常产出，scheduler 消息已写入
+  - Docker inspect 确认 `max-size=50m max-file=5`
+- Files changed:
+  - `backend/migrations/versions/20260701_0015_audit_enhance.py` — 新建
+  - `backend/app/models/audit.py` — 新增 6 字段
+  - `backend/app/middleware/__init__.py` + `audit_middleware.py` — 新建
+  - `backend/app/core/logging_config.py` — 新建
+  - `backend/app/main.py` — 注册中间件 + logging 初始化
+  - `backend/app/api/routes/qc.py` — request.state.user + login 审计
+  - `backend/app/services/scan_scheduler.py` — print → logger
+  - `backend/app/services/scan_queue.py` — print → logger
+  - `backend/app/services/reviewer_task_manager.py` — +audit (revoke/reassign/release)
+  - `backend/app/services/batch_adjudication.py` — +audit (批次判定)
+  - `backend/app/services/dataset_service.py` — +audit (导出)
+  - `backend/app/services/payloads.py` — serialize_audit 新增字段
+  - `backend/app/schemas/qc.py` — AuditRecordSchema 新增字段
+  - `frontend/src/types/qc.ts` — AuditRecord 新增字段
+  - `software/deploy/docker-compose.yml` — logging 轮转配置
+- Commit: pending
+
+## 2026-06-30 (每日凌晨自动扫描入库 — APScheduler cron)
+
+- Type: feature (new)
+- Status: backend compile passed, Docker rebuilt + deployed, scheduler verified via logs
+- Importance: medium
+- Reusable: yes (APScheduler + FastAPI lifecycle pattern)
+- Objective: 每天凌晨 00:00 UTC 自动触发 MinIO 扫描入库，无需人工点击
+- Work completed:
+  - `requirements.txt` 新增 `apscheduler` 依赖
+  - 新建 `backend/app/services/scan_scheduler.py`：BackgroundScheduler + CronTrigger，每日 00:00 UTC 调用 `run_minio_scan`，查找 active admin 作为 operator，扫描默认 `yaocao` bucket
+  - `backend/app/core/config.py` 新增 `scan_cron_hour`/`scan_cron_minute` 环境变量（默认 0/0）
+  - `backend/app/main.py` 注册 `@app.on_event('startup')` 启动 scheduler、`@app.on_event('shutdown')` 停止 scheduler
+  - 日志确认：`[scan_cron] scheduler started, daily at 00:00 (UTC)`
+- Files changed:
+  - `backend/requirements.txt` — +apscheduler
+  - `backend/app/services/scan_scheduler.py` — 新建
+  - `backend/app/core/config.py` — +2 配置项
+  - `backend/app/main.py` — startup/shutdown events
+- Commit: 5404539 → main
+
+## 2026-06-30 (DI-01 改用深度相机真实时间戳 + 批量修复)
+
+- Type: feature + bugfix
+- Status: backend compile passed, Docker deployed, functional test passed
+- Importance: high
+- Reusable: no
+- Objective: DI-01 从检测合成固定fps时间轴改为检测顶部深度相机真实时间戳；修复导出编码/QC筛选/批次选择/checkbox边框等问题
+- Work completed:
+  - **DI-01 深度相机时间戳**：
+    - `feature_extractor.py`：`L3V2Features` 新增 `depth_dt` 字段，`FeatureExtractor` 接受可选 `depth_timestamps` 参数计算真实 dt
+    - `metric_engine.py`：`_timestamp_regularity()` 检测 `depth_dt`，有则走 `_timestamp_regularity_depth()`（仅评分不输出 timeline 段），无则退回合成轴逻辑
+    - `engine.py`：`L3V2Engine.__init__` 新增 `depth_timestamps` 参数，透传至 FeatureExtractor
+    - `payloads.py`：`_build_real_manual_qc_context` 在 object_rows 中按 `timestamp_npy` + key 含 `cam_top_depth` 找到深度相机时间戳 npy，`_read_minio_npy` 读取后传入引擎
+  - **批量修复**：
+    - 导出：Content-Disposition 使用 RFC 5987 `filename*=UTF-8''...` 修复中文 task_type 报错
+    - 数据库：QC 结果筛选改用 `final_dataset_status`，下拉标签中文化
+    - 训练数据集：批次汇总表增加 checkbox 批量选择，导出传 batchIds
+    - CSS：修复 qc-table checkbox 边框不可见（白色→#909399）
+- Verification: 合成数据两路径测试通过（depth 路径正确抑制 timeline 段）；容器内确认 depth_dt/depth_timestamps 参数存在
+- Files changed:
+  - `backend/app/services/l3_v2/feature_extractor.py`
+  - `backend/app/services/l3_v2/metric_engine.py`
+  - `backend/app/services/l3_v2/engine.py`
+  - `backend/app/services/payloads.py`
+  - `backend/app/api/routes/qc.py`
+  - `backend/app/services/dataset_service.py`
+  - `frontend/src/api/client.ts`
+  - `frontend/src/pages/database-view.vue`
+  - `frontend/src/pages/dataset-management.vue`
+  - `frontend/src/styles/components.css`
+- Commit: 51ee775 → main
+
+## 2026-06-30 (修复派发重生成数量不稳定 + 旧 QC 痕迹残留)
+
+- Type: bugfix (high)
+- Status: backend compile passed, Docker deployed, API verified
+- Importance: high
+- Reusable: no
+- Objective: 修复 apply_dispatch_plan 重生成时抽样数量不稳定（同样是 15% 有时 5 条有时 8 条），以及进度条不归零的问题
+- Root cause: 旧代码 random.sample 从所有 episode 池抽样后，对已 done 的 episode 跳过（continue），导致实际任务数 = 目标数 - 随机抽中 done 的数量。同时旧任务不退役、旧手动 QC 状态不清零
+- Work completed:
+  - **全部归零**：重生成前先重置该批次所有 episode 的 QC 字段（qc_status/qc_result/reviewer/reason_code/manual_qc_status/manual_qc_result_id/sampled_for_qc/final_dataset_status/final_decision_source/is_exportable）为初始值
+  - **_supersede_pending_batch_tasks 增强**：改为退役所有旧任务（包括 done），不再跳过
+  - **in_review 检查增强**：增加锁过期判断（lock_expires_at > now），避免过期锁永久阻塞重派发
+  - **dispatch_preview_payload 加固**：改用 .get() 取值避免 KeyError
+  - **db.flush() 补位**：抽样和任务创建后 flush 确保 sync_batch_metrics 查询可见
+  - **返回计数修正**：apply_dispatch_plan 返回时传入 new_task_count 和 superseded 数
+- Verification: 3 次连续 15% 抽样均返回 sampled=10, created=10, superseded=10；Full 模式 sampled=70, created=70；DB 确认 done_count=0, manual_qc_status 全部 NOT_REVIEWED
+- Files changed:
+  - `backend/app/api/routes/qc.py` — apply_dispatch_plan 核心重写 + _supersede_pending_batch_tasks 增强
+  - `backend/app/services/payloads.py` — dispatch_preview_payload 加固
+- Commit: 7837de6 → main
+
+## 2026-06-30 (修复 manual_qc_status 历史未回填 + 批次判定抽检过滤 + 数据库页面显示)
+
+- Type: bugfix (medium)
+- Status: backend compile + frontend build passed, Docker deployed, DB backfill + API verified
+- Importance: high
+- Reusable: no
+- Objective: 修复 RDDQF 迁移后历史 episode 的 manual_qc_status 字段未回填导致的批次判定阻塞，以及判定逻辑的抽检计数 bug
+- Work completed:
+  - **DB 回填**：32 条 episodes (qc_status='done' 但 manual_qc_status='NOT_REVIEWED') 的 manual_qc_status 从 qc_result 回填 (pass→MANUAL_PASS, fail→MANUAL_FAIL)，涉及 9 个批次
+  - **adjudicate_batch 修复**：reviewed/manual_pass/manual_fail 统计改为只考虑 sampled_for_qc=1 的 episode，修复非抽检 episode 被错误计入导致 reviewed_count vs sampled_count 永远无法对齐的问题
+  - **sync_batch_metrics 修复**：manual_pass_count/manual_fail_count 增加 sampled_for_qc=1 过滤条件
+  - **database-view 修复**：PENDING_NOT_ADJUDICATED 映射为"待批次判定"（原显示"-"），新增"人工质检"列（显示 pass/fail 标签）
+  - **重判验证**：3 个批次成功重判（2 ACCEPTED + 1 REJECTED），其余 5 个批次因抽检未完成保持 PENDING（正确）
+- Root cause: RDDQF 新增 manual_qc_status 字段时 migration 未回填旧 qc_status/qc_result 数据
+- Verification: DB 查询确认 32 条 backfill 成功；API 重判 3 批次成功返回 correct batchDecision + failureRate；前端 database-view JS 已部署含新列和新映射
+- Files changed:
+  - `backend/app/services/batch_adjudication.py` — 抽检过滤修复
+  - `backend/app/services/payloads.py` — sync_batch_metrics 抽检过滤
+  - `frontend/src/pages/database-view.vue` — 新列 + PENDING_NOT_ADJUDICATED 映射
+- Commit: 9a3e076 → main
+
+## 2026-06-29 (训练数据消费与批次驳回模块完整落地)
+
+- Type: feature (major)
+- Status: backend compile + frontend build passed, Docker deployed + migration 0012 executed, API verified
+- Importance: high
+- Reusable: yes
+- Objective: 完整落地批次驳回判定 + 训练数据集管理与导出功能，实现 LaTeX 设计文档全部内容
+- Work completed:
+
+  ### 数据库层 (migration 20260629_0012)
+  - Batch 表新增 9 字段：manual_pass_count, manual_fail_count, failure_rate, reject_threshold (默认0.10), failure_rate_denominator ('SAMPLED_COUNT'), batch_decision (PENDING/ACCEPTED/REJECTED), batch_decision_reason, decision_policy_version, adjudicated_at
+  - Episode 表新增 9 字段：manual_qc_status (NOT_REVIEWED/MANUAL_PASS/MANUAL_FAIL), manual_qc_result_id, final_dataset_status (PENDING/QUALIFIED/UNQUALIFIED), final_decision_source, final_decision_reason, final_decided_at, is_exportable, final_decision_policy_version, batch_decision_log_id
+  - 新表 batch_decision_log：完整审计日志，包含判定快照
+
+  ### 后端服务
+  - `batch_adjudication.py` — BatchAdjudicationService：
+    - 失败率 = N_fail_manual / N_sampled (分母=抽检数)
+    - 从 GeneralConfig 读取驳回阈值
+    - 幂等判定：重复执行不产生不一致
+    - 三层状态模型完整实现 (6 种 FinalDecisionSource)
+    - adjudicate_batch_if_ready() 自动触发判定
+  - `dataset_service.py` — DatasetSummaryService + DatasetExportService：
+    - 任务级统计 (qualified/total/batch/accepted/rejected/source breakdown)
+    - 批次汇总列表
+    - CSV/JSON 导出 (仅 QUALIFIED episode)
+  - QC 提交联动：submit_manual_qc 自动设置 manual_qc_status (MANUAL_PASS/MANUAL_FAIL) + 触发 adjudicate_batch_if_ready
+  - sync_batch_metrics 补全 manual_pass/fail 计数
+
+  ### API 端点
+  - `GET /api/dataset/tasks` — 任务列表
+  - `GET /api/dataset/tasks/{id}/summary` — 任务统计
+  - `GET /api/dataset/tasks/{id}/batches` — 批次列表
+  - `GET /api/dataset/tasks/{id}/episodes` — Episode 列表 (分页+筛选)
+  - `POST /api/dataset/tasks/{id}/exports` — 导出 CSV/JSON
+  - `POST /api/batches/{batch_id}/recompute-decision` — 手动重判
+
+  ### 前端
+  - 新页面 `dataset-management.vue` — 训练数据集管理：
+    - 任务选择器 + 统计卡片 (合格/总数/批次判定/人工结果)
+    - 判定来源分布面板
+    - 批次汇总表 (失败率 + 判定状态 + 重判按钮)
+    - Episode 列表 (最终状态/判定来源/人工结果 筛选 + 分页)
+    - CSV/JSON 导出按钮
+  - 路由 `/dataset-management` 已注册
+  - 菜单项 "训练数据集" (FolderOpened icon) 已添加
+
+  ### API 验证结果
+  - GET /dataset/tasks → 返回 8 个任务类型
+  - GET /dataset/tasks/task_type:tudou/summary → 1506 total, 15 batches, all PENDING
+  - GET /dataset/tasks/task_type:tudou/episodes → 正确分页，字段完整
+  - POST /dataset/tasks/task_type:tudou/exports (CSV) → BOM + 11 字段表头
+
+- Business logic impact:
+  - 每次质检员提交 QC 结果后，系统自动更新 episode.manual_qc_status
+  - 批次完成抽检后自动执行 adjudicate_batch() 判定
+  - 驳回阈值从设置页"通用"tab 读取 (默认 0.10)
+  - 下游训练团队可通过 /dataset-management 查看合格数据量和导出清单
+
+- Affected files: 16 new/modified
+  - New: batch_adjudication.py, dataset_service.py, dataset-management.vue, migration 0012
+  - Modified: batch.py, episode.py, qc.py (model+routes), __init__.py, payloads.py, client.ts, types/qc.ts, router/index.ts, AppLayout.vue
+
+## 2026-06-29 (设置页"通用"tab + 批次驳回阈值参数)
+
+- Type: feature
+- Status: backend compile + frontend build passed, Docker deployed + migration executed
+- Importance: high
+- Reusable: yes
+- Objective: 在设置页新增"通用"标签页，承载批次驳回阈值参数 (batch_reject_threshold)；新增 GeneralConfig 存储模型与 API
+- Work completed:
+  - 新 DB 模型 `GeneralConfig`（单行 JSON 存储通用配置）+ migration `20260629_0011`
+  - `GET/PUT /api/admin/general-config` 端点（仅限 admin）
+  - 前端 `settings.vue` 改为双 tab 结构：`el-tabs` → "通用" + "L3 v2 指标参数"
+  - "通用"tab 包含：批次驳回阈值 θ（el-input-number，默认 0.10，step 0.01）
+  - 解释文案：失败率 = 人工不合格数 / 抽检数，超过阈值触发整批驳回
+  - 前端 API client 新增 `GeneralConfig` 类型 + `fetchGeneralConfig` / `updateGeneralConfig`
+  - API 验证：GET 返回默认值 0.1，PUT 成功持久化，GET 后确认
+- Business logic impact:
+  - 批次驳回阈值现在是可配置的系统参数，管理员可在设置页实时调整
+  - 后续 BatchAdjudicationService 将从 GeneralConfig 读取此阈值
+  - 失败率分母已明确为"抽检数"（非批次总数），与设计文档一致
+
+## 2026-06-29 (修复批次计数 BUG：completed_sample_count 与实际差 1)
+
+- Type: bugfix
+- Status: fixed + deployed, verified — test submit shows completed_count == live done_count
+- Issue: 批次页面显示已完成数比实际少 1（如 24/25 实际全部 25 已完成，5/6 实际全部 6 已完成）
+- Root cause: submit handler 中 `db.add(rev)` 后直接调用 `sync_batch_metrics`，但 rev 未 flush 导致 episode.manual_qc_result_id 未正确赋值，同时 episode 的 qc_status='done' 变更在 sync 查询时可能未被 flush
+- Fix: 在 `sync_batch_metrics` 前增加 `db.flush()` 确保所有 pending changes 对后续查询可见
+- Verified: 模拟 submit 测试 confirmed completed_count == live done count
+
+## 2026-06-29 (并发登录保护：同账号多人登录互踢)
+
+- Type: feature
+- Status: backend compiled + deployed, tested — new login kicks out old session (A=200, B=200, A_after=401)
+- Objective: 防止同一账号被多人在不同设备同时使用。后登录的人会把前面登录的人踢掉
+- Change:
+  - migration 0014: users 表新增 session_token 字段
+  - security.py: create_session_token 加入随机 nonce 确保每次登录生成不同 token
+  - set_session_cookie: 登录时将 token 写入 user.session_token 并 commit
+  - get_current_user: 验证时检查 cookie token 是否与 user.session_token 一致，不一致返回 401
+- Verified: 设备A登录→正常访问；设备B登录→正常访问；设备A再次访问→401
+
+## 2026-06-29 (RDDQF v1.2 平台增强完整落地)
+
+- Type: feature (major)
+- Status: backend compile + frontend build passed, Docker deployed + migration 0013 executed, APIs verified
+- Importance: high
+- Reusable: yes
+- Objective: 落地 v1.2 增强：导出字段扩展、导出历史、管理员任务池管理、任务操作日志
+- Work completed:
+
+  ### 数据库层 (migration 20260629_0013)
+  - 新表 dataset_export_jobs：记录每次导出 (task_type_id, export_format, episode_count, created_by, created_at)
+  - 新表 task_operation_log：记录任务管理操作 (task_id, episode_id, operation, from_reviewer, to_reviewer, operator_id, reason)
+
+  ### 后端服务
+  - dataset_service.py 增强：
+    - 导出字段从 11 个扩展到 14 个 (新增 final_decision_reason, reviewer, reason_code, updated_at)
+    - record_export() 写入导出历史
+    - export_history() 查询导出历史（支持按 task_type 筛选）
+  - reviewer_task_manager.py 新增：
+    - get_reviewer_tasks() 获取审核员任务池
+    - revoke_task() 撤回任务（status→new, assignee→未派发, lock clear）
+    - release_task() 释放任务回公共池
+    - bulk_revoke() 批量撤回
+    - 所有操作写入 TaskOperationLog
+
+  ### API 端点
+  - `GET /api/dataset/exports` — 导出历史
+  - `GET /api/admin/reviewers/{id}/tasks` — 审核员任务列表
+  - `POST /api/admin/qc-tasks/{id}/revoke` — 撤回任务
+  - `POST /api/admin/qc-tasks/{id}/release` — 释放任务
+  - `POST /api/admin/qc-tasks/bulk-revoke` — 批量撤回
+  - 导出端点增强：每次导出记录到 dataset_export_jobs
+
+  ### 前端
+  - dataset-management.vue：新增导出历史表格
+  - dashboard.vue：审核员工作量卡片增加"管理任务"按钮 → el-drawer 任务管理面板
+    - 任务列表：任务ID/Episode/任务类型/批次/状态
+    - 待处理任务支持撤回和释放操作
+    - 操作原因输入框
+    - done/in_review 任务标记为不可操作
+
+  ### API 验证结果
+  - GET /dataset/exports → 导出后记录正确 (createdBy=系统管理员, episode_count=0)
+  - GET /admin/reviewers/{id}/tasks → 正确返回任务列表
+  - 导出 CSV → 14 字段完整 (新增 final_decision_reason, reviewer, reason_code)
+
+- Affected files: 12 new/modified
+  - New: reviewer_task_manager.py, migration 0013
+  - Modified: dataset_service.py, routes/qc.py, qc.py (models), __init__.py, dashboard.vue, dataset-management.vue, client.ts, types/qc.ts
+
+## 2026-06-29 (抽检随机化：百分比抽检改为随机抽取)
+
+- Type: fix
+- Status: backend compiled + deployed to production
+- Importance: high
+- Objective: 修复百分比抽检使用 episodes[:N] 按 ID 排序取前 N 条的缺陷，改为 random.sample 随机抽取，确保每次生成抽检集均匀覆盖整个批次
+- Change: `routes/qc.py` `apply_dispatch_plan` — 将 `episodes[:target_count]` 替换为 `random.sample(episodes, min(target_count, len(episodes)))`；full 模式保持全量
+- No frontend change required (API contract unchanged)
+- Verified: sample 30% returns different episode sets on repeated calls; full mode still covers all
+
+## 2026-06-29 (L3 v2 参数配置页面重建：86 项 RDDQF 参数可配置化)
+
+- Type: feature
+- Status: backend compile + frontend build passed, Docker production deployed + migration executed
+- Importance: high
+- Reusable: yes
+- Objective: 将 L3 v2 四层引擎中所有硬编码参数（阈值/权重/融合系数）改为可通过设置页面配置，替代旧 L3 v1 时代的占位设置页
+- Work completed:
+  - 新 DB 模型 `L3V2Config`（单行 JSON 存储 86 项参数），含 `default_l3_v2_params()` 完整默认值函数
+  - migration `20260629_0010` 创建 `l3_v2_config` 表
+  - 后端 `GET/PUT /api/admin/l3-v2-params` 端点（仅限 admin）
+  - `L3V2Engine` / `FeatureExtractor` / `MetricEngine` / `QualityEngine` 全部接受 `params` 参数链，每个硬编码值改为 `self.p.get('key', default)`
+  - `utils.py` `level_from_score` 接受可配置 good/warn 边界
+  - `payloads.py` 在构建 manual QC context 时从 DB 读取参数传入引擎
+  - 前端 `client.ts` 新增 `L3V2Params` 类型 + `fetchL3V2Params` / `updateL3V2Params` API 函数
+  - `settings.vue` 完全重建为 12 个参数分组页：
+    - 动作示范质量：MQ-01(5) / MQ-02(5) / MQ-03(8)
+    - 可学习性：LQ-01(8) / LQ-02(8) / LQ-03(8)
+    - 数据完整性：DI-01(8) / DI-02(13)
+    - 执行诊断：DX-01(9)
+    - 特征提取(2) / 质量融合(10) / 评分等级(2)
+  - synthetic 测试验证：默认参数与无参数结果一致，修改参数影响评分计算
+- Business logic impact:
+  - 管理员可通过 /settings 页面实时调整所有 L3 v2 指标阈值、权重和融合策略
+  - 修改后下一次加载 manual QC 立即生效，无需重启服务
+  - 参数为空时回退到系统默认值，保证向后兼容
+
+## 2026-06-28 (原因码体系重构：按 RDDQF 维度重组，淘汰旧 L2/L3/L4 分类)
+
+- Type: refactoring
+- Status: frontend build + backend compile passed, deployed to production
+- Importance: medium
+- Reusable: yes
+- Objective: 将原因码从旧 L2/L3/L4 三级分类重构为 RDDQF 六维分类（L2 视觉/动作示范质量/可学习性/数据完整性/执行诊断/L4 任务/系统），与 L3 v2 质量维度对齐
+- Work completed:
+  - QcReasonPicker.vue 原因码重组：
+    - 删除旧 "L3 轨迹类" 分组，拆为三个新分组（动作示范质量、可学习性、数据完整性）
+    - 删除 `motion_abnormal`、`joint_limit_risk`、`stall`
+    - 新增 `trajectory_unsmooth`(MQ-01)、`action_discontinuity`(MQ-02)、`oscillation`(MQ-03)
+    - 新增 `low_effective_action`(LQ-01)、`low_information_density`(LQ-02)、`prolonged_idle`(LQ-03)
+    - 新增 `timestamp_irregular`(DI-01)
+    - `tracking_error` 从 L3 移入"执行诊断"分组
+  - payloads.py reason_stats_payload() 完整重构：覆盖所有 26 个原因码到 7 个分类的映射，保留旧码兼容
+  - types/qc.ts ReasonStat.category 改为 string（不再限制为固定枚举）
+  - qc-history.vue reasonTagType 更新为新分类的 tag 颜色映射
+- Business logic impact:
+  - 质检员选择 Fail 原因时，分类直接对应 L3 v2 的质量维度和指标 ID（如 MQ-01）
+  - 历史审计页的 Top 原因统计按新维度分组
+  - 旧数据中的 `motion_abnormal`/`stall`/`joint_limit_risk` 自动映射到对应新分类保证兼容
+- Verification:
+  - `python3 -m compileall -q app/services/payloads.py` → 通过
+  - `npm run build --prefix frontend` → built in 329ms
+  - Docker deploy → backend/frontend Healthy
+- Files changed:
+  - `software/frontend/src/components/QcReasonPicker.vue`
+  - `software/backend/app/services/payloads.py`
+  - `software/frontend/src/types/qc.ts`
+  - `software/frontend/src/pages/qc-history.vue`
+  - `software/.project-log/progress.md`
+
+## 2026-06-28 (DX-01 + Score Fusion 重构：lag alignment + soft-min + DI cap，9 指标全部完成)
+
+- Type: refactoring
+- Status: all 9 metrics refactored, all tests passed, pending production deploy
+- Importance: critical
+- Reusable: yes
+- Objective: 完成 DX-01 lag alignment 诊断重构和 Training Quality Score 总分融合逻辑（soft-min + DI cap），L3 v2 9 指标重构全部完成
+- Work completed:
+  - DX-01 重构：lag alignment (搜索 k∈[0,min(5,N//10)] 最小化 P50)，severity = 0.5×E_p95/τ_bad + 0.3×E_mean/τ_warn + 0.2×R_persist，score = 10×(1-severity)
+  - DX-01 Timeline 分两层：Execution Tracking Error (τ=0.20) + Severe Tracking Error (τ=0.35)，min_dur=0.5s
+  - QualityEngine 完全重写：
+    - Motion Quality: 0.35/0.35/0.30 权重 + soft-min (0.8×mean + 0.2×min)
+    - Learnability: 0.25/0.35/0.40 权重 + soft-min (0.8×mean + 0.2×min)
+    - Data Integrity: 0.4/0.6 权重 + 强 soft-min (0.6×mean + 0.4×min)
+    - Total = 0.4×Motion + 0.4×Learn + 0.2×Data
+    - DI cap: S_data < 3 → cap 4.5, S_data < 5 → cap 6.0
+    - 新增 reliabilityWarnings 和 diagnosticWarnings
+  - 前端 manual-qc.vue 评分环已使用 trainingQualityScore（来自质量融合总分）
+  - 前端已显示 DX-01 在 Execution Diagnostics 折叠面板（标注"不进入训练质量总分"）
+- Business logic impact:
+  - L3 v2 正式从 Motion QC 升级为 Training Data Quality Assessment
+  - DX-01 不再影响训练质量总分，仅作为诊断参考
+  - Data Integrity 异常会触发 Training Quality Score 封顶
+  - soft-min 确保任一分项极差时不会靠高分项"拉平均"
+- Verification:
+  - 合成数据完整测试：Training Quality=7.8(good), DX-01=9.8(good)
+  - `python3 -m compileall -q app/services/l3_v2/` → 通过
+- Files changed:
+  - `software/backend/app/services/l3_v2/metric_engine.py`
+  - `software/backend/app/services/l3_v2/quality_engine.py`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - Build & deploy to production containers
+  - 在内网环境用真实 episode 验证 9 指标完整输出
+
+## 2026-06-28 (DI-01 + DI-02 重构：鲁棒时间戳规则性 + 自适应同步阈值)
+
+- Type: refactoring
+- Status: backend compile passed, synthetic data tests passed (perfect 10.0 vs degraded 0.0)
+- Importance: high
+- Reusable: yes
+- Objective: 将 DI-01 从单一 CV 改为 J_95+R_gap+R_invalid 鲁棒度量，将 DI-02 从固定 700ms 阈值改为 dt_median 自适应阈值
+- Work completed:
+  - feature_extractor: `sync_bad_mask`/`timestamp_jitter_cv` 替换为 `sync_valid`/`sync_diff_sec`/`dt_jitter_cv`
+  - DI-01 重构：J_95(Robust Jitter) + R_gap(长间隔比例) + R_invalid(非单调比例)，阈值 good=0.05/warn=0.15/bad=0.35
+  - DI-01 Timeline: Invalid Timestamp + Timestamp Gap 两类异常段
+  - DI-02 重构：自适应 τ_warn=max(0.05,2*dt_med)、τ_bad=max(0.20,6*dt_med)，替代 700ms
+  - DI-02 raw = 0.30*R_flag + 0.25*R_hard + 0.20*R_soft + 0.15*M_sync + 0.10*R_seg
+  - DI-02 Timeline: Sensor Sync Warning + Severe Desync 两类（min_dur=0.5s）
+  - sync_diff 统一为 seconds
+- Business logic impact:
+  - DI-01 不再只看 CV，还能检测非单调/重复时间戳和丢帧
+  - DI-02 自适应阈值适配不同采样率的 episode（15Hz/30Hz/50Hz 都会有不同的合理阈>
+- Verification:
+  - perfect: DI-01=10.0, DI-02=10.0
+  - degraded (jitter+invalid+sync loss): DI-01=0.0, DI-02=0.0
+  - `python3 -m compileall -q app/services/l3_v2/` → 通过
+- Files changed:
+  - `software/backend/app/services/l3_v2/feature_extractor.py`
+  - `software/backend/app/services/l3_v2/metric_engine.py`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 继续审查 DX-01，之后所有 9 个指标重构完成
+
+## 2026-06-28 (LQ-03 重构：segment-level 长持续时间低价值片段检测)
+
+- Type: refactoring
+- Status: backend compile passed, ordinal ranking verified (active < pause < idle)
+- Importance: high
+- Reusable: yes
+- Objective: 将 LQ-03 从帧级低变化比例改为 segment-level 持续性低学习价值片段占比，复用 LQ-01 有效动作判定，惩罚长时间无监督区间而非短暂停顿
+- Work completed:
+  - LQ-03 重构：复用 LQ-01 的 Effective Action Mask (E_t)，不再独立定义低变化阈值
+  - State low-change：Q_t = max(arm_qpos_delta, hand_qpos_delta)，τ_Q = max(5e-4, P20(Q))
+  - Low-value candidate：L_t = (~E_t) AND (Q_t <= τ_Q)
+  - Segment-level：连续 L_t=1 帧合并为 segment，仅统计 duration ≥ 1.0s 的片段
+  - Ratio = T_low(≥1s) / T_episode，保持原评分阈值 good=0.18/warn=0.38/bad=0.65
+  - Timeline：min_dur=1.0s 的低价值片段
+  - 清理死代码：移除 FeatureExtractor 中的 low_change_mask（不再使用）
+- Business logic impact:
+  - 与 LQ-01/LQ-02 形成 Coverage + Intensity + Low-value Duration 三者互补
+  - 短暂的停顿（<1s）不再被惩罚，只有持续缺乏学习信号的区间才会影响 LQ-03
+- Verification:
+  - active (continuous): 0.0%, score=10.0
+  - pause (3s dead zone): 19.4%, score=9.7
+  - idle (mostly static): 24.1%, score=8.5
+  - Ordinal: 0.00 < 0.194 < 0.241 → PASS
+  - `python3 -m compileall -q app/services/l3_v2/` → 通过
+- Files changed:
+  - `software/backend/app/services/l3_v2/feature_extractor.py`
+  - `software/backend/app/services/l3_v2/metric_engine.py`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 继续审查 DI-01/DI-02/DX-01
+
+## 2026-06-28 (LQ-02 重构：Coverage × Intensity 模型 + arm/hand 分离)
+
+- Type: refactoring
+- Status: backend compile passed, ordinal ranking verified (rich > sparse > static)
+- Importance: high
+- Reusable: yes
+- Objective: 将 LQ-02 从 `0.6*P75(Δa) + 0.4*P75(Δq)` 的全维度运动强度改为 Coverage × Intensity 模型，与 LQ-01 形成互补
+- Work completed:
+  - feature_extractor: 新增 `state_delta_arm_norm` / `state_delta_hand_norm`（arm/hand qpos 一阶差分 RMS）
+  - metric_engine LQ-02 重构:
+    - Effective Coverage R_eff：复用 LQ-01 的 OR 融合逻辑（arm P20+0.004 / hand P20+3/255）
+    - Action Intensity I_a：P75 of max(arm_delta, hand_delta)，仅统计有效帧（E_t=1）
+    - State Intensity I_q：P75 of max(state_arm, state_hand)
+    - 新公式：0.7 × (R_eff × I_a) + 0.3 × I_q
+    - 新阈值：good=0.030, warn=0.012, bad=0.003（临时值）
+  - LQ-02 不生成 Timeline（LQ-01 和 LQ-03 已覆盖）
+- Business logic impact:
+  - Coverage × Intensity：少量剧烈动作不会让 Information Density 虚高（R_eff 低会拉低总分）
+  - max 融合：arm 或 hand 任一活跃即可贡献 Action Intensity，避免静态控制器拉低估计
+  - 与 LQ-01 形成 Coverage + Intensity 互补关系
+- Verification:
+  - rich continuous: raw=1.909, score=10.0
+  - sparse burst: raw=0.196, score=10.0
+  - nearly static: raw=0.002, score=0.0
+  - Ordinal: 1.909 > 0.196 > 0.002 → PASS
+  - `python3 -m compileall -q app/services/l3_v2/` → 通过
+- Files changed:
+  - `software/backend/app/services/l3_v2/feature_extractor.py`
+  - `software/backend/app/services/l3_v2/metric_engine.py`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 所有阈值需用真实 episode 分布重新标定
+  - 继续审查 LQ-03/DI-01/DI-02
+
+## 2026-06-28 (LQ-01 重构：arm/hand 分离 + 绝对阈值门控 + OR 融合)
+
+- Type: refactoring
+- Status: backend compile passed, synthetic data tests passed (3 scenarios)
+- Importance: high
+- Reusable: yes
+- Objective: 将 LQ-01 从全维度统一 P35 动态阈值改为 arm/hand 分离计算 + 绝对最小值门控 + OR 融合，避免微小噪声被判为有效动作
+- Work completed:
+  - feature_extractor: 新增 `action_delta_arm_norm` / `action_delta_hand_norm`（arm/hand 分别计算 RMS），L3V2Features 新增对应字段
+  - metric_engine LQ-01 重构:
+    - Arm: τ_arm = max(P20(arm_delta), 0.004 rad)
+    - Hand: τ_hand = max(P20(hand_delta), 3/255)
+    - Effective = arm_delta > τ_arm OR hand_delta > τ_hand（OR 融合）
+    - 保留原评分区间 good=0.50 / warn=0.25 / bad=0.08
+  - Timeline: 新增 Low Effective Action 段（min_dur=1.0s），标记长时间无监督信号的区间
+- Business logic impact:
+  - 机械臂静止但灵巧手抓取 → OR 融合正确判定为有效帧
+  - 整体微小动作（<0.004 rad）→ 绝对阈值过滤，不被 P20 撑起
+  - P20 比 P35 更严格地定义"有效"，只让 top 80% 的动作幅度通过
+- Verification:
+  - Test A (rich movement, arm+hand): 93.7%, score=10.0 → PASS
+  - Test B (nearly static): 0.0%, score=0.0 → PASS (absolute gate works)
+  - Test C (arm static, hand active): 70.0%, score=10.0 → PASS (OR fusion works)
+  - `python3 -m compileall -q app/services/l3_v2/` → 通过
+- Files changed:
+  - `software/backend/app/services/l3_v2/feature_extractor.py`
+  - `software/backend/app/services/l3_v2/metric_engine.py`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 继续审查 LQ-02/LQ-03/DI-01/DI-02
+
+## 2026-06-28 (MQ-03 重构：幅度门控振荡检测 + 持续占比替代 P95)
+
+- Type: refactoring
+- Status: backend compile passed, synthetic data tests passed
+- Importance: high
+- Reusable: yes
+- Objective: 将 MQ-03 从简单的方向反转 P95 + 手部颤振 P95 重构为幅度门控的持续振荡检测，区分正常精细调整与控制震荡
+- Work completed:
+  - 重写 `_oscillation_strength_arm()`：对 arm actions 做幅度门控方向反转检测
+    - ε_i = max(P10(|\Δa_i|), 1e-4)：每个维度的最小有效动作阈值
+    - 仅当连续两帧的 |Δa| 都超过 ε_i 且方向翻转时，才算有效反转
+    - 每个反转按振幅加权：(|Δa_t| + |Δa_{t-1}|) / 2
+  - 重写 `_chatter_strength_hand()`：同样用幅度门控 + 方向反转，替代旧的单帧阈值判断
+    - 不再用固定阈值 2/255，改用 per-dimension P10 动态门控
+  - MQ-03 聚合从 P95 改为持续异常占比：
+    - R_osc = mean(oscillation > τ_osc(0.03))
+    - R_chat = mean(chatter > τ_chat(0.08))
+    - raw = 0.6 × R_osc + 0.4 × R_chat
+  - 评分改为 score_inverse(raw, good=0.05, warn=0.15, bad=0.35)
+  - Timeline 分为两类：Motion Oscillation 和 Hand Chatter（独立的 mask_to_segments）
+  - `L3V2Features` 字段重命名：`reversal_rate_per_frame` → `oscillation_strength`，`hand_chatter_strength` → `chatter_strength`
+- Business logic impact:
+  - 正常正弦轨迹（平滑但持续变化）→ oscillation 0.0% → 10分，不再被误判
+  - 随机游走（高频来回修正）→ oscillation 40.7% → 0分，正确捕获
+  - 微小精细调整不会被判为振荡（幅度门控过滤了低于 P10 的小动作）
+  - 持续占比比 P95 更能反映"长期处于震荡状态"的语义
+- Verification:
+  - 合成测试：平滑正弦 score=10.0(good) vs 随机游走 score=0.0(bad) → PASS
+  - Timeline：平滑轨迹无 oscillation/chatter 段；抖动轨迹出现 Hand Chatter(0.1-14.9s)
+  - `python3 -m compileall -q app/services/l3_v2/` → 通过
+- Files changed:
+  - `software/backend/app/services/l3_v2/feature_extractor.py`
+  - `software/backend/app/services/l3_v2/metric_engine.py`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 阈值 tau_osc(0.03), tau_chat(0.08) 和评分阈值需真实数据标定
+  - 继续审查 LQ-01/LQ-02/LQ-03/DI-01/DI-02
+
+## 2026-06-28 (MQ-01 + MQ-02 算法修正：差分阶数物理学错误)
+
+- Type: bugfix
+- Status: backend compile passed, synthetic data tests passed for both metrics
+- Importance: high
+- Reusable: yes
+- Objective: 修复 MQ-01 用二阶差分（加速度）误判稳定加速为不平滑，以及 MQ-02 用一阶差分的 self-referential 归一化未能区分"快速但连续"和"忽快忽慢"两个 bug
+- Work completed:
+  - MQ-01：`np.diff(n=2)` → `np.diff(n=3)` 改为真正的三阶 jerk，稳定加速时 jerk≈0 不再误报
+  - MQ-01：新增 `joint_acc_norm`（保留二阶差分备用），阈值改为临时值 `good=0.006/warn=0.018/bad=0.045`
+  - MQ-02：从 self-referential `action_discontinuity_strength`（一阶差分的 episode 内归一化）改为 `action_delta2_norm`（arm actions 的二阶差分 P95）
+  - MQ-02：新阈值 `good=0.010/warn=0.030/bad=0.080`，timeline 阈值 0.06
+  - MQ-02：限制为 arm 维度（`actions_arm`），避免 hand 0-255 量级污染 RMS
+  - 清理死代码：移除 `action_discontinuity_strength` feature，`L3V2Features` 新增 `action_delta2_norm`
+- Business logic impact:
+  - MQ-01：稳定加速（恒定加速度）→ jerk=0 → 10分，不再被判为不平滑
+  - MQ-02：匀速快速动作（Δa 恒定）→ Δ²a=0 → 10分，而忽快忽慢的抖动 → Δ²a 大 → 低分
+  - 两个指标现在都正确衡量"变化的变化"而非"变化本身"
+- Problems encountered:
+  - MQ-02 初版用全部 actions 维度导致 hand 0-255 的噪声主导 P95（值>10），改为只取 arm dims 后正常
+- Verification:
+  - MQ-01 合成测试：稳定加速 score=10.0(good) vs 抖动 score=0.0(bad) → PASS
+  - MQ-02 合成测试：匀速快速 score=10.0(good) vs 忽快忽慢 score=0.0(bad) → PASS
+  - `python3 -m compileall -q app/services/l3_v2/` → 通过
+- Files changed:
+  - `software/backend/app/services/l3_v2/feature_extractor.py`
+  - `software/backend/app/services/l3_v2/metric_engine.py`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 阈值需用真实 episode 分布标定（MQ-01 和 MQ-02 的阈值均为临时值）
+  - 继续审查 MQ-03/LQ-01/LQ-02/LQ-03 的算法正确性
+
+## 2026-06-28 (MQ-01 fix: switch from 2nd-order acceleration to 3rd-order jerk)
+
+- Type: bugfix
+- Status: backend compile passed, synthetic data test passed
+- Importance: high
+- Reusable: yes
+- Objective: 修复 MQ-01 轨迹平滑度使用二阶差分（加速度）误判稳定加速为不平滑的 bug，改为三阶差分（jerk）
+- Work completed:
+  - 与用户深入讨论了 MQ-01 到 MQ-03 的数学原理和物理含义
+  - 识别到 MQ-01 的 bug：`np.diff(n=2)` 是加速度，不是 jerk。稳定加速（恒定加速度）被判为抖动
+  - feature_extractor.py：`np.diff(n=2)` → `np.diff(n=3)`，新增 `joint_acc_norm`（保留二阶差分备用），`L3V2Features` 新增 `joint_acc_norm` 字段
+  - metric_engine.py：MQ-01 改用 `joint_jerk_norm`，阈值从 `good=0.015/warn=0.04/bad=0.08` 改为临时保守值 `good=0.006/warn=0.018/bad=0.045`，timeline 阈值从 0.06 改为 0.035
+  - 更新 description：从"基于关节轨迹二阶差分的 P95"改为"机械臂关节位置三阶差分 P95，衡量加速度变化是否突兀"
+  - 分析 DROID 数据集结构（TFRecord 格式，100 episodes，31 shards，Franka Panda 单臂+夹爪，无灵巧手/无时间戳/无 effort/无 sync）
+  - 对比 DROID vs TeleDex 数据维度差异，明确 L3 v2 跨数据集适配需要适配层
+- Business logic impact: 稳定加速的示范不再被误判为不平滑。MQ-01 现在正确衡量"加速度的变化率"而非"加速度本身"，更符合训练数据平滑度的语义
+- Problems encountered:
+  - 初版合成测试数据 arm 值域超出 3.5 导致 dim detection 将其误判为 hand，修正后测试通过
+- Resolution:
+  - 合成数据验证：稳定加速（恒定加速度）→ jerk≈0, score=10.0 (good)；抖动随机游走 → jerk=0.111, score=0.0 (bad)
+- Verification:
+  - `python3 -m compileall -q backend/app/services/l3_v2/` → 通过
+  - `PYTHONPATH=. python3` 合成数据测试 → PASS: steady > jittery
+- Files changed:
+  - `software/backend/app/services/l3_v2/feature_extractor.py`
+  - `software/backend/app/services/l3_v2/metric_engine.py`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 阈值需用真实 episode 分布标定（当前为临时值）
+  - 继续审查其他指标的算法正确性
+
+## 2026-06-27 (RDDQF L3 v2 MVP migration: new four-layer engine replaces old L3 v1)
+
+- Type: implementation
+- Status: backend compile passed, frontend build passed, containers deployed healthy, pending in-network API verification
+- Importance: critical
+- Reusable: yes
+- Objective: 将 L3 从单层 Metric Engine v1（8 个孤立指标 + Q_motion 综合分）升级为 RDDQF 四层训练数据质量评估引擎（Feature → Evidence → Metric → Quality），并用新架构完全替换旧 v1 指标系统
+- Work completed:
+  - 深入阅读 GPT 产出的 RDDQF v1.0 完整设计文档体系（Standard、Ontology、Evidence、Metric Library、L3MetricsEngine v2 Architecture、Overall Architecture v2）
+  - 阅读 GPT 产出的 L3 v2 MVP 代码实现（backend/app/services/l3_v2/ 七文件 + 前后端 patch）
+  - 后端新增 `backend/app/services/l3_v2/` 模块（7 文件）：
+    - `telemetry_parser.py` — 解析 telemetry.npz，arm/hand 维度自动检测，手部 0-255 归一化，EE pose 可选提取
+    - `feature_extractor.py` — 14 维可复用特征（jerk、delta、reversal、chatter、tracking、low_change_mask、sync_bad_mask 等）
+    - `metric_engine.py` — 9 个指标：MQ-01/02/03（Motion Quality）、LQ-01/02/03（Learnability）、DI-01/02（Data Integrity）、DX-01（Execution Diagnostics）
+    - `quality_engine.py` — 三层聚合：Metric → Evidence → Quality Dimension → Training Quality Score，含中英文元信息
+    - `engine.py` — 顶层入口，串联全链路
+    - `utils.py` — score_inverse/score_ratio 评分映射、mask_to_segments timeline 转换、加权平均
+  - 后端 schemas/qc.py 新增 7 个 Pydantic schema（L3V2Report 系列），ManualQcContextSchema 改为 `l3V2: L3V2ReportSchema | None`
+  - 后端 payloads.py 切换为 L3V2Engine，移除旧 L3MetricsEngine 调用
+  - 后端 routes/qc.py 移除旧 L3 超参数 API（GET/PUT /admin/l3-params）
+  - 移除旧代码：`l3_metrics.py`（~500行）、`l3_config.py` 模型、models/__init__.py 中的 L3Config 引用
+  - 前端 types/qc.ts 新增 L3V2 系列 TypeScript 类型，替换旧 MetricCard/TimelineSegment
+  - 前端 api/client.ts 更新 ManualQcContext 接口，移除 L3Params API 函数
+  - 前端 manual-qc.vue 重写：Training Quality 评分环、质量维度树、Evidence Group、Metric 明细、Execution Diagnostics 诊断面板、Timeline 段点击跳转
+  - 前端 settings.vue 精简为占位页（L3 v2 阈值当前为内置默认值）
+  - 前端 mock.ts 清理旧 metricCards/timelineSegments 常量
+  - 修复 score-ring 评分环：从静态 border 装饰改为 SVG stroke-dasharray 动态进度环，根据分数 0-10 映射到 0-100% 填充
+- Business logic impact: L3 从现在起正式从 "Motion QC" 升级为 "Training Data Quality Assessment"。新系统不再围绕"能算什么指标"组织，而是围绕"这条 demonstration 对下游策略学习有多大价值"来设计。Tracking Error 降级为 Execution Diagnostics（不进训练质量总分），Dead/Static/Saturation 等旧指标语义被 Evidence 层重新解释。
+- Problems encountered:
+  - 测试从 Docker 容器访问 MinIO 时超时（用户确认当前不在内网，属于网络问题而非代码问题）
+  - schemas/qc.py 缺少 `from __future__ import annotations` 导致 Pydantic 前向引用 NameError，已修复
+  - 旧 ManualQcMediaSchema 在替换 MetricCardSchema/TimelineSegmentSchema 时被误删，已恢复
+  - 前端 mock.ts 仍引用已删除的 MetricCard/TimelineSegment 类型，已清理
+  - GPT 产出的 manual-qc.vue 保留了旧的 metricCards fallback 路径（v-else），已移除
+- Resolution:
+  - L3V2Engine 用合成数据验证通过：Training Quality Score=6.94, 3 dimensions, 7 timeline segments
+  - 所有代码编译/构建通过，Docker 容器重启后健康运行
+  - 真正的端到端验证（真实 episode 的 qc-context API + 浏览器 manual QC 页面）需在内网环境下进行
+- Verification:
+  - `python3 -m compileall -q backend/app/services/l3_v2/ backend/app/schemas/qc.py backend/app/services/payloads.py backend/app/api/routes/qc.py backend/app/models/__init__.py` → 通过
+  - `python3 -c "from app.services.l3_v2 import L3V2Engine; print('OK')"` → OK
+  - `docker exec robot-qc-backend python3 -c "..." ` 合成数据测试 → Score: 6.94, Level: warn, 3 dims, 7 timeline, OK
+  - `npm run build --prefix frontend` → built in 316ms
+  - `docker compose build backend frontend && docker compose up -d` → 容器全部 Healthy
+- Unverified items:
+  - 内网环境下真实 episode 的 `/api/episodes/{id}/qc-context` 返回 l3V2 字段验证
+  - 浏览器端 manual QC 页面 RDDQF 训练质量评分完整交互验证
+  - L3 v2 阈值标定（当前为 metric_engine.py 硬编码，后续需按任务类型建立阈值组）
+- Files changed:
+  - `software/backend/app/services/l3_v2/__init__.py` (new)
+  - `software/backend/app/services/l3_v2/engine.py` (new)
+  - `software/backend/app/services/l3_v2/telemetry_parser.py` (new)
+  - `software/backend/app/services/l3_v2/feature_extractor.py` (new)
+  - `software/backend/app/services/l3_v2/metric_engine.py` (new)
+  - `software/backend/app/services/l3_v2/quality_engine.py` (new)
+  - `software/backend/app/services/l3_v2/utils.py` (new)
+  - `software/backend/app/schemas/qc.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/backend/app/api/routes/qc.py`
+  - `software/backend/app/models/__init__.py`
+  - `software/backend/app/services/l3_metrics.py` (deleted)
+  - `software/backend/app/models/l3_config.py` (deleted)
+  - `software/frontend/src/types/qc.ts`
+  - `software/frontend/src/api/client.ts`
+  - `software/frontend/src/pages/manual-qc.vue`
+  - `software/frontend/src/pages/settings.vue`
+  - `software/frontend/src/api/mock.ts`
+  - `software/frontend/src/style.css`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 在内网环境复验 manual QC 完整链路
+  - 根据真实 episode 的 L3 v2 分数分布标定阈值
+  - 后续按任务类型建立阈值组（Milestone 4）
+  - 继续推进后端质量结果持久化与批次报告（Milestone 3）
+
+## 2026-06-25 (QcTask updated_at + pipeline auto-advance fix + reviewer dashboard bugfix)
+
+- Type: bugfix
+- Status: backend API verified, frontend deployed, auto-advance confirmed working
+- Importance: high
+- Reusable: yes
+- Objective: 修复 reviewer dashboard 显示数据全为 0 的 bug，补全 QcTask.updated_at 字段，修复提交后页面不自动跳转的问题
+- Work completed:
+  - 新增 `QcTask.updated_at` 字段（Alembic migration 20260625_0006），自动回填历史数据
+  - `reviewer_dashboard_payload` 修正：`assignee` 是字符串字段非 `assignee_id`；`updated_at` 用于精确计算今日完成数
+  - `manual-qc.vue` 新增 `watch(episodeId)` 监听路由参数变化，提交后自动重新加载新 episode 上下文
+  - 修正 `submitManualQc` 使用 `_active_task_for_episode` 而非 `.first()`，避免同一 episode 多任务时取到旧版本
+- Problems encountered:
+  - `reviewer_dashboard_payload` 首版使用 `QcTask.assignee_id`，但模型字段实际是 `assignee`（字符串），导致 500 错误
+  - 前端 try/catch 静默吞掉了 API 错误，reviewer 看到个人看板全 0 但没有任何错误提示
+  - `submitManualQc` 用 `.first()` 查询 QcTask，同一 episode 存在多版本任务时拿到旧版本（version=1 而非 active 的 version=4/5/6），submit 一直报版本冲突
+  - Vue Router 同组件路由切换不重新挂载，`router.push` 后页面内容不更新
+  - reviewer 密码过期需通过管理员接口重置
+- Resolution:
+  - 查询改用 `QcTask.assignee == reviewer_name`（按名称匹配）
+  - submit 改用 `_active_task_for_episode()`（is_active=1 优先）
+  - 新增 `watch(episodeId, loadContext)` 解决同组件路由切换不刷新的问题
+- Files changed:
+  - `backend/app/models/qc.py`
+  - `backend/app/services/payloads.py`
+  - `backend/app/api/routes/qc.py`
+  - `backend/migrations/versions/20260625_0006_qc_task_updated_at.py`
+  - `frontend/src/pages/manual-qc.vue`
+- Verification:
+  - `alembic upgrade head` 成功添加 updated_at 列并回填
+  - API: reviewer dashboard 返回 pendingCount=13, doneTodayCount=4
+  - API: submit 返回 remainingCount 和 nextEpisodeId 正确
+  - Playwright E2E: reviewer 登录 → 看板 → 开始质检 → 提交 → 自动跳转链路正常
+
+## 2026-06-25 (Role-based view separation: reviewer dashboard + pipeline mode)
+
+- Type: implementation
+- Status: backend API verified (reviewer dashboard returns correct payload), frontend deployed, awaiting browser verification
+- Importance: critical
+- Reusable: yes
+- Objective: 实现角色视图分离，reviewer 使用专属界面完成流水线式质检工作
+- Work completed:
+  - 后端新增 `GET /api/reviewer/dashboard` 接口，返回 reviewer 个人统计、按批次分组、下一条待处理任务
+  - 后端 `submitManualQc` 返回 `remainingCount` + `nextEpisodeId` 支持流水线自动跳转
+  - 前端新建 `reviewer-dashboard.vue`（个人任务看板）：4 张统计卡片、一键开始质检按钮、按批次分组任务进度
+  - 前端新建 `composables/useCelebration.ts`：canvas-confetti 礼花 + Web Audio API 三音上升音效
+  - `manual-qc.vue` 增加流水线模式：reviewer 提交后自动跳转下一条，全部完成触发庆祝动画
+  - `task-pool.vue` reviewer 版：去掉批次选择，改为按状态筛选（全部/待处理/进行中/已完成），只显示分配给自己的任务
+  - 路由守卫更新：reviewer 登录 → `/reviewer`，拦截非授权页面访问
+  - `AppLayout.vue` 菜单按角色过滤：reviewer 只看个人看板+人工质检入口
+  - 安装 `canvas-confetti` + `@types/canvas-confetti`
+- Problems encountered:
+  - `QcTask` 模型字段是 `assignee`（字符串）而非 `assignee_id`，导致首轮 reviewer_dashboard 报 500；已修正为按 `assignee == reviewer_name` 查询
+  - reviewer 登录密码测试失败，通过管理员接口重置密码 `QcTest123!` 后恢复
+  - `ReviewerDashboardPayload` 需要正确导入/导出类型，前端构建报 TS2724；已拆分为独立 import from types/qc
+- Verification:
+  - `python3 -m compileall backend/app` → 通过
+  - `npm run build --prefix frontend` → 通过
+  - `docker compose build backend frontend && docker compose up -d` → 部署成功
+  - `curl -b reviewer_cookies /api/reviewer/dashboard` → pendingCount=17, batchGroups=2, nextTask 正确
+  - `curl -b admin_cookies /api/reviewer/dashboard` → 403（admin 不可访问）
+- Unverified items:
+  - 浏览器端 reviewer 登录 → 个人看板 → 开始质检 → 流水线提交 → 自动跳转 → 庆祝动画完整链路
+  - task-pool reviewer 版在浏览器中的筛选按钮交互
+- Files changed:
+  - `backend/app/api/routes/qc.py`
+  - `backend/app/schemas/qc.py`
+  - `backend/app/services/payloads.py`
+  - `frontend/src/pages/reviewer-dashboard.vue` (new)
+  - `frontend/src/composables/useCelebration.ts` (new)
+  - `frontend/src/pages/manual-qc.vue`
+  - `frontend/src/pages/task-pool.vue`
+  - `frontend/src/router/index.ts`
+  - `frontend/src/components/AppLayout.vue`
+  - `frontend/src/api/client.ts`
+  - `frontend/src/types/qc.ts`
+  - `frontend/package.json`
+
+## 2026-06-25 (Manual QC metric panel: scrollable + severity-sorted, task-type search)
+
+- Type: implementation
+- Status: validated by frontend build, production compose redeploy, and browser verification
+- Importance: medium
+- Reusable: yes
+- Objective: 优化人工质检评分面板的子评分展示和任务类型管理页的列表浏览体验
+- Work completed:
+  - manual QC 评分区域新增 `sortedMetricCards` computed，按严重程度排序（bad 红色 → warn 黄色 → good 绿色），让质检员优先看到问题指标
+  - 子评分列表外包 `metric-scroll` 容器，`max-height: 420px`，超出自动滚动，后期扩展条目不受高度限制
+  - 任务类型管理页列表新增搜索框（按名称/描述过滤）和滚动容器（`max-height: 480px`），支持大批量任务类型高效定位
+- Files changed:
+  - `frontend/src/pages/manual-qc.vue`
+  - `frontend/src/pages/task-types.vue`
+  - `backend/app/services/payloads.py` (temporary test metrics, reverted)
+- Verification:
+  - 生产容器 backend + frontend 重建部署后，进入 manual QC 确认滚动条和排序生效
+- Next steps:
+  - 后续如需扩展子评分条目，直接在 backend `_metric_cards_from_manifest` 中添加即可，前端自动排序+滚动
+
+## 2026-06-25 (UI component abstraction: unified appearance system)
+
+- Type: refactoring
+- Status: validated by frontend build, production compose redeploy, and CSS class verification
+- Importance: medium
+- Reusable: yes
+- Objective: 将散落在 style.css 和各页面 scoped style 中的组件外观样式统一提取为抽象外观类，同类组件保持一致外观
+- Work completed:
+  - 新建 `frontend/src/styles/components.css`，定义 5 个抽象组件外观类：
+    - `.qc-card` — 卡片（圆角 20px、边框、阴影）
+    - `.qc-stat-card` / `.qc-stat-card-blue|orange|green|purple` — 统计卡片（固定高度、无溢出、装饰圆、4 种配色）
+    - `.qc-select` — 下拉框（蓝色常驻边框）
+    - `.qc-table` — 表格（深灰常驻滚动条、选中行蓝底高亮、选中行内 tag 透明融入、进度条轨道可见）
+    - `.qc-progress` — 进度条（灰色可见轨道）
+  - 在 `main.ts` 中引入 `components.css`
+  - 批量替换所有页面：`product-card`/`premium-card` → `qc-card`，`stat-card accent-*` → `qc-card qc-stat-card qc-stat-card-*`，`dispatch-overview-table` → `qc-table dispatch-overview-table`，`batch-select` → `qc-select batch-select`
+  - 清理 `style.css`：删除已迁移到 components.css 的 ~100 行重复样式
+  - 清理 `task-pool.vue` scoped style：删除已被 qc-table/qc-select 覆盖的滚动条和下拉框样式
+- Business logic impact: 后续新增页面或修改组件外观只需引用抽象类，不再需要逐页复制样式；同类组件自动保持外观一致
+- Files changed:
+  - `frontend/src/styles/components.css` (new)
+  - `frontend/src/main.ts`
+  - `frontend/src/style.css`
+  - `frontend/src/pages/dashboard.vue`
+  - `frontend/src/pages/task-pool.vue`
+  - `frontend/src/pages/database-view.vue`
+  - `frontend/src/pages/qc-history.vue`
+  - `frontend/src/pages/accounts.vue`
+  - `frontend/src/pages/task-types.vue`
+  - `frontend/src/pages/manual-qc.vue`
+  - `software/.project-log/progress.md`
+- Verification:
+  - `npm run build --prefix frontend` → build 通过
+  - `docker compose build frontend && docker compose up -d frontend` → 部署成功
+  - `curl` 确认生产 CSS 包含 `qc-card`、`qc-stat-card`、`qc-table`、`qc-select`、`qc-progress` 五个抽象类
+- Next steps:
+  - 用户在浏览器端强刷新后验证各页面组件外观一致性
+
+## 2026-06-24 (Robot QC V1 dispatch workflow refactor: dashboard-owned dispatch + generation versioning)
+
+- Type: implementation
+- Status: validated by backend compile, frontend build, migration upgrade, runtime payload checks, and sampled/full/sampled regeneration verification
+- Importance: critical
+- Reusable: yes
+- Objective: 把任务派发从“task-pool 页逐条指派 reviewer”重构为“工作台 batch 级生成待派发任务 + 批量派发 reviewer”的正式流程，并修复 `full -> sampled` 重生成后旧任务仍留在当前活跃视图中的 bug
+- Work completed:
+  - 业务逻辑文档已先完成更新，正式确立三条约束：1）派发主流程迁移到工作台；2）派发采用“两段式”（先生成待派发任务池，再批量分配 reviewer）；3）同一 batch 的任务重生成采用“活跃派发版本”语义，旧版本未开始任务退役而非继续留在当前视图中
+  - 后端 `Batch` 新增 `active_dispatch_generation`；`QcTask` 新增 `dispatch_generation`、`is_active`、`assignment_mode`，并新增 Alembic revision `20260624_0005_dispatch_generation.py`
+  - `serialize_task()`、`DispatchPreviewSchema`、`TaskPoolPayloadSchema`、`DashboardPayloadSchema`、前端 `types/qc.ts` / `api/client.ts` 已同步升级，前后端都能识别任务活跃版本、是否活跃、批量分配模式和新增统计字段
+  - `backend/app/services/payloads.py` 已重构：`dispatch_preview_payload()` 现在按当前活跃任务统计 `pendingAssignCount/assigned/inReview/done`，并补 `supersededTaskCount` 与 `activeDispatchGeneration`；`dashboard_payload()` 已带上 `dispatchPreviews` 与 `reviewerAccounts`，供工作台直接承接派发主流程
+  - `backend/app/api/routes/qc.py` 的 `dispatch-plan` 已从“追加式创建任务”改为“切换 batch 活跃派发版本 + 退役旧版本未开始任务 + 生成新版本待派发任务池”；同时新增 `POST /qc/batches/{batch_id}/dispatch-assign`，支持 `even` 与 `custom_counts` 两种批量派发模式
+  - `dashboard.vue` 已重构为新的派发主入口：
+    - 批次总览表显示待派发/已派发/进行中/已完成统计
+    - 新增右侧 `派发工作区`，支持选择 `full/sample` 生成待派发任务、选择 reviewer、选择 `平均派发/指定每人条数` 并一次性完成批量派发
+    - 工作台不再依赖跳转到旧 `task-pool` 才能完成派发
+  - `task-pool.vue` 已降级为“任务明细中心”：保留按 batch 查看当前任务、锁状态和进入 manual QC 的入口，不再承载生成派发和逐条派发主流程
+  - `AppLayout.vue` 菜单与 topbar 已同步收口：原“人工质检与派发”菜单改为“任务明细中心”，顶部“派发任务”快捷入口改为跳转工作台
+- Business logic impact: 系统正式从“单条任务指派 + manual QC 混合入口”切换为“工作台派发运营 / manual QC 质检执行”双层模式。管理员现在可以先在工作台看到哪些 batch 还没质检完，再先生成待派发任务池，再一次性把任务均分或按指定条数分给多个 reviewer；manual QC 页面只保留 review 执行本身，职责边界清晰
+- Problems encountered:
+  - 当前生产库尚无 `active_dispatch_generation` 等新字段，必须先补 Alembic migration，否则 dashboard/task-pool payload 会直接报字段不存在
+  - 首轮 sampled/full/full API 验证中出现 `audit_events.id` 冲突，原因是原审计 ID 仅基于秒级时间戳；已改为把 `generation` 也纳入 audit id，避免同秒内重复生成冲突
+  - manual QC 与 payload 层多处仍通过 `episode_id -> first QcTask` 取任务；在引入活跃版本后，必须改为显式读取 `is_active == 1` 的当前任务，否则 manual QC 可能拿到旧版本任务
+  - mock 数据与前端类型因新增字段报错，已补齐 `dispatchGeneration/isActive/assignmentMode` 以及新的 preview 统计字段
+- Resolution:
+  - 先引入最小必要字段扩展而不推翻 `QcTask` 模型，用版本语义解决“当前活跃任务池”和“历史任务审计”并存问题
+  - 将派发生成与 reviewer 分配拆成两个接口，避免继续把“采样决定”和“逐条指派”耦死在一起
+  - 用工作台承接批次级派发运营，而 `task-pool` 只保留明细和排障价值
+- Verification:
+  - `cd /home/tbl/Project/data_collect/software && python3 -m compileall backend/app`
+  - `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml build backend frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up -d backend frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml exec -T backend python -m alembic upgrade head`
+  - `curl -sS -c /tmp/robot_qc_admin.cookies -H 'Content-Type: application/json' -d '{"username":"admin","password":"Admin123!"}' http://127.0.0.1:8080/api/auth/login`
+  - `curl -sS -b /tmp/robot_qc_admin.cookies http://127.0.0.1:8080/api/dashboard`
+  - `curl -sS -b /tmp/robot_qc_admin.cookies http://127.0.0.1:8080/api/task-pool`
+  - `curl -sS -b /tmp/robot_qc_admin.cookies -H 'Content-Type: application/json' -d '{"dispatchMode":"sampled","samplingRatio":25,"note":"api test sampled"}' http://127.0.0.1:8080/api/qc/batches/batch_871627c45789aecb/dispatch-plan`
+  - `curl -sS -b /tmp/robot_qc_admin.cookies -H 'Content-Type: application/json' -d '{"dispatchMode":"full","samplingRatio":100,"note":"api test full"}' http://127.0.0.1:8080/api/qc/batches/batch_871627c45789aecb/dispatch-plan`
+  - `curl -sS -b /tmp/robot_qc_admin.cookies -H 'Content-Type: application/json' -d '{"dispatchMode":"sampled","samplingRatio":25,"note":"api test sampled again"}' http://127.0.0.1:8080/api/qc/batches/batch_871627c45789aecb/dispatch-plan`
+  - `docker exec robot-qc-db psql -U robot_qc -d robot_qc -c "select batch_id, count(*) filter (where is_active=1) as active_tasks, count(*) filter (where is_active=0) as superseded_tasks, max(dispatch_generation) as max_generation from qc_tasks where batch_id='batch_871627c45789aecb' group by batch_id;"`
+- Unverified items:
+  - 还未做浏览器肉眼验收来确认工作台右侧 `派发工作区` 的完整交互体验是否满足你的操作习惯
+  - 新增的 `dispatch-assign` 虽已完成接口与前端接线，但还未在浏览器里用 `平均派发` / `指定每人条数` 两种模式各实点一轮
+  - 当前 `full -> sampled -> full -> sampled` 重生成链路已经在 API 层验证了旧任务会被退役，但还没在 UI 上完成完整人工回归
+- Files changed:
+  - `software/backend/app/models/batch.py`
+  - `software/backend/app/models/qc.py`
+  - `software/backend/migrations/versions/20260624_0005_dispatch_generation.py`
+  - `software/backend/app/schemas/qc.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/backend/app/api/routes/qc.py`
+  - `software/frontend/src/types/qc.ts`
+  - `software/frontend/src/api/client.ts`
+  - `software/frontend/src/api/mock.ts`
+  - `software/frontend/src/pages/dashboard.vue`
+  - `software/frontend/src/pages/task-pool.vue`
+  - `software/frontend/src/components/AppLayout.vue`
+  - `software/frontend/src/style.css`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 让用户在真实浏览器里按新的工作流点测：选择 batch → 生成待派发任务 → 选择 reviewer → 平均/自定义派发 → 从任务明细进入 manual QC
+  - 如果工作台布局仍有不顺手的地方，再继续做第二轮 UI 收口，但不再回退到旧 task-pool 逐条派发模式
+
+## 2026-06-25 (Dashboard UI polish: scan panel removal, stat card layout, batch row selection, progress bar visibility, tag border fix)
+
+- Type: implementation
+- Status: validated by frontend build, production compose redeploy, and browser hard refresh verification
+- Importance: medium
+- Reusable: yes
+- Objective: 收紧工作台布局并修复多处在真实使用中发现的前端瑕疵
+- Work completed:
+  - 删除工作台 `dashboard` 中的扫描任务面板，扫描状态只保留在数据总库页，避免功能重复
+  - 顶部四个统计卡片（候选总量、已抽中样本、样本完成率、待处理任务）改为固定高度/`overflow:hidden`/`justify-content:center`，不再出现无意义横纵滚动条
+  - 批次派发总览表格新增 `highlight-current-row` + `current-row-key` + `dispatch-overview-table` class，选中批次后整行以蓝底 `#93c5fd` 区分，同时增加左侧蓝色条 `inset 4px 0 0 #2563eb`
+  - 表格滚动条改为常驻显示（`opacity:1` on `.el-scrollbar__bar`），颜色深灰 `#475569`
+  - 样本完成列的 `el-progress` 白色轨道改为 `#cbd5e1` 灰色，未选中行时也能看到进度条
+  - 修复选中行内 `el-tag`（派发模式、状态）边框白框残留问题：`border-color: transparent; box-shadow: none`，使选中时 tag 与行底色完全融合
+- Business logic impact: 工作台页面现在更接近正式运营看板风格，不再存在布局和选中等基本体验缺陷
+- Problems encountered:
+  - 首轮 `highlight-current-row` 未绑定 `current-row-key`，导致选中行在 change 事件中失效，行背景始终为白色
+  - el-tag 组件在选中行中即使背景设为 `transparent`，仍保留 `<el-tag>` 自身的白色边框，必须额外清除 `border-color` 和 `box-shadow`
+  - `el-progress` 默认轨道背景为白色，在白色行背景上完全不可见，只有选中后才因蓝底凸显
+  - 前两次 build/deploy 后用户反馈没变化，原因是只做了本地 build 但没重建 Docker frontend 容器
+- Resolution:
+  - 每次前端修改后统一执行 `npm run build && docker compose build frontend && docker compose up -d frontend` 确保 production 容器落地最新代码
+  - 选中行样式需要同时覆盖 `td` 上的 `background`、`el-tag` 上的 `background/border/box-shadow`、`el-progress` 的轨道背景这三层才能达到完整效果
+- Verification:
+  - `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml build frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up -d frontend`
+  - 用户在浏览器强刷后确认选中效果、进度条可见性、tag 白框等问题均已修复
+- Files changed:
+  - `frontend/src/pages/dashboard.vue`
+  - `frontend/src/style.css`
+  - `frontend/src/components/AppLayout.vue`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 等待用户继续浏览器验收工作台、任务明细、manual QC 等完整流程，按反馈再继续收口
+  - 下一步可考虑提交 git push 本版本作为里程碑
+  - `cd /home/tbl/Project/data_collect/software && python3 -m compileall backend/app`
+  - `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml build backend frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up -d backend frontend`
+  - `docker exec robot-qc-backend python -c "from app.core.db import SessionLocal; from app.services.payloads import task_pool_payload; db=SessionLocal(); p=task_pool_payload(db); print('reviewerAccounts=', [item['name'] for item in p['reviewerAccounts']]); print('reviewerWorkloads=', [item['name'] for item in p['reviewerWorkloads']]); db.close()"`
+  - `docker exec robot-qc-frontend sh -lc "grep -Rni 'reviewerAccounts\|task-pool-summary-row\|task-pool-stat-card' /usr/share/nginx/html/assets/task-pool* 2>/dev/null || true"`
+- Unverified items:
+  - 还未做浏览器肉眼验收来确认四块统计卡片滚动条在你当前窗口尺寸下是否完全消失
+  - 还未实点一次真实任务派发按钮来确认 reviewer 新名单在 UI 下拉中可见且能成功提交
+- Files changed:
+  - `software/backend/app/schemas/qc.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/frontend/src/api/client.ts`
+  - `software/frontend/src/types/qc.ts`
+  - `software/frontend/src/pages/task-pool.vue`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 让用户在真实浏览器里刷新 `task-pool` 页面，确认 reviewer 下拉已出现 `审核员01/02/03`
+  - 继续按用户指出的具体体验问题，逐项优化任务派发中心页面
+
+## 2026-06-24 (Robot QC V1 database page server-side pagination landing)
+
+- Type: implementation
+- Status: validated by backend compile, frontend build, runtime payload checks, and production compose redeploy
+- Importance: critical
+- Reusable: yes
+- Objective: 把 `database` 页面从“全量 episodes 拉到前端后本地过滤 + 一次性渲染整表”的短期模式，升级为适合数据持续增长与多用户远程使用的正式方案：服务端分页、服务端筛选、前端按页渲染
+- Work completed:
+  - 后端 `DatabasePayloadSchema` 与前端 `DatabasePayload` 已扩展分页字段：`totalEpisodes`、`page`、`pageSize`
+  - `frontend/src/api/client.ts` 新增 `DatabaseQuery`，`fetchDatabase()` 现可携带 `page/page_size/keyword/batch_id/qc_status/qc_result` 查询参数
+  - `backend/app/api/routes/qc.py` 的 `GET /api/database` 已切换为正式分页接口，支持页码、页大小、关键字、批次、QC 状态、QC 结果查询
+  - `backend/app/services/payloads.py` 的 `database_payload()` 已从“全量 episodes 返回”改为“服务端过滤 + total 统计 + offset/limit 返回当前页”；同时保留批次、任务类型、原因统计和最近扫描任务等页面所需 summary 信息
+  - `frontend/src/pages/database-view.vue` 已移除本地 `filteredEpisodes` 全量过滤路径，切换为由筛选条件驱动远端请求，并新增 `el-pagination`，当前只渲染当前页 episode
+  - 搜索关键字增加 250ms 前端 debounce，避免输入每个字符都立即打请求；批次/QC 状态/QC 结果/每页条数变化时自动回到第一页重新拉取
+  - backend/frontend 生产镜像已重建，compose 运行中的 `robot-qc-backend` / `robot-qc-frontend` 已完成重新部署
+- Business logic impact: `database` 页面正式从“浏览器端持有全量 episode 事实源”切换到“后端分页查询是事实源、前端只渲染当前页”。这意味着后续数据继续增长时，单次打开页面不再需要把全部 episode 拉到浏览器再过滤，远程用户和多用户场景下的网络与大表渲染压力会明显更可控
+- Problems encountered:
+  - 先前已确认 backend payload 构造本身已压到百毫秒级，但页面切换仍卡顿，说明瓶颈已转到前端大表渲染
+  - `database` 页面原逻辑把关键字、批次、状态、结果全部压在本地 `computed.filter()` 上，导致每次进入页面都要重新处理并渲染 4000+ 行
+  - frontend `fetchBootstrap()` 保留了 `database: DatabasePayload` 类型依赖，因此分页字段需要同步进 schema/类型，避免类型合同断裂
+- Resolution:
+  - 直接按长期方案切换到服务端分页/服务端筛选，而不是继续堆叠本地分页或 `KeepAlive`
+  - 在后端维持单一查询事实源，在前端保留轻量 debounce 和分页组件，确保交互仍然简单可控
+- Verification:
+  - `cd /home/tbl/Project/data_collect/software && python3 -m compileall backend/app`
+  - `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml build backend frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up -d backend frontend`
+  - `docker exec robot-qc-backend python -c "from app.core.db import SessionLocal; from app.services.payloads import database_payload; db=SessionLocal(); p=database_payload(db, page=2, page_size=50, keyword='', batch_id='', qc_status='', qc_result=''); print(len(p['episodes']), p['page'], p['pageSize'], p['totalEpisodes']); db.close()"`
+  - `docker exec robot-qc-backend python -c "from app.core.db import SessionLocal; from app.services.payloads import database_payload; db=SessionLocal(); p=database_payload(db, page=1, page_size=100, keyword='episode', batch_id='', qc_status='', qc_result=''); print(sorted(p.keys())); print(p['page'], p['pageSize'], p['totalEpisodes'], len(p['episodes'])); db.close()"`
+  - `docker exec robot-qc-frontend sh -lc "grep -Rni 'el-pagination\|page_size\|qc_status\|batch_id' /usr/share/nginx/html/assets/database-view* 2>/dev/null || true"`
+- Unverified items:
+  - 还未做真实浏览器肉眼验收来确认切换到 `database` 页面时的体感卡顿是否已经明显下降
+  - 还未补第二层“短 TTL 页面缓存”，当前先完成了长期主方案中的服务端分页/筛选部分
+- Files changed:
+  - `software/backend/app/api/routes/qc.py`
+  - `software/backend/app/schemas/qc.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/frontend/src/api/client.ts`
+  - `software/frontend/src/pages/database-view.vue`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 让用户在真实浏览器里复验 `database` 页面切换体感、筛选、分页、进入 manual QC 等主流程
+  - 若切页体感仍有可感知迟滞，再补短时内存缓存作为二级体验增强，而不是替代分页事实源
+
+## 2026-06-24 (Robot QC V1 manual QC synchronized player landing)
+
+- Type: implementation
+- Status: validated by build and production QC-context API
+- Importance: critical
+- Reusable: yes
+- Objective: 把 manual QC 页面从“三个独立视频 + 假 frame 控制条”升级成统一同步播放器，让 frame 控制栏真正驱动三路视频，并用真实 `fps/durationSec/frameCount` 消除当前时间轴与视频时长不一致问题
+- Work completed:
+  - 后端 `EpisodeRowSchema` 新增 `fps` 字段，`payloads.py` 在真实 QC context 中把 `fps` / `durationSec` / `frameCount` 一并返回给前端；fallback mock context 也补上默认 `fps=30.0`
+  - `frontend/src/pages/manual-qc.vue` 已重构为受控同步播放器：新增视频 refs、全局 `currentFrame/currentTimeSec/playing` 状态、统一 `playAll/pauseAll/syncVideosToFrame` 控制函数
+  - 去掉三路视频的原生 `controls`，禁止用户通过单个视频本地控制把三路画面拖不同步
+  - 底部 frame 区按钮现在真正驱动三路视频：`播放/暂停`、`上一帧/下一帧`、`-1s/+1s`、slider 拖动都统一作用于当前 variant 下的所有视频
+  - 当前时间文本改为使用真实 `currentFrame / fps` 与 `durationSec` 计算，并在 UI 中显式展示当前秒数、总时长和 fps
+  - variant 切换时会先暂停并按当前帧位置把新 variant 同步到同一 inspection point，避免 RGB / Depth 之间切换后时间漂移
+- Business logic impact: manual QC 页面现在正式从“多视频展示页”进入“多视角同步检查工具”的语义。三路视频不再各播各的，frame control bar 成为唯一播放控制权，这使得逐帧核查、同步判断和时间轴定位真正可用，也与业务逻辑文档里定义的统一同步播放器约束保持一致
+- Problems encountered:
+  - 现有页面中 frame 区原本只修改前端变量，完全没有驱动 `<video>` 元素，因此播放、暂停、拖动和逐帧操作都不生效
+  - 前端原本把当前时间硬编码为 `currentFrame / 30`，与真实 episode 的 `durationSec/frameCount/fps` 不一致，导致用户观察到视频显示 9s 但 frame 区只到 3s 多
+  - 引入 `fps` 字段后，mock 数据和前端类型约束需要同步修正，否则前端构建会报错
+- Resolution:
+  - 用统一受控播放器重构 `manual-qc.vue`，让三路视频从“本地独立控件”转为“受 frame bar 控制的显示窗口”
+  - 后端把真实 `fps` 暴露给前端，前端彻底移除硬编码 `30fps` 的时间轴逻辑
+  - 同步修正 `types/qc.ts`、`schemas/qc.py` 和 fallback payload
+- Verification:
+  - `cd /home/tbl/Project/data_collect/software/backend && python3 -m compileall app`
+  - `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up --build -d backend frontend`
+  - `curl -sS -b /tmp/robot_qc.cookies http://127.0.0.1:8080/api/episodes/batch_5a19fc03a292a170_episode_000013/qc-context`
+  - 复核返回值确认：`durationSec=10.0167`、`frameCount=153`、`fps=15.1745`
+- Unverified items:
+  - 还未做真实浏览器层面的肉眼验收，尤其是“三路视频是否在 UI 中稳定同步播放”和“slider 拖动是否肉眼无漂移”，需要你下一步现场点测
+  - 当前实现没有加入更复杂的自动纠偏（例如某一路落后时的周期性强制 resync）；若实际浏览器解码差异明显，后续可能还需要补更强同步策略
+- Files changed:
+  - `software/backend/app/schemas/qc.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/frontend/src/types/qc.ts`
+  - `software/frontend/src/pages/manual-qc.vue`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 让用户在浏览器里实测 manual QC 的播放、暂停、拖动、逐帧与 variant 切换
+  - 若同步效果稳定，再继续测试刷新预览、认领/释放锁与提交动作
+
+## 2026-06-24 (Robot QC V1 task type management landing)
+
+- Type: implementation
+- Status: validated in production API/runtime and frontend build
+- Importance: critical
+- Reusable: yes
+- Objective: 把“任务类型是人工维护主数据、扫描器只同步数据”的业务逻辑真正落到代码，补出任务类型管理入口、后端管理 API、批次回收到 `待分类` 的操作闭环，并增强数据总库筛选能力
+- Work completed:
+  - 后端 `TaskType` 模型新增 `is_active` 字段，`Batch` 新增 `is_active` 字段，并新增 Alembic revision `20260624_0004_task_type_management.py`
+  - `classification_seed.py` 已同步支持 `TaskType.is_active`，保证系统保底项 `task_type:unclassified` 正常存在
+  - 扫描器 `scanner.py` 已调整：新 batch 默认落入 `task_type:unclassified` / `待分类`；已人工分类 batch 在后续 rescan 中不自动覆盖正式任务类型
+  - 新增任务类型管理后端 API：`GET/POST/PATCH/DELETE /api/task-types`、`GET /api/task-types/{id}/batches`、`GET /api/batches?task_type_id=...`、`POST /api/task-types/{id}/batches:attach`、`POST /api/task-types/{id}/batches/{batchId}:detach`
+  - `待分类` 被收敛为不可编辑、不可删除的系统保底任务类型；删除普通任务类型时，其关联 batch 自动回收到 `待分类`
+  - `payloads.py` 已新增任务类型详情与待分类批次池 payload，并把 `database/dashboard/history` 等查询继续限制在 active batch / active list 上，避免历史脏数据重新污染主视图
+  - 前端新增独立一级页面 `frontend/src/pages/task-types.vue`，完成任务类型列表、详情、创建、编辑、删除、从待分类加入批次、移出批次回到待分类等主流程
+  - `AppLayout.vue` 和 `router/index.ts` 已加入 `任务类型管理` 菜单与路由，并限制为 `admin/qc_manager`
+  - `database-view.vue` 已补 `filterable`：批次、QC 状态、QC 结果下拉框支持键盘输入筛选
+- Business logic impact: 系统正式从“任务类型主要由扫描归类和 seed 决定”推进到“任务类型由人维护、扫描器只同步数据”。现在管理员和质检主管已经有了独立的任务类型管理入口，可以把待分类批次加入正式任务类型、把错分批次移回待分类再重新加入正确任务、删除任务类型时保留底层 batch/episode/QC 历史不丢失
+- Problems encountered:
+  - 首轮实现中 `qc.py` 因插入任务类型 API 过程破坏了 `router` / account 相关结构，导致 backend 容器启动失败，已逐步修复
+  - `schemas/qc.py` 中插入新 schema 时一度破坏了 `BatchSummarySchema` 定义和 Pydantic rebuild 顺序，导致 backend 启动失败与 body 解析异常，已修复
+  - `attach` 接口最初因 Pydantic body rebuild 问题返回 500，后改为直接接收 `dict` + 显式校验 `batchIds`
+- Resolution:
+  - 逐步修复 backend 路由结构与 schema 定义，重新构建容器并通过生产 API 复核
+  - 对复杂 body 解析改用更直接的输入校验，优先保证生产接口稳定性
+  - 保持 `待分类` 为固定任务类型而不是空值/NULL，简化回收与查询语义
+- Verification:
+  - `cd /home/tbl/Project/data_collect/software/backend && python3 -m compileall app migrations/versions`
+  - `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up --build -d backend frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml run --rm -e APP_ENV=development backend python -m alembic upgrade head`
+  - `curl -sS -b /tmp/robot_qc.cookies http://127.0.0.1:8080/api/task-types`
+  - `curl -sS -b /tmp/robot_qc.cookies http://127.0.0.1:8080/api/batches?task_type_id=task_type:unclassified`
+  - `curl -sS -X POST -b /tmp/robot_qc.cookies -H 'Content-Type: application/json' -d '{"name":"测试任务类型","description":"用于验证任务管理"}' http://127.0.0.1:8080/api/task-types`
+  - `curl -sS -X POST -b /tmp/robot_qc.cookies -H 'Content-Type: application/json' -d '{"batchIds":["batch_1ca97b61f80e9b11"]}' http://127.0.0.1:8080/api/task-types/task_type:测试任务类型/batches:attach`
+  - `curl -sS -X POST -b /tmp/robot_qc.cookies http://127.0.0.1:8080/api/task-types/task_type:测试任务类型/batches/batch_1ca97b61f80e9b11:detach`
+  - `curl -sS -X DELETE -b /tmp/robot_qc.cookies http://127.0.0.1:8080/api/task-types/task_type:测试任务类型`
+  - `curl -sS -i -X PATCH -b /tmp/robot_qc.cookies -H 'Content-Type: application/json' -d '{"name":"不可编辑","description":"x"}' http://127.0.0.1:8080/api/task-types/task_type:unclassified`
+  - `curl -sS -i -X DELETE -b /tmp/robot_qc.cookies http://127.0.0.1:8080/api/task-types/task_type:unclassified`
+- Unverified items:
+  - 还未进行真实浏览器层面的任务类型管理完整点击验收；当前验证主要完成于生产 API 与前端构建层
+  - `raw_data` 历史脏批次仍物理存在数据库中，但已从 active 查询面和待分类池中排除；若后续需要彻底清理，仍需单独数据迁移
+- Files changed:
+  - `software/backend/app/api/routes/qc.py`
+  - `software/backend/app/models/task_type.py`
+  - `software/backend/app/models/batch.py`
+  - `software/backend/app/schemas/qc.py`
+  - `software/backend/app/services/classification_seed.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/backend/app/services/scanner.py`
+  - `software/backend/migrations/versions/20260624_0004_task_type_management.py`
+  - `software/frontend/src/api/client.ts`
+  - `software/frontend/src/api/mock.ts`
+  - `software/frontend/src/components/AppLayout.vue`
+  - `software/frontend/src/router/index.ts`
+  - `software/frontend/src/types/qc.ts`
+  - `software/frontend/src/pages/task-types.vue`
+  - `software/frontend/src/pages/database-view.vue`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 让用户在浏览器里实机验收 `任务类型管理` 页面与 `database` 页检索增强
+  - 如浏览器体验确认通过，再决定是否补 batch 详情页或任务类型统计增强
+
+## 2026-06-24 (Robot QC V1 scan role gating and raw_data batch cleanup)
+
+- Type: implementation
+- Status: validated in production API runtime
+- Importance: high
+- Reusable: yes
+- Objective: 进一步收口扫描权限与扫描结果质量，避免普通质检员误触发入库，并修复 `raw_data` 技术目录被错误识别为独立业务批次的问题
+- Work completed:
+  - 在 `frontend/src/pages/database-view.vue` 接入 `useSessionStore()`，新增 `canScanDatabase` 角色判断，仅对 `admin` 和 `qc_manager` 显示扫描卡片与 `扫描入库` 按钮
+  - 复核真实异常记录 `batch_7bc7918c36426ae5_episode_000000`，确认其来源是 list prefix `double_linkerhand_task_fengqintudou_.../raw_data/` 被扫描器直接当成业务 list，导致 batch 名错误落成 `raw_data`
+  - 在 `backend/app/services/scanner.py` 新增技术包装目录归一化规则：`raw_data`、`processed_data`、`data` 不再作为最终业务 list 名，而会折叠回上一层 prefix
+  - 保留历史脏数据在库中但标为 inactive，同时在 `backend/app/services/payloads.py` 中把 `database/dashboard` 的 batch/episode 查询改为只返回 active list 对应的数据，避免旧脏记录继续污染页面
+  - 通过生产 API 复核确认：`database` 返回中已经看不到 `raw_data` 批次，也看不到 `batch_7bc7918c36426ae5_episode_000000` 这条异常 episode
+- Business logic impact: 现在扫描链路的对外语义更稳定了。角色层面，普通质检员不会再看到扫描入口；数据层面，MinIO 中技术包装目录不会再被误当成业务批次名称，历史脏记录也不会再出现在主页面检索结果里
+- Problems encountered:
+  - 首轮 `raw_data` 修复过程中，一次扫描任务因局部改动误伤 `_ensure_task_type` 定义而失败，随后已修正并重新部署
+  - 历史脏批次 `batch_7bc7918c36426ae5` 在数据库里仍然存在 1 条 episode 记录，因此不能只修扫描规则，还需要同步收口查询层
+- Resolution:
+  - 恢复 `_ensure_task_type` 正常定义后重新部署 backend
+  - 采取“扫描规则修正 + 查询层只返回 active list 数据”的双保险方式，先消除用户可见问题，再保留后续物理清理空间
+- Verification:
+  - `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up --build -d frontend`
+  - `cd /home/tbl/Project/data_collect/software/backend && python3 -m compileall app`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up --build -d backend`
+  - `curl -sS -b /tmp/robot_qc.cookies http://127.0.0.1:8080/api/database`
+  - `curl -sS -b /tmp/robot_qc.cookies http://127.0.0.1:8080/api/dashboard`
+  - 生产库复核：`lists.is_active`、异常 batch/episode 记录状态查询
+- Unverified items:
+  - 历史 `raw_data` 脏批次仍物理保留在库内，但已从 API 主视图剔除；若要彻底清库，还需单独设计数据迁移/清洗步骤
+- Files changed:
+  - `software/frontend/src/pages/database-view.vue`
+  - `software/backend/app/services/scanner.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 继续做 manual QC 播放、刷新、提交与 qc-history 的真实浏览器验收
+  - 如需彻底消除历史脏数据，再补一轮数据库清洗迁移
+
+## 2026-06-24 (Robot QC V1 scan robustness and local-time display fix)
+
+- Type: implementation
+- Status: validated in real production compose runtime
+- Importance: critical
+- Reusable: yes
+- Objective: 修复 database 扫描任务会卡死在 `scanning` 的生产缺陷，并确保页面刷新/关闭后扫描仍能继续，同时把扫描任务时间从 UTC 错显修正为本地时间显示
+- Work completed:
+  - 复核 `backend/app/api/routes/qc.py`、`backend/app/services/scan_queue.py`、`backend/app/services/scanner.py`，确认当前 `/api/database/scan` 通过 FastAPI `BackgroundTasks` 触发长扫描，存在绑定 request 生命周期的风险
+  - 将扫描触发改为 `enqueue_scan_job()`：后端在 API 返回前只负责落库 queued job，随后用独立 daemon thread 启动 `process_scan_job()`，不再依赖 HTTP request 的后台任务收尾
+  - 保留同 bucket 单活扫描约束不变，但修复了“请求结束后 worker 没真正跑起来，任务永久停在 scanning”的缺陷
+  - 在 `backend/app/core/config.py` 新增 `APP_TIMEZONE` 配置，默认 `Asia/Shanghai`
+  - 在 `backend/app/services/payloads.py` 中把数据库内 UTC naive datetime 按 UTC 解释后转换到 `APP_TIMEZONE` 再格式化，修正 `startedAt` / `finishedAt` 的本地显示
+  - 在生产库中手动标记两条历史卡死任务失败：`queued_1782269665_user_admin`、`queued_1782270935_user_admin`，解除它们对 `yaocao` bucket 后续扫描的阻塞
+  - 修复后重新触发真实生产扫描 `queued_1782271083_user_admin`，并观察到其状态从 `scanning` 进入 `classifying`，最终到 `done`
+- Business logic impact: 扫描任务现在与前端页面生命周期解耦。用户点击 `扫描入库` 后，即使刷新页面、关闭页面或请求已返回，扫描仍会继续在服务进程内推进，避免再出现“页面已经结束但 job 永久卡在 scanning、后续点击都被单活保护挡住”的生产事故。同时扫描时间展示已切到本地时区，现场观察与实际触发时间一致
+- Problems encountered:
+  - 生产环境中出现 `queued_1782269665_user_admin` 长时间停在 `scanning` 且 `total_prefixes=0`、`error_detail=''`，说明 worker 根本没真正推进
+  - 前端显示的 `02:54` 实际是数据库 UTC 时间，用户本地观察时间已是上午，造成明显误判
+  - 首轮改成子进程 worker 的方案在当前容器运行时没有成功推进任务，因此改为更直接的进程内独立线程方案
+- Resolution:
+  - 将扫描 worker 启动方式收敛为 API 进程内 daemon thread，避免额外子进程启动环境差异
+  - 明确把 naive datetime 统一视作 UTC，再按 `APP_TIMEZONE` 转换输出
+  - 对已卡死任务执行手动过期，释放 bucket 扫描锁，再用新实现重跑验证
+- Verification:
+  - `cd software/backend && python3 -m compileall app`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up --build -d backend frontend`
+  - `curl -sS -c /tmp/robot_qc.cookies -H 'Content-Type: application/json' -d '{"username":"admin","password":"Admin123!"}' http://127.0.0.1:8080/api/auth/login`
+  - `curl -sS -b /tmp/robot_qc.cookies -H 'Content-Type: application/json' -d '{"bucket":"yaocao","scope":"full"}' http://127.0.0.1:8080/api/database/scan`
+  - `docker exec robot-qc-db psql -U robot_qc -d robot_qc -c "select id, status, total_prefixes, confirmed_lists, total_episodes, new_episodes, error_detail, started_at, finished_at from scan_jobs order by started_at desc limit 3;"`
+  - `curl -sS -b /tmp/robot_qc.cookies http://127.0.0.1:8080/api/database`
+- Unverified items:
+  - 目前验证的是“请求返回后扫描继续推进并最终完成”，未单独录制“浏览器关闭页签瞬间”场景，但由于新实现已与 HTTP request 生命周期解耦，这一场景与刷新页面在机制上等价
+  - 仍需继续观察长时间生产运行下是否还会产生新的 `stale queued job` 历史残留
+- Files changed:
+  - `software/backend/app/api/routes/qc.py`
+  - `software/backend/app/core/config.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/backend/app/services/scan_queue.py`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 继续在真实浏览器里复验 database 页扫描提示、manual QC 播放/刷新/提交 和 qc-history
+  - 继续观察生产扫描任务在多次触发下的稳定性，确认不再出现新的无进度卡死
+
+## 2026-06-24 (Robot QC V1 real MinIO production deployment and database-page UX follow-up)
+
+- Type: validation
+- Status: partially validated in real production compose runtime
+- Importance: critical
+- Reusable: yes
+- Objective: 在真实本机生产环境完成 MinIO + PostgreSQL + compose 部署收口，并继续收口 database 页面扫描入口与长列表可用性问题，给后续现场验收提供稳定基线
+- Work completed:
+  - 生成并落地生产私有配置 `software/deploy/.env`，写入 `SECRET_KEY`、`POSTGRES_PASSWORD`、MinIO endpoint/credentials、默认 bucket `yaocao`、`FRONTEND_ORIGIN` 与 `SESSION_COOKIE_SECURE`
+  - 扩写 `software/deploy/README.txt`，补齐 secret 生成、`.env` 写法、首次 bootstrap、已有 PostgreSQL 卷改密、真实 MinIO 验证与跨机器迁移流程
+  - 在真实 compose 环境中完成 PostgreSQL 角色密码同步与 schema/bootstrap 初始化，确认当前部署可直接连接真实 MinIO 数据运行
+  - 基于真实运行时确认 database 页面能读取真实 episode、批次与最近扫描任务，并确认扫描触发接口是 `POST /api/database/scan`，不是 `GET`
+  - 复核 `frontend/src/pages/database-view.vue`，确认顶部 `扫描入库` 与卡片内 `开始扫描` 都调用同一 `submitScan()`，属于重复入口
+  - 已删除顶部重复扫描按钮，仅保留扫描卡片中的单一主入口，并把按钮文案统一为 `扫描入库`
+  - 已为 database 页 episode 列表增加独立滚动容器，长表格区域现在具备自己的纵向滚动条
+  - 执行 `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`，确认前端改动可正常生产构建
+- Business logic impact: 这一步把“能跑”推进到了“真实本机生产部署 + 用户现场可用性收口”。部署层面已经有私有 env 和迁移手册，database 页面层面则从双入口和长表格难操作的演示态，收紧为更接近实际生产使用的单一主操作入口与可滚动列表
+- Problems encountered:
+  - 先前误把进度写到了仓库根目录 `/home/tbl/Project/data_collect/.project-log`，而本项目实际应写 `software/.project-log`
+  - 本机 Firefox/Playwright headless 仍无法稳定启动，报错包含 `RenderCompositorSWGL failed mapping default framebuffer`，阻塞了完整浏览器自动化链路
+  - database 页 episode 列表在真实大数据量场景下没有独立滚动条，导致现场浏览体验明显受影响
+- Resolution:
+  - 已停止向错误日志目录继续写入，并把本次记录改写到 `software/.project-log`
+  - 现场验收阶段改用“真实部署 + API 验证 + 页面源码复核 + 用户实机浏览”组合方式继续推进，而不把 Firefox 驱动问题误判成业务故障
+  - 直接删除重复按钮并为表格加独立滚动容器，优先收口当前最影响使用的页面问题
+- Verification:
+  - 读取并确认 `software/deploy/.env` 当前生产私有配置
+  - 读取并确认 `software/deploy/README.txt` 当前迁移部署手册内容
+  - 读取并复核 `software/frontend/src/pages/database-view.vue`
+  - `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`
+- Unverified items:
+  - 仍未完成 manual QC 播放/刷新/提交 与 qc-history 的完整浏览器自动化复验，原因是本机 Firefox/Playwright headless 启动异常
+  - 仍需继续观察真实生产扫描 worker 的长期稳定性，以及旧 `stale queued job` 历史残留是否还会再出现
+- Files changed:
+  - `software/deploy/.env`
+  - `software/deploy/README.txt`
+  - `software/frontend/src/pages/database-view.vue`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 继续在用户现场浏览器里验证 manual QC 的真实播放、刷新、提交与 qc-history 页面
+  - 继续观察真实生产扫描 job 的完成情况，并根据现场体验收口剩余 database/manual QC 交互问题
+
+
+- Type: implementation
+- Status: partially validated on real MinIO data
+- Importance: critical
+- Reusable: yes
+- Objective: 把 Node D 合同中的 `media[]`、preview refresh、download 三条 manual QC 媒体访问链路真正落成前后端代码，并在真实 MinIO 对象上验证 payload 形状和预览 URL 发放
+- Work completed:
+  - 后端 `ManualQcContextSchema` 已扩展 `media[]`，新增 `ManualQcMediaSchema` 与 refresh request/response schema
+  - 后端 `payloads.py` 已为 processed 视频对象生成标准化 media descriptors：`objectId`、`role`、`label`、`variant`、`slot`、`previewUrl`、`previewExpiresAt`、`refreshable`、`downloadable`、`sortOrder`
+  - 后端 `api/routes/qc.py` 已新增 `POST /api/episodes/{episode_id}/media/refresh` 和 `GET /api/episodes/{episode_id}/objects/{object_id}/download`
+  - 前端 `api/client.ts`、`types/qc.ts`、`pages/manual-qc.vue` 已切到真实媒体描述符消费，manual QC 页面不再只显示静态占位视频卡片，而是基于 `previewUrl` 渲染真实 `<video>` 播放器，并支持刷新预览与下载对象
+- Business logic impact: 这一步把 Node D 合同从“结构化 telemetry 已真、视频仍占位”推进到了“结构化对象 + 预览媒体都由 MinIO 控制面统一发放”。前端现在不需要拼 bucket/key，也不需要知道对象命名规则，只消费后端归一化返回的媒体描述符
+- Problems encountered:
+  - `telemetry.npz` 通过 MinIO 响应流直接 `numpy.load()` 时不支持 seek，导致真实上下文构建失败
+  - `api/routes/qc.py` 插入 refresh/download endpoint 时引入了一处缩进错误，导致 backend compile 失败
+  - 当前临时验证库只跑了 scan，没有进入 dispatch/claim 链路，因此媒体 descriptor 的 `refreshable` 在真实数据验证中仍为 `false`
+- Resolution:
+  - `npz` 改为先读入 `BytesIO` 再解析
+  - 修正 route 缩进并重新通过 backend compile
+  - 先确认真实媒体 descriptors 和有效预签名 URL 发放无误，refresh 行为留到完整 task 派发后再做链路验证
+- Verification:
+  - `cd software/backend && .conda-env/bin/python -m compileall app`
+  - `npm run build --prefix software/frontend`
+  - 真实 MinIO payload 验证：manual QC payload 已返回 `media_count=3`，并带有效 `previewUrl`
+  - 真实结构化上下文验证：`frameCount=394`、`q_motion=5.9`、`timelineSegments=3`
+  - 真实端到端任务链验证：`scan -> dispatch -> claim -> media refresh -> submit` 已在 `yaocao` bucket + 临时 SQLite 库上跑通，结果为 `dispatch createdTaskCount=1`、`claim isMine=true`、`refresh 1 True`、`submit ok`、最终 `episode.qc_status=done` / `task.status=done`
+  - 生产浏览器媒体验收：Playwright 观察到 `videos=3`、`refreshVisible=true`、`downloadButtons=3`
+  - 生产 HTTP scan 验证：最新 `queued_1782241730_user_admin` 已从 `scanning -> classifying -> done` 完整跑通，结果为 `confirmedLists=42`、`totalEpisodes=4097`、`newEpisodes=69`
+- Unverified items:
+  - 仍需确认 queued scan worker 在连续多次触发下的长期稳定性；历史上存在部分旧 job 被标记为 `stale queued job`
+  - 还未完成最终的生产级 secrets 管理收口（当前 compose 已改为环境变量注入，但部署流程尚未固化） 
+- Files changed:
+  - `software/backend/app/schemas/qc.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/backend/app/api/routes/qc.py`
+  - `software/frontend/src/types/qc.ts`
+  - `software/frontend/src/api/client.ts`
+  - `software/frontend/src/pages/manual-qc.vue`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 继续补 batch/episode -> qc_task 自动生成或派发验证，进入真实持锁任务场景，验证 media refresh
+  - 跑浏览器端真实视频播放/下载/提交链路
+  - 在生产 compose 环境复现 PostgreSQL + MinIO 联调并形成可上线收尾清单
+
+## 2026-06-23 (Robot QC V1 MinIO scanner/runtime validation and local-field cleanup)
+
+- Type: implementation
+- Status: validated on real MinIO data
+- Importance: critical
+- Reusable: yes
+- Objective: 在下游合同切换完成后，继续把旧本地字段从运行路径移除，并用真实 `yaocao` bucket 数据验证 scanner、控制面写入和 manual QC 结构化上下文读取
+- Work completed:
+  - 新增 `backend/app/services/authz.py`，把权限校验从旧本地 ingestion 模块中独立出来；`api/routes/qc.py` 与 `services/scanner.py` 已改为直接依赖该模块
+  - 删除旧运行路径中的 `backend/app/services/ingestion.py` 与 `backend/app/models/ingest.py`，不再保留本地扫描服务作为运行时入口
+  - 清理后端配置与模型中的本地字段：`app/core/config.py` 去掉 `COLLECTION_DATA_ROOT` / `SAMPLE_PROCESSED_ROOT`，`models/batch.py` 去掉 `storage_path`，`models/episode.py` 去掉 `source_path/source_hash/ingest_status`
+  - 更新 baseline migration，并新增 `20260623_0003_drop_local_storage_fields.py`，用于正式删除 `ingest_jobs` 表和旧本地字段；同时补上“按实际表/列存在性 drop”的兼容逻辑，保证 fresh 库与历史库都能推进
+  - 新增 `backend/app/services/classification_seed.py`，把业务文档中已经收敛的首版 `task_types + classification_rules` 种子真正写入初始化流程；`bootstrap.initialize_schema()` 现在会自动补齐这些 seed
+  - 扩展 `services/scanner.py`：真实扫描后不仅写 `scan_jobs/lists/episode_inventory/episode_objects`，还会同步生成 `batches` 与 `episodes` 业务层行，并按规则 seed 绑定 `task_type`
+  - 修复 scanner 运行期 bug：纠正 episode inventory 构建块的缩进错误，并修复 `telemetry.npz` 从 MinIO 流直接 `np.load()` 时的 seek 问题，改为先读入内存再解析
+- Business logic impact: 到这一阶段，系统已经不再只是“控制面能扫到对象”，而是可以从真实 MinIO bucket 一次扫描落到控制面和业务层，再从这些业务层/控制面数据反向构建 manual QC 所需的结构化上下文。这意味着本地目录方案在核心运行路径上已经被实际替代，而不是只停留在 schema 或 UI 文案层
+- Problems encountered:
+  - `20260623_0003` 初版在 fresh SQLite 库上因 `ingest_jobs` 尚不存在而直接失败
+  - MinIO SDK 运行依赖在 `.conda-env` 中不完整，导致真实扫描初次验证时缺少 `certifi` / `_cffi_backend`
+  - scanner 首次接入 batch/episode 业务层时，episode inventory 构建块被错误挂在 `else` 分支下，导致只生成 list 不生成 inventory
+  - `telemetry.npz` 通过 MinIO response 流直接传给 `numpy.load()` 时会因底层流不支持 seek 而失败
+- Resolution:
+  - migration 改为对目标表/列/索引先做存在性判断，再执行 drop
+  - 在 `.conda-env` 中补齐 `minio` 运行依赖并完成导入验证
+  - 修正 scanner 的批次/episode 构建逻辑缩进，重新跑真实 bucket 验证
+  - `npz` 读取改为 `response.read() -> io.BytesIO -> np.load()`
+- Verification:
+  - `cd software/backend && DATABASE_URL=sqlite:////tmp/robot_qc_minio_phase.db .conda-env/bin/python -m alembic upgrade head`
+  - `cd software/backend && DATABASE_URL=sqlite:////tmp/robot_qc_minio_phase.db .conda-env/bin/python -m app.services.bootstrap --ensure-schema-only`
+  - 真实 MinIO 连通性：使用 `MINIO_ENDPOINT=192.168.21.95:9190`、真实凭据、bucket=`yaocao` 成功列出对象
+  - 真实 scanner 验证：临时 SQLite 库上跑 `run_minio_scan()`，结果为 `lists=39`、`episode_inventory=3699`、`episode_objects=1857532`、`batches=39`、`episodes=3699`
+  - 真实 manual QC 结构化上下文验证：`episode_000000` 返回 `frameCount=394`、`q_motion=5.9`、`timelineSegments=3`
+  - `cd software/backend && .conda-env/bin/python -m compileall app migrations/versions`
+  - `npm run build --prefix software/frontend`
+- Unverified items:
+  - manual QC 的真实视频 `media[]` descriptor、presigned preview URL、refresh/download API 仍未落地
+  - 还未做浏览器层真实视频播放和完整 login -> scan -> database -> manual-qc 的真对象端到端验收
+  - 还未完成阶段性 git commit/push 之后的生产 compose 级联调
+- Files changed:
+  - `software/backend/app/services/authz.py`
+  - `software/backend/app/services/classification_seed.py`
+  - `software/backend/app/services/scanner.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/backend/app/services/bootstrap.py`
+  - `software/backend/app/api/routes/qc.py`
+  - `software/backend/app/core/config.py`
+  - `software/backend/app/models/__init__.py`
+  - `software/backend/app/models/batch.py`
+  - `software/backend/app/models/episode.py`
+  - `software/backend/app/services/ingestion.py`
+  - `software/backend/app/models/ingest.py`
+  - `software/backend/migrations/versions/20260623_0001_baseline_schema.py`
+  - `software/backend/migrations/versions/20260623_0003_drop_local_storage_fields.py`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 提交并 push 当前阶段版本
+  - 落地 `ManualQcContext.media[]`、preview/refresh/download API 与前端真实播放器接线
+  - 用真实 MinIO 数据跑浏览器端到端链路并补生产 compose 验收
+
+## 2026-06-23 (Robot QC V1 MinIO 替换继续推进)
+
+- Type: implementation
+- Status: partially validated
+- Importance: critical
+- Reusable: yes
+- Objective: 继续把 scan API 切换向下游闭环推进，去掉 manual QC 对本地 processed 目录的依赖，并收口批次/界面/部署中的本地存储语义
+- Work completed:
+  - 后端 `app/services/payloads.py` 已不再查找本地 processed 目录，manual QC 真实上下文改为通过 `EpisodeInventory + EpisodeObject + ListRecord.bucket` 定位对象，并直接从 MinIO 读取 `manifest.json`、`metadata.json`、`telemetry.npz`
+  - 后端 `serialize_batch()` 已从旧 `storagePath` 输出切换为 `bucket + storagePrefix`，并通过控制面映射为 batch 提供 MinIO 存储定位信息
+  - 前端 `BatchSummary` mock 与下游页面文案继续切到 MinIO：登录页、侧栏、database、task-pool、manual-qc 已去掉本地存储表达
+  - `software/deploy/README.txt` 已改为 MinIO 对象存储说明，`software/deploy/docker-compose.yml` 已移除旧 `/data/collection_data` 业务挂载
+  - `frontend/src/api/mock.ts` 已同步把 batch 示例与审计文案切到 MinIO 语义
+- Business logic impact: manual QC 指标与时间轴链路现在已经脱离本地目录查找，开始真正依赖 MinIO 控制面与对象读取；同时 scan/database/batch 的对外合同已不再继续暴露本地路径，系统运行语义进一步向“MinIO 是唯一数据面”收敛
+- Problems encountered:
+  - 现有 `Episode/Batch/IngestJob` 模型与旧 `app/services/ingestion.py` 仍保留 `source_path/storage_path` 等本地字段，仓库层面还没有彻底完成结构清理
+  - 当前 scanner 虽已落控制面，但还没有把 `ingested_episode_id` 做成稳定真实映射；本轮 batch/minio 对位改为依赖 `episode_id_from_manifest/episode_name/ingested_episode_id` 兜底查找，避免错误绑定
+  - 当前 manual QC 页面的视频区仍是占位 UI，真实 media descriptor、presigned preview URL、refresh/download 接口尚未实现
+- Resolution:
+  - 先在 payload/query/view 层完成运行路径替换，确保旧本地扫描数据逻辑不再参与当前 manual QC 上下文与 batch 对外合同
+  - 对 batch 与 episode 的 MinIO 控制面关联采用查询兜底策略，保证在现有控制面首版数据下也能继续推进 downstream 清理
+- Verification:
+  - `npm run build --prefix software/frontend`
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 software/backend/.conda-env/bin/python -m compileall software/backend/app`
+- Unverified items:
+  - 尚未在真实 MinIO + 数据库样本上跑通 manual QC 页面请求，当前仅完成静态构建/编译验证
+  - 尚未通过 migration 正式移除旧 `source_path/storage_path` 字段与 `ingest_jobs` / `app/services/ingestion.py` 本地链路
+  - 尚未做浏览器层 real media playback 验证
+- Files changed:
+  - `software/backend/app/services/payloads.py`
+  - `software/backend/app/services/scanner.py`
+  - `software/frontend/src/api/mock.ts`
+  - `software/frontend/src/pages/login.vue`
+  - `software/frontend/src/components/AppLayout.vue`
+  - `software/frontend/src/pages/task-pool.vue`
+  - `software/frontend/src/pages/database-view.vue`
+  - `software/frontend/src/pages/manual-qc.vue`
+  - `software/deploy/README.txt`
+  - `software/deploy/docker-compose.yml`
+  - `software/.project-log/current-session.md`
+  - `software/.project-log/progress.md`
+- Next steps:
+  - 继续清理 `app/core/config.py`、`models/batch.py`、`models/episode.py`、`models/ingest.py` 与 `app/services/ingestion.py` 中残留的本地存储字段/逻辑
+  - 落地 manual QC `media[]` descriptor、presigned preview/refresh/download API，并做浏览器真播放验证
+  - 在真实 MinIO 样本上补一轮 scan → database → manual QC 的端到端验证
+
+
+- Type: implementation
+- Status: validated
+- Importance: critical
+- Reusable: yes
+- Objective: 按 Node D 的首块实现顺序先把 MinIO 控制面数据模型落到代码里，补齐 6 张新表的 SQLAlchemy models 与 Alembic migration，并确认新库与 bootstrap 初始化都能正确推进到最新版本
+- Work completed:
+  - 新增 `software/backend/app/models/control_plane.py`，落地 `scan_jobs`、`discovered_prefixes`、`lists`、`episode_inventory`、`episode_objects`、`classification_rules` 六个 SQLAlchemy model
+  - 按业务文档中的字段约束补齐唯一键、外键、关键索引与默认值，包括 `scan_jobs(bucket, started_at)`、`lists(bucket, list_prefix)`、`episode_inventory(list_id, episode_name)`、`episode_objects(episode_inventory_id, object_key)` 等控制面约束
+  - 新增 Alembic revision `software/backend/migrations/versions/20260623_0002_minio_control_plane.py`，把 6 张表和对应索引正式纳入迁移链路
+  - 更新 `software/backend/app/models/__init__.py`，把新控制面模型纳入 metadata 导入，确保 Alembic/运行时都能识别到新表
+  - 修正 `software/backend/app/services/bootstrap.py`：对“已有旧业务表但尚无 Alembic 版本表”的库，不再直接 `stamp head`，而是先 `stamp 20260623_0001` 再 `upgrade head`，避免旧库被错误跳过新控制面 migration
+- Business logic impact: Node D 已从纯文档 handoff 进入真实代码落地阶段。系统现在已经有稳定的 PostgreSQL 控制面骨架，能承接 bucket 扫描批次、递归发现的 prefix、去重后的 list、episode 级库存、对象清单与任务分类规则，为后续扫描器实现、classification seed 装载和 manual QC MinIO 化改造提供了正式数据层基础
+- Problems encountered:
+  - 当前 backend 没有现成测试文件覆盖新 migration，只能先做迁移与初始化级验证
+  - `.venv` 中未安装 Alembic，直接在该环境执行迁移失败
+- Resolution:
+  - 改用已验证可用的 `software/backend/.conda-env` 运行 Alembic 与 bootstrap 验证，保持与现有 backend 验证环境一致
+  - 用临时 SQLite 库同时验证 `alembic upgrade head` 和 `python -m app.services.bootstrap --ensure-schema-only`，确保 revision 链与初始化入口都能通过
+- Verification:
+  - `software/backend/.venv/bin/python -m compileall app/models/control_plane.py app/models/__init__.py app/services/bootstrap.py migrations/versions/20260623_0002_minio_control_plane.py`
+  - `cd software/backend && DATABASE_URL=sqlite:////tmp/robot_qc_minio_control_plane.db .conda-env/bin/python -m alembic upgrade head`
+  - `rm -f /tmp/robot_qc_minio_control_plane.db && cd software/backend && DATABASE_URL=sqlite:////tmp/robot_qc_minio_control_plane.db .conda-env/bin/python -m app.services.bootstrap --ensure-schema-only`
+- Unverified items:
+  - 还未实现真正的 MinIO recursive scanner、deepest-match dedup 和 `episode_objects` 明细落库逻辑
+  - 还未补 classification seed 初始化与基于 `classification_rules` 的自动归类流程
+  - 还未把现有 ingestion/manual QC 查询链路接到 `episode_inventory` / `episode_objects` 上
+- Files changed:
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+  - `software/backend/app/models/control_plane.py`
+  - `software/backend/app/models/__init__.py`
+  - `software/backend/app/services/bootstrap.py`
+  - `software/backend/migrations/versions/20260623_0002_minio_control_plane.py`
+- Next steps:
+  - 实现 MinIO recursive scanner，把 `scan_jobs` / `discovered_prefixes` / `lists` / `episode_inventory` 真正跑起来
+  - 补首版 `classification_rules` seed 装载逻辑，并定义未命中 list 的人工确认入口
+  - 开始把 manual QC 上下文改造为从 `episode_objects` 与 MinIO 访问协议生成真实媒体 descriptors
+
+## 2026-06-23 (Robot QC V1 Node D manual QC API contract closure)
+
+- Type: analysis
+- Status: documented for implementation handoff
+- Importance: critical
+- Reusable: yes
+- Objective: 在 manual QC 的 MinIO 混合访问协议已确定后，继续把 Node D 需要的 API 合同收口到可直接指导实现的粒度，明确 `ManualQcContext.media[]` 字段形状、URL 刷新方式、显式下载边界和 review lock 约束
+- Work completed:
+  - 复核 `software/backend/app/schemas/qc.py` 与 `software/frontend/src/api/client.ts`，确认当前 `ManualQcContext` 尚无 `media[]` 字段，Node D 仍存在明显合同缺口
+  - 回看 `control-plane-schema-v1.md` 中上一轮协议结论，把原先仍带二义性的 `url`/`expiresInSec` 方案收紧为 embedded `previewUrl` + `previewExpiresAt`
+  - 明确 `media[]` V1 descriptor 最少字段：`objectId`、`role`、`label`、`variant`、`slot`、`mimeType`、`previewUrl`、`previewExpiresAt`、`refreshable`、`downloadable`、`sortOrder`，以及可选的分辨率/帧率/时长元数据
+  - 明确 preview URL 刷新采用 `POST /api/episodes/{episode_id}/media/refresh`，请求只提交 `objectIds`，响应只返回对应对象的新 preview 字段，前端按 `objectId` merge，不整页重载也不猜 bucket/key
+  - 明确显式下载不复用 preview 字段，而是保留独立 `GET /api/episodes/{episode_id}/objects/{object_id}/download` 受控接口，避免预览与下载权限边界混淆
+  - 明确 review lock 与刷新关系：可查看页面的用户可拿到首轮 preview URL，但只有当前持锁用户可以持续 refresh；锁丢失后已发出的 URL 自然过期，后端不再续签
+  - 同步更新 `control-plane-schema-v1.md`、`decision-records.md`、`open-questions.md`、`nodes.md`、`graph.md`、`current-session.md`
+- Business logic impact: Node D 的实现入口现在不再停留在“以后再决定 payload 怎么长”的模糊状态，而是已经收敛成稳定合同。后端需要做的是按 `episode_objects` 构造 embedded descriptors、签发/刷新 preview URL、受控下载；前端需要做的是消费 `media[]`、按 `previewExpiresAt` 触发 refresh、绝不拼接存储路径。这样 implementation 可以直接围绕明确合同展开，而不是边写边改协议
+- Problems encountered:
+  - 上一轮协议虽然已经定下混合模式，但 `qc-context` 是否直接带可播 URL、还是只返回 access endpoint，再由前端二次换取，仍有实现分叉空间
+  - 如果 preview 与 download 复用一个通用 `url` 字段，后续权限矩阵、审计和播放器行为都会变得含糊
+- Resolution:
+  - 选定 embedded `previewUrl` 方案，优先降低 manual QC 多视频播放器的首版接入复杂度
+  - 把 refresh 与 download 都收成独立、单职责 endpoint，避免前端和后端对对象访问语义产生歧义
+- Verification:
+  - 代码静态复核：`software/backend/app/schemas/qc.py`
+  - 代码静态复核：`software/frontend/src/api/client.ts`
+  - 文档同步复核：`control-plane-schema-v1.md`、`decision-records.md`、`open-questions.md`、`nodes.md`、`graph.md`
+- Unverified items:
+  - 仍未把该合同真正落成 Pydantic schema、FastAPI 路由、MinIO presign service 与前端播放器接线代码
+  - 仍未确认当前 `yaocao` 样本里三路 RGB/深度视频在 UI 上的最终 `slot`/`label` 命名映射是否需要额外规则表
+- Files changed:
+  - `.project-log/business-logic/control-plane-schema-v1.md`
+  - `.project-log/business-logic/decision-records.md`
+  - `.project-log/business-logic/open-questions.md`
+  - `.project-log/business-logic/nodes.md`
+  - `.project-log/business-logic/graph.md`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 进入 Node D 实现规划，把 `ManualQcContextSchema`、前端 `ManualQcContext` 类型、media refresh/download 路由和 MinIO object mapping service 拆成代码任务
+  - 再进入 migration/schema/MinIO client 接入与 manual QC 真媒体联调实现
+
+## 2026-06-23 (Robot QC V1 MinIO list/episode/task classification rule analysis)
+
+- Type: analysis
+- Status: documented for control-plane design
+- Importance: critical
+- Reusable: yes
+- Objective: 基于已验证的 `yaocao` bucket 对象布局与样例元数据，先把 MinIO 接入前最关键的三条业务基础规则落地：list 是什么、什么样的 episode 才能进入流水线/进入 QC、以及任务类型应该如何归类
+- Work completed:
+  - 基于已确认的真实对象结构 `bucket/<list_prefix>/{raw|processed}/episode_xxxxxx/...`，明确 list 不应等同于单个业务任务，而应视作一次采集/上传来源批次
+  - 将 V1 的 list 自然身份收敛为 `bucket + list_prefix`，用于稳定承接对象存储里的物理组织单位，而不是直接把 prefix 当最终业务主键
+  - 结合已读取的 `manifest.json`、`metadata.json`、`recording_info.json`，确认当前 episode 内虽有 `episode_id`、处理参数、topic/sensor 结构等丰富信息，但尚未看到可直接充当稳定业务任务主键的单字段
+  - 明确 episode 需要区分三层状态：`ingestable`（可接纳入库）、`processable`（可进入处理/补处理链路）、`qc_ready`（processed 且 QC 关键对象齐全，可进入 manual QC）
+  - 明确 raw 与 processed 不能混为一个业务状态：raw-only episode 可以先建索引与归类，但不应直接进入 manual QC；manual QC 仍以 processed 为准入前提
+  - 明确任务类型不应从单个对象字段硬取，也不应把 MinIO 路径字符串直接当最终分类键；V1 应采用“prefix 命名线索 + episode 元数据证据 + 后续人工确认”的分层归类方式
+  - 明确 PostgreSQL 中后续至少要同时保留 `candidate_task_type` 与最终业务 `task_type` 一类字段，并记录 classification evidence / source，避免每次查询时重新临时解释 MinIO 路径
+  - 更新 `.project-log/current-session.md` 与本日志，记录这三条规则，作为后续 schema/API 设计的前置约束
+- Business logic impact: 这次分析把“MinIO 对象如何动态关联到 PostgreSQL 元数据”的核心边界进一步收紧了。后续系统不应把对象路径直接当业务主键，而应先把 list 作为来源批次接住、把 episode 作为最小处理单元管理、再把任务类型沉淀为 PostgreSQL 中可推断可回写的业务字段。这样才能同时兼容“一个 list 一个任务”“多个 list 同一任务”“raw/processed 不对称存在”等真实数据湖场景
+- Problems encountered:
+  - 当前样例元数据已经足够描述处理质量、设备形态与传感器结构，但还不足以证明每条 episode 都自带一个稳定显式的业务任务字段
+  - MinIO 里的命名规则看起来能提供任务线索，但用户已明确一个任务可能拆散在多个 list 中，因此不能把 prefix 文本直接等价成最终业务任务
+  - raw/processed episode 数量可能不完全一致，如果系统只做二元“有/无 episode”建模，后续 QC 派发与补处理会混乱
+- Resolution:
+  - 将 list、episode、task classification 三层职责拆开定义，避免把对象存储物理组织与上层业务管理强耦合
+  - 将 episode 生命周期拆成多状态推进模型，以适配“多次少量写入”以及 raw 先到、processed 后补齐的现实过程
+  - 将任务类型设计为 PostgreSQL 中的控制面结果，而不是 MinIO 中天然存在的单字段事实
+- Verification:
+  - 基于已实查对象路径：`yaocao/K1/.../{raw|processed}/episode_xxxxxx/...`
+  - 基于已读取样例元数据：`manifest.json`、`metadata.json`、`recording_info.json`
+  - 基于已观察到的 list/prefix 分布：同一 bucket 下存在多个同类命名前缀，且 raw/processed episode 数量并非严格完全对齐
+- Unverified items:
+  - 还未确认是否有其它任务前缀或更深层对象中存放显式任务标签、工单号或外部任务 ID
+  - 还未确定 `candidate_task_type` 到最终 `task_type` 的具体规则映射表和人工确认入口如何落地
+  - 还未确定 V1 中 `qc_ready` 的最小对象清单是否要按任务类型进一步细分
+- Files changed:
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 继续把这三条规则向 PostgreSQL 最小控制面字段收敛，先定 list / episode_inventory / episode_objects / classification 相关字段
+  - 再讨论 ingestion、状态推进、任务派发和 manual QC 查询链路如何围绕这些字段实现
+
+
+## 2026-06-23 (Robot QC V1 MinIO bucket validation and default-scope confirmation)
+
+- Type: analysis
+- Importance: critical
+- Reusable: yes
+- Objective: 在进入 PostgreSQL 表结构与 MinIO 关联设计前，先实查对象存储是否可访问、episode 实际对象组织方式是什么、以及当前 V1 应默认收敛到哪个 bucket
+- Work completed:
+  - 使用现有凭据直连 MinIO endpoint，确认当前运行环境可以成功完成认证并列出 bucket
+  - 实查到当前可见 bucket 至少包含 `20260527`、`rokae`、`shucai`、`test`、`wen`、`yaocao`
+  - 进一步检查样例对象布局，确认业务数据不是“单 episode 单 object”，而是“任务前缀/raw|processed/episode_xxxxxx/...” 的 prefix 结构
+  - 在 `20260527` bucket 中确认 raw 层样例：`.../raw/episode_000000/` 下存在 `device_info.json`、`recording_info.json`、`raw/metadata.yaml`
+  - 在 `yaocao` bucket 中确认 processed 层样例：`.../processed/episode_000000/` 下存在 `manifest.json`、`metadata.json`、`telemetry.npz`、`camera_info.json`、三路 RGB `mp4`、三路 depth colormap `mp4`、时间戳 `npy` 与深度 png 序列
+  - 读取样例 `manifest.json` / `metadata.json` / `recording_info.json`，确认 `episode_id`、时长、帧数、同步误差、视频文件相对路径等关键字段已经存放在对象内元数据文件里，可作为后续 PostgreSQL 建模依据
+  - 从对象实查中确认 manual QC 真正依赖的是 processed prefix，而不是 raw prefix，因为当前页面所需的 `telemetry.npz`、多路视频和 manifest 都位于 processed 层
+  - 结合用户新增指令，确认当前阶段后续实现默认只连接 `yaocao` 这一个 bucket，把 V1 收敛为单 bucket 版本
+  - 更新 `.project-log/current-session.md` 与本日志，记录 MinIO 实查结果和“默认 bucket = yaocao”的范围约束
+- Business logic impact: 这次实查把之前的“推测性架构分析”推进成了“可落地约束”。后续 PostgreSQL 不应围绕单 object 建模，而应围绕 episode prefix 建模；同时 V1 的 MinIO 接入范围可先明确收敛到 `yaocao`，这样 schema、配置项、API 解析和前端联调都可以先按单 bucket 假设实现，避免过早引入多 bucket 路由复杂度
+- Problems encountered:
+  - 当前仓库里没有现成的 MinIO client 接入代码或 CLI 约定，第一次验证必须先确认本机可用工具链
+  - 对象组织方式与本地文件系统的“一个目录一条 episode”看似相似，但真实结构包含 raw/processed 双层与大量多媒体对象，如果不实查很容易误把关联键设计成单个文件名
+  - 当前业务 bucket 并不唯一存在，系统层面若默认支持全部 bucket，会在首版设计时把范围放得过宽
+- Resolution:
+  - 使用现有 Python `boto3` 能力完成 MinIO 认证、bucket 枚举、prefix 列举、对象清单检查与样例元数据读取，不依赖额外安装工具
+  - 将“episode 关联粒度是 prefix 而不是单 object”记录为后续 schema 设计前提
+  - 将 `yaocao` 明确记为当前主业务 bucket，并把首版实现范围收敛为默认只连接这一个 bucket
+- Verification:
+  - `curl -sS -I --max-time 10 http://192.168.21.95:9190`
+  - `python3` + `boto3.client('s3', endpoint_url=...)` 成功 `list_buckets()`
+  - `list_objects_v2(Bucket='20260527', MaxKeys=20)`
+  - `list_objects_v2(Bucket='yaocao', Prefix='K1/.../processed/episode_000000/')`
+  - `get_object()` 读取 `manifest.json`、`metadata.json`、`recording_info.json`
+  - `list_objects_v2(..., Delimiter='/')` 验证 `K1/<task>/raw|processed/episode_xxx/` 层级
+- Unverified items:
+  - 还未统计 `yaocao` bucket 在真实生产使用中的完整任务前缀分布与 episode 总量
+  - 还未确认后续是否需要从 `yaocao` 之外的 bucket 做历史兼容导入
+  - 还未确认 raw/processed 是否总是成对存在，还是允许仅 processed 入库
+- Files changed:
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 在后续设计中把 `yaocao` 作为默认 bucket 配置项，而不是散落硬编码常量
+  - 继续基于已验证的 `processed` prefix 结构设计 PostgreSQL episode/object 映射字段与入库逻辑
+
+## 2026-06-23 (Robot QC V1 MinIO/PostgreSQL lakehouse architecture analysis)
+
+- Type: analysis
+- Status: documented for business-logic confirmation
+- Importance: critical
+- Reusable: yes
+- Objective: 在不立即改代码的前提下，先确认 Robot QC 从“本地 processed 目录 + PostgreSQL”迁移到“MinIO 原始对象存储 + PostgreSQL 元数据/QC 湖仓协同”时的业务边界、表结构方向和前后端查询路径
+- Work completed:
+  - 复核 `software/backend/app/models/episode.py`、`batch.py`、`ingest.py`，确认当前 `episodes.source_path`、`batches.storage_path`、`ingest_jobs.source_path` 仍以宿主本地路径为主键语义，不具备对象存储身份层
+  - 复核 `software/backend/app/services/ingestion.py`，确认当前入库流程依赖本地目录扫描、`manifest.json`/`metadata.json`/`telemetry.npz` 存在性判断，以及基于文件路径/mtime 的 fingerprint 去重
+  - 复核 `software/backend/app/services/payloads.py`，确认 manual QC 上下文仍直接从本地 processed 目录读取 `manifest.json`、`metadata.json` 与 `telemetry.npz`，尚未支持 MinIO 对象读取或对象清单解析
+  - 复核 `software/backend/app/api/routes/qc.py` 与 `software/frontend/src/api/client.ts`，确认前端当前已经是“只请求后端 API，不直接触达存储”的模式，这与后续 MinIO 后端代理/签名访问方向一致
+  - 复核 `software/frontend/src/pages/database-view.vue` 与 `manual-qc.vue`，确认数据库检索页已经是 PostgreSQL 元数据优先的交互，但 manual QC 视频区域仍为占位 UI，尚未绑定真实对象媒体
+  - 明确目标业务边界：MinIO 只保存原始 episode 对象数据，PostgreSQL 继续保存批次、episode 元数据、账号、任务分发、QC 结果、审计日志以及对象映射关系
+  - 明确关联策略方向：保留 `episodes` 作为业务主实体，在其上补外部 episode 标识和对象存储定位字段，并新增一张一对多对象清单映射表承接 bucket/key/prefix 与对象角色信息
+  - 明确查询链路方向：前端质检检索仍先查 PostgreSQL，后端根据 episode/object 映射解析 MinIO 中对应对象，再返回可展示的媒体访问结果或代理流，不让前端直接耦合 MinIO 路径规则
+  - 更新 `.project-log/current-session.md` 与本日志，记录本轮属于“先确认业务逻辑，再实施编码”的阶段性结论
+- Business logic impact: 系统后续将从“数据库记录本地路径，再由后端直接读宿主文件”转为“数据库记录业务元数据和对象映射，再由后端按映射解析 MinIO 对象”。这意味着 `episodes` 不再只是一条本地目录索引，而会成为连接批次、QC 状态、对象清单和媒体访问的中心业务实体；前端的检索入口和权限模型可以基本保持不变，但 manual QC 的上下文加载和媒体展示必须改为后端经 PostgreSQL 映射后访问 MinIO
+- Problems encountered:
+  - 当前入库、去重、manual QC 上下文构建都深度绑定本地文件系统，迁移到 MinIO 不是单点替换，而是一次对象身份模型重构
+  - 现有 schema 只有 `source_path/storage_path` 一类路径字段，没有 bucket、object key、prefix、object role、外部 episode ID 等可长期演进的对象层语义
+  - manual QC 页面虽然已经有真实 telemetry 指标链路，但视频区域仍是占位内容，因此未来不仅要解决对象定位，还要补真实媒体访问协议
+  - 已获得对象存储连接信息，但这些凭据属于敏感配置，不能以默认值方式写入仓库或进度文档
+- Resolution:
+  - 将本轮工作限定为业务分析和日志沉淀，不在对象命名规范未确认前提前落表或改接口，避免后续返工
+  - 将 PostgreSQL 定位为唯一业务查询入口和系统事实源，MinIO 仅作为原始对象数据层，明确前端继续只依赖后端 API
+  - 将现有 `episodes`/`batches`/`ingest_jobs` 视为迁移骨架，而不是推倒重建；下一步以“补对象身份层”而非“直接替换成本地 MinIO 路径字符串”为原则设计 schema
+- Verification:
+  - 代码静态复核：`software/backend/app/models/episode.py`
+  - 代码静态复核：`software/backend/app/models/batch.py`
+  - 代码静态复核：`software/backend/app/models/ingest.py`
+  - 代码静态复核：`software/backend/app/services/ingestion.py`
+  - 代码静态复核：`software/backend/app/services/payloads.py`
+  - 代码静态复核：`software/backend/app/api/routes/qc.py`
+  - 代码静态复核：`software/frontend/src/api/client.ts`
+  - 代码静态复核：`software/frontend/src/pages/database-view.vue`
+  - 代码静态复核：`software/frontend/src/pages/manual-qc.vue`
+- Unverified items:
+  - 还未确认 MinIO 中“一条 episode”对应的真实对象组织规则：是单目录 prefix、单对象归档，还是多摄像头/多模态对象散列布局
+  - 还未确认 MinIO 内用于关联 PostgreSQL 的稳定唯一标识究竟是对象名、prefix 名、外部 episode_id，还是额外元数据字段
+  - manual QC 媒体访问协议已确定为混合模式，但具体 API 字段、签名刷新接口和前端播放器联调尚未实现
+- Files changed:
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+  - `.project-log/business-logic/control-plane-schema-v1.md`
+  - `.project-log/business-logic/decision-records.md`
+  - `.project-log/business-logic/open-questions.md`
+  - `.project-log/business-logic/nodes.md`
+  - `.project-log/business-logic/graph.md`
+- Next steps:
+  - 进入 Node D 实现规划，先把 `ManualQcContext` 的 media descriptor 合同、预签名刷新接口与受控下载接口定出来
+  - 再进入 schema migration、MinIO client 接入、ingestion 改造、manual QC 媒体加载与前端联调实现阶段
+
+## 2026-06-23 (Robot QC V1 manual QC MinIO object-access protocol closure)
+
+- Type: analysis
+- Status: documented for Node F -> D handoff
+- Importance: critical
+- Reusable: yes
+- Objective: 在进入 MinIO 代码改造前，先落定 manual QC 对 MinIO 媒体与结构化对象的访问协议，明确哪些对象走 presigned URL、哪些对象必须继续留在后端受控路径，并把结论写回业务逻辑文档体系
+- Work completed:
+  - 复核 `software/backend/app/services/payloads.py`，确认当前 manual QC 上下文仍直接从宿主本地 processed 目录读取 `manifest.json`、`metadata.json`、`telemetry.npz`
+  - 复核 `software/frontend/src/pages/manual-qc.vue`、`software/frontend/src/api/client.ts` 与 `software/backend/app/schemas/qc.py`，确认当前 manual QC 前后端合同里尚无媒体 descriptor 字段，视频区仍为占位 UI
+  - 结合已实查的 `yaocao` processed 对象结构，明确 preview/playback 类 MP4 与结构化对象的访问特征不同，不能简单采用“全代理”或“全 presigned”单一路径
+  - 落定 V1 混合协议：预览/播放类 MP4 由后端签发短时 presigned URL；`manifest.json`、`metadata.json`、`telemetry.npz` 等结构化对象继续由后端直接读取/解析；显式下载、导出与非预览对象访问走后端受控接口
+  - 在 `control-plane-schema-v1.md` 中补齐 manual QC 对象访问章节，定义 media descriptor 合同、URL TTL、授权边界、review lock 与 refresh 规则
+  - 将 Q-20260623-005 标记为已解决，并同步更新 `decision-records.md`、`nodes.md`、`graph.md`、`current-session.md`
+- Business logic impact: Node F 的控制面规则至此闭环。系统后续不再讨论“manual QC 到底直接读 MinIO 还是后端代理”的抽象问题，而是按明确分工推进：浏览器用后端签发的短时 URL 直接播放媒体，业务敏感与结构化对象继续由后端掌控。这样既保住“前端只调后端 API”的架构约束，也避免把多路视频预览流量全部压回 backend
+- Problems encountered:
+  - 当前代码仍是本地文件系统实现，意味着对象访问协议不仅是存储方案选择，还会牵动 `ManualQcContext` payload 结构扩展
+  - 如果走纯 presigned，前端会开始感知 bucket/key 语义；如果走纯代理，manual QC 多路视频预览会给 backend 带来不必要的数据面压力
+- Resolution:
+  - 采用混合协议，并把“前端永远只接后端返回的 media descriptors，不拼 bucket/key”作为硬约束
+  - 把协议设计收敛为实现级规则：短 TTL、后端鉴权后签发、需要时刷新、显式下载单独走受控接口
+- Verification:
+  - 代码静态复核：`software/backend/app/services/payloads.py`
+  - 代码静态复核：`software/backend/app/api/routes/qc.py`
+  - 代码静态复核：`software/backend/app/schemas/qc.py`
+  - 代码静态复核：`software/frontend/src/pages/manual-qc.vue`
+  - 代码静态复核：`software/frontend/src/api/client.ts`
+  - 文档同步复核：`control-plane-schema-v1.md`、`decision-records.md`、`open-questions.md`、`nodes.md`、`graph.md`
+
+- Type: validation
+- Status: validated in real Docker/PostgreSQL runtime
+- Importance: critical
+- Reusable: yes
+- Objective: 收口 V1 最后一轮高风险项，完成真实 Docker/PostgreSQL 发布链路验收、补齐 task-pool 多批次浏览器稳定性验证，并修正文档与运行时健康检查不一致问题
+- Work completed:
+  - 在 `software/frontend` 执行生产构建，确认当前前端代码可生成用于容器镜像的 `dist`
+  - 运行专用 Playwright 用例 `/tmp/robot-qc-playwright-runner/tests/task-pool-batch-selection.spec.js`，覆盖空批次、全量批次、可操作批次切换与刷新后的默认选择保持，结果 `1 passed (2.8s)`
+  - 复核 `software/deploy/README.txt`、`software/backend/alembic.ini`、`software/backend/app/services/bootstrap.py`，确认当前源代码的 PostgreSQL/Alembic 发布路径已切到显式 bootstrap
+  - 在 compose 环境启动 `db` 服务并发现 backend 镜像为旧版本；通过容器内源码检查确认仍残留旧 `seed_demo_data` 启动逻辑后，重新构建 backend 镜像
+  - 在真实容器验收中发现 `software/backend/app/core/config.py` 的 `PROJECT_ROOT` 推导在 `/app` 场景下触发 `IndexError`，已修复为 Docker 安全路径计算并补齐 `sample_processed_root` fallback
+  - 重新构建并执行 `python -m app.services.bootstrap --ensure-schema-only`，确认空 PostgreSQL 数据库成功执行 Alembic `upgrade head`
+  - 执行 `python -m app.services.bootstrap --admin-username admin --admin-password 'Admin123!' --admin-name '系统管理员' --admin-role admin`，完成首个管理员初始化
+  - 直接在 Postgres 中确认 9 张业务表已落库、`alembic_version=20260623_0001`、管理员账号存在
+  - 重启 compose `backend` / `frontend` 服务并验证 `POST /api/auth/login` 登录成功，确认 production/postgres 基线可用
+  - 补上 `software/backend/app/api/routes/qc.py` 的 `/api/health` 接口，使 `software/deploy/README.txt` 中的健康检查地址与运行时一致
+  - 更新 `.project-log/current-session.md` 与本日志，移除“Docker/PostgreSQL 发布链路待验收”和“task-pool 多批次稳定性待补强”的过期风险
+- Business logic impact: V1 已从“源代码具备 migration 与 task-pool 修复”推进到“真实 Docker/PostgreSQL 发布链路和关键浏览器回归均已验收通过”；部署文档中的健康检查地址现已可直接用于实际生产探针
+- Problems encountered:
+  - 初次 compose 验收里 backend 镜像与当前工作区源码不一致，容器内部仍然是旧 bootstrap 逻辑，因此表面 exit 0 但数据库未真正建表
+  - `app/core/config.py` 原先假设项目目录层级固定，在 Docker `/app` 运行时会因 `BASE_DIR.parents[1]` 越界而崩溃
+  - `README.txt` 已声明 `/api/health`，但运行时此前返回 404，造成部署说明与实际行为不一致
+- Resolution:
+  - 通过重新构建镜像消除 stale image 漂移，并以真实 Postgres 表结构与 `alembic_version` 校验发布链路是否正确落地
+  - 将 `PROJECT_ROOT` 计算改为容器安全逻辑，并在样例数据路径不存在时回退到 `BASE_DIR` 下的 data 目录
+  - 直接补齐 `/api/health` 路由，而不是修改文档去适配缺失能力
+- Verification:
+  - `cd software/frontend && npm run build`
+  - `"/tmp/robot-qc-playwright-runner/node_modules/.bin/playwright" test "/tmp/robot-qc-playwright-runner/tests/task-pool-batch-selection.spec.js" --config "/tmp/robot-qc-playwright-runner/playwright.config.js" --reporter=line`
+  - `docker compose -f software/deploy/docker-compose.yml up -d db`
+  - `docker compose -f software/deploy/docker-compose.yml build backend`
+  - `docker compose -f software/deploy/docker-compose.yml run --rm -e APP_ENV=development backend python -m app.services.bootstrap --ensure-schema-only`
+  - `docker compose -f software/deploy/docker-compose.yml run --rm -e APP_ENV=development backend python -m app.services.bootstrap --admin-username admin --admin-password 'Admin123!' --admin-name '系统管理员' --admin-role admin`
+  - `docker exec robot-qc-db psql -U robot_qc -d robot_qc -c "select version_num from alembic_version;"`
+  - `docker compose -f software/deploy/docker-compose.yml up -d --build backend frontend`
+  - `curl -sS -i http://127.0.0.1:8080/api/health`
+  - `curl -sS -H 'Content-Type: application/json' -d '{"username":"admin","password":"Admin123!"}' http://127.0.0.1:8080/api/auth/login`
+- Unverified items:
+  - 仍需在真实目标生产环境替换 `SECRET_KEY`、PostgreSQL 口令、`SESSION_COOKIE_SECURE` 与宿主数据挂载路径后做一次最终现场联调
+- Files changed:
+  - `software/backend/app/core/config.py`
+  - `software/backend/app/api/routes/qc.py`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 进入真实生产环境测试，重点验证 HTTPS/cookie、宿主挂载路径与运维口令配置
+
+## 2026-06-23 (Robot QC V1 final account-role browser validation)
+
+- Type: validation
+- Status: validated in browser and API runtime
+- Importance: high
+- Reusable: yes
+- Objective: 收尾账号管理页最后一处生产缺口，补齐 `admin` / `qc_manager` / `reviewer` / `viewer` 的前端展示与后端权限矩阵验证
+- Work completed:
+  - 复核 `software/frontend/src/pages/accounts.vue`、`src/components/AppLayout.vue`、`src/router/index.ts` 与 `software/backend/app/api/routes/qc.py`，确认账号页的预期角色矩阵已经在前后端实现
+  - 使用管理员会话为现有 `manager1` / `reviewer1` 账号重置测试口令，并额外创建 `viewer1` 访客账号，补足非管理员浏览器回归前置条件
+  - 新增隔离 Playwright 用例 `/tmp/robot-qc-playwright-runner/tests/accounts-role-access.spec.js`，覆盖管理员可管理账号、主管仅可只读访问、审核员/访客无账号菜单且直达 `/accounts` 被重定向回工作台
+  - 在当前运行时 `http://127.0.0.1:18081` 上补做 API 级权限复核，确认 `qc_manager` 可读取 `/api/accounts`，但创建账号返回 403；`reviewer` 与 `viewer` 访问 `/api/accounts` 均返回 403
+  - 更新 `.project-log/current-session.md` 与本日志，移除“账号页非管理员浏览器验证缺失”的过期风险记录
+- Business logic impact: 账号管理能力已从“管理员路径验证完成”推进到“完整角色矩阵已验证”，当前 V1 对账户页面的菜单可见性、路由守卫、只读/可变更边界以及后端权限拒绝都已有可信验证证据
+- Problems encountered:
+  - 本轮环境里原先没有可直接使用的 `qc_manager` / `reviewer` 明确测试口令，导致非管理员浏览器回归一直停留在文档缺口
+  - 现有浏览器用例只覆盖管理员黄金路径，无法证明主管只读与审核员/访客重定向行为
+- Resolution:
+  - 通过管理员重置账号密码并新增单独 `viewer` 账号，建立稳定的角色测试基线
+  - 增加独立 Playwright 角色验证脚本，并结合 API 级 200/403 结果收口角色矩阵验证
+- Verification:
+  - `curl -c /tmp/robot_qc_admin_cookies.txt -H 'Content-Type: application/json' -d '{"username":"admin","password":"Admin123!"}' http://127.0.0.1:18081/api/auth/login`
+  - `curl -b /tmp/robot_qc_admin_cookies.txt -H 'Content-Type: application/json' -X POST -d '{"password":"Manager123!"}' http://127.0.0.1:18081/api/accounts/user_manager1/reset-password`
+  - `curl -b /tmp/robot_qc_admin_cookies.txt -H 'Content-Type: application/json' -X POST -d '{"password":"Reviewer123!"}' http://127.0.0.1:18081/api/accounts/user_reviewer1/reset-password`
+  - `curl -b /tmp/robot_qc_admin_cookies.txt -H 'Content-Type: application/json' -d '{"username":"viewer1","name":"测试访客","password":"Viewer123!","role":"viewer"}' http://127.0.0.1:18081/api/accounts`
+  - `"/tmp/robot-qc-playwright-runner/node_modules/.bin/playwright" test "/tmp/robot-qc-playwright-runner/tests/accounts-role-access.spec.js" --config "/tmp/robot-qc-playwright-runner/playwright.config.js" --reporter=line`
+  - 浏览器角色验证结果：`4 passed (3.8s)`
+  - `curl -b /tmp/robot_qc_manager_cookies.txt http://127.0.0.1:18081/api/accounts` -> `200`
+  - `curl -b /tmp/robot_qc_manager_cookies.txt -H 'Content-Type: application/json' -d '{"username":"forbidden_manager_create","name":"禁止创建","password":"Nope123!","role":"reviewer"}' http://127.0.0.1:18081/api/accounts` -> `403`
+  - `curl -b /tmp/robot_qc_reviewer_cookies.txt http://127.0.0.1:18081/api/accounts` -> `403`
+  - `curl -b /tmp/robot_qc_viewer_cookies.txt http://127.0.0.1:18081/api/accounts` -> `403`
+- Unverified items:
+  - Docker/production 发布链路里尚未实际执行一轮 PostgreSQL `alembic upgrade head` 验收
+  - task-pool 多批次/默认首批选中场景的浏览器稳定性仍可继续补强
+- Files changed:
+  - `/tmp/robot-qc-playwright-runner/tests/accounts-role-access.spec.js`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 在有 Docker/PostgreSQL 权限的验收环境补跑 `alembic upgrade head` + 显式管理员初始化，完成正式发布链路闭环
+  - 视时间补强 task-pool 多批次选择的浏览器稳定性回归
+
+## 2026-06-23 (Robot QC V1 migration baseline landing)
+
+- Type: implementation
+- Status: validated in isolated backend runtime and legacy DB adoption path
+- Importance: critical
+- Reusable: yes
+- Objective: 为 Robot QC V1 建立正式版本化 schema 基线，替代 `create_all()` 主导的建库方式，并验证新库初始化与旧库纳管两条路径
+- Work completed:
+  - 在 `software/backend/requirements.txt` 引入 `alembic==1.16.5`，将 schema migration 能力纳入项目内隔离 `.conda-env`
+  - 新建 `software/backend/alembic.ini`、`software/backend/migrations/env.py`、`software/backend/migrations/script.py.mako`，补齐 Alembic 基础配置与后续 revision 模板
+  - 新建基线 revision `software/backend/migrations/versions/20260623_0001_baseline_schema.py`，把 `users`、`task_types`、`batches`、`episodes`、`ingest_jobs`、`qc_review_revisions`、`qc_tasks`、`audit_events` 的当前权威 schema 固化为正式版本
+  - 重写 `software/backend/app/services/bootstrap.py` 的 schema 初始化路径：不再走 `Base.metadata.create_all()`，改为根据数据库状态执行 `upgrade head`、旧库 SQLite 兼容补齐 + `stamp head`、或版本库 `upgrade head`
+  - 保留 SQLite 旧字段/旧索引补齐逻辑，仅作为历史本地库纳管前的兼容桥接，不再作为新库主建表方案
+  - 更新 `.project-log/current-session.md` 与 `software/deploy/README.txt`，把 Alembic 基线、`--ensure-schema-only`、以及发布前执行 migration 的要求写入当前状态与部署说明
+- Business logic impact: 系统从“应用内隐式建表”推进到“正式 migration 驱动的 schema 生命周期”；新环境可以按固定 revision 建库，已有历史库也能在不重灌数据的情况下纳入版本管理，为后续 PostgreSQL 生产发布提供可追踪的 schema 演进基线
+- Problems encountered:
+  - 当前机器运行环境不提供 shell `apply_patch`，迁移文件与 bootstrap 调整需要改用文件工具直接编辑
+  - 历史本地 SQLite 库已经带有业务表但没有 `alembic_version`，不能直接按空库方式运行初始 revision
+- Resolution:
+  - 改用文件工具创建 Alembic 目录与 revision 文件，避免依赖缺失的 shell patch 能力
+  - 在 `bootstrap.initialize_schema()` 中加入数据库状态判断：已有业务表的旧库先执行 SQLite 兼容补齐，再 `stamp head`，空库与已版本化库统一走 `upgrade head`
+- Verification:
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -m pip install -r requirements.txt'`
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -m compileall app main.py'`
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && DATABASE_URL="sqlite:////tmp/robot_qc_migration_baseline.db" .conda-env/bin/python -m app.services.bootstrap --ensure-schema-only'`
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -m app.services.bootstrap --ensure-schema-only'`
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && DATABASE_URL="sqlite:////tmp/robot_qc_migration_baseline.db" .conda-env/bin/python - <<"PY"
+from sqlalchemy import create_engine, inspect, text
+engine = create_engine("sqlite:////tmp/robot_qc_migration_baseline.db")
+inspector = inspect(engine)
+print(sorted(inspector.get_table_names()))
+with engine.connect() as conn:
+    print(conn.execute(text("SELECT version_num FROM alembic_version")).scalar())
+PY'`
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python - <<"PY"
+from sqlalchemy import text
+from app.core.db import engine
+with engine.connect() as conn:
+    print(conn.execute(text("SELECT version_num FROM alembic_version")).scalar())
+PY'`
+- Unverified items:
+  - Docker/production 发布链路里尚未实际执行一轮 PostgreSQL `alembic upgrade head` 验收
+  - 后续新增 schema 变更的 revision 生成与上线节奏虽已有模板，但还未形成固定发布 SOP
+  - 账号页的 `qc_manager` / `reviewer` 浏览器态复核仍待有效测试口令
+- Files changed:
+  - `software/backend/requirements.txt`
+  - `software/backend/alembic.ini`
+  - `software/backend/migrations/env.py`
+  - `software/backend/migrations/script.py.mako`
+  - `software/backend/migrations/versions/20260623_0001_baseline_schema.py`
+  - `software/backend/app/services/bootstrap.py`
+  - `software/deploy/README.txt`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 在 Docker/PostgreSQL 验收环境补跑一轮 `alembic upgrade head` + 显式管理员初始化，确认生产发布链路与基线 revision 完整一致
+  - 在拿到有效非管理员测试口令后，补一轮账号页浏览器验证，确认管理员/主管/审核员前端权限呈现一致
+
+## 2026-06-23 (Robot QC V1 qc-history report/export landing)
+
+- Type: implementation
+- Status: validated in fresh isolated runtime and browser flow
+- Importance: high
+- Reusable: yes
+- Objective: 将 `qc-history` 从在线浏览页补齐为可交付的批次报告与 JSON 导出能力，并完成接口与浏览器级验证
+- Work completed:
+  - 复核 `software/backend/app/api/routes/qc.py`，确认历史页新增 `/api/qc-history/report` 与 `/api/qc-history/export` 路由，继续沿用 `admin` / `qc_manager` 角色门禁
+  - 在新鲜 backend 运行时 `http://127.0.0.1:18081` 上验证 `report` 与 `export` 接口，确认 `batch_id=all` 与指定批次都能返回有效 payload
+  - 验证导出 `scope` 语义：`report` 仅返回报告摘要，`episodes` 返回 episode/revision 明细，`audits` 返回 audit 明细，三者互斥行为正确
+  - 将隔离 Playwright runner 的 `playwright.config.js` 基地址切到当前 frontend `http://127.0.0.1:4174`
+  - 新增专用浏览器用例 `/tmp/robot-qc-playwright-runner/tests/qc-history-report.spec.js`，覆盖登录、历史页导航、批次切换、报告内容展示、三类导出下载与退出登录
+  - 修正用例中批次名断言的宽泛选择器，避免同名文本在多个区域重复渲染时触发 strict-mode 歧义
+  - 更新 `.project-log/current-session.md` 与本日志，移除“qc-history 导出/批次报告能力未实现”的过期结论
+- Business logic impact: `qc-history` 已从“只能在线查看”提升到“可按批次生成报告并按范围导出 JSON 交付物”，管理员和质检主管可直接从历史页获取正式汇总与明细数据
+- Problems encountered:
+  - 机器上原先占用 `127.0.0.1:8001` 的 backend 进程是旧构建，登录和基础历史接口可用，但缺少新加的 `/api/qc-history/report` 与 `/api/qc-history/export`
+  - 首轮 Playwright 用例在 `getByText('2026-06-21 下午入库')` 上命中 9 个节点，属于测试选择器过宽而非产品故障
+- Resolution:
+  - 不销毁已有旧进程，改为在 `127.0.0.1:18081` 启动更新后的 backend，并让 frontend 通过 `VITE_PROXY_API_TARGET` 指向该新运行时
+  - 将批次选择后的断言收敛到表格单元格级别，消除 strict-mode 歧义后重新通过浏览器验证
+- Verification:
+  - `curl -c /tmp/robot_qc_cookies.txt -H 'Content-Type: application/json' -d '{"username":"admin","password":"Admin123!"}' http://127.0.0.1:18081/api/auth/login`
+  - `curl -b /tmp/robot_qc_cookies.txt 'http://127.0.0.1:18081/api/qc-history/report?batch_id=all'`
+  - `curl -b /tmp/robot_qc_cookies.txt 'http://127.0.0.1:18081/api/qc-history/report?batch_id=batch_20260621_002'`
+  - `curl -b /tmp/robot_qc_cookies.txt 'http://127.0.0.1:18081/api/qc-history/export?batch_id=all&scope=report'`
+  - `curl -b /tmp/robot_qc_cookies.txt 'http://127.0.0.1:18081/api/qc-history/export?batch_id=all&scope=episodes'`
+  - `curl -b /tmp/robot_qc_cookies.txt 'http://127.0.0.1:18081/api/qc-history/export?batch_id=all&scope=audits'`
+  - `"/tmp/robot-qc-playwright-runner/node_modules/.bin/playwright" test "/tmp/robot-qc-playwright-runner/tests/qc-history-report.spec.js" --config "/tmp/robot-qc-playwright-runner/playwright.config.js" --reporter=line`
+  - 浏览器专用 qc-history 用例结果：`1 passed (2.5s)`
+- Unverified items:
+  - 账号页的 `qc_manager` / `reviewer` 浏览器态复核仍待有效测试口令
+- Files changed:
+  - `/tmp/robot-qc-playwright-runner/playwright.config.js`
+  - `/tmp/robot-qc-playwright-runner/tests/qc-history-report.spec.js`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 引入正式 migration 流程，替代当前 `bootstrap.initialize_schema()` 的过渡式 schema 修补
+  - 在拿到有效非管理员测试口令后，补一轮账号页浏览器验证，确认管理员/主管/审核员前端权限呈现一致
+
+## 2026-06-23 (Robot QC V1 runtime alignment and browser revalidation)
+
+- Type: validation
+- Status: validated with remaining doc-level production gaps tracked
+- Importance: critical
+- Reusable: yes
+- Objective: 修复前端 dev/runtime 与当前 backend 的对齐问题，重新跑通浏览器黄金链路，并把账号生命周期与剩余生产缺口记录到项目日志
+- Work completed:
+  - 更新 `software/frontend/vite.config.ts`，引入 `VITE_PROXY_API_TARGET`，保持浏览器侧使用同源 `/api`，由 Vite 代理转发到当前 backend
+  - 更新 `software/frontend/src/api/client.ts`，仅在请求实际携带 JSON body 时设置 `Content-Type: application/json`，避免 `/auth/session` 等 GET 触发不必要的跨域预检
+  - 重启对齐后的 frontend dev runtime，并确认此前 `OPTIONS /api/auth/session` 导致的 bootstrap 失败已消失
+  - 修正隔离 Playwright 脚本 `/tmp/robot-qc-playwright-runner/tests/robot-qc-golden-path.spec.js`：兼容 `认领任务/重新认领` 两种按钮文案，并改为点击可见 `Fail` 文本驱动 Element Plus 单选
+  - 在 rerun 前释放 `episode_000124` 上的旧 review lock，确保 browser flow 可重复执行
+  - 成功重跑 `login → dashboard → task-pool → manual-qc → qc-history → logout`，结果 `1 passed (3.2s)`
+  - 复核账号生命周期现状：管理员创建/重置密码/启停、self-deactivation 保护、停用后登录拒绝、reviewer 访问 `/api/accounts` 返回 403 的后端验证已完成
+  - 更新 `.project-log/current-session.md` 与 `.project-log/progress.md`，移除“review lock 未实现”“账号生命周期未实现”等失真记录
+- Business logic impact: 当前 V1 已从“前端与后端能单点联通”推进到“浏览器黄金链路在当前真实 backend 上可稳定重跑”；账号生命周期、review lock 与会话引导逻辑都已进入已落地状态
+- Problems encountered:
+  - 将 `VITE_API_BASE_URL` 设为绝对地址 `http://127.0.0.1:8000/api` 时，浏览器会对 `/api/auth/session` 发起跨域预检，backend 返回 `400`，导致路由 bootstrap 直接失败
+  - manual QC 页面在锁已归当前用户所有时按钮文案为 `重新认领`，旧 Playwright 仅等待 `认领任务` 会超时
+  - Element Plus 单选组件对隐藏 input 的 `.check()` 不稳定，`Fail` 结果选择会卡死在脚本层
+  - 当前运行时未拿到可用的 `reviewer` / `qc_manager` 测试口令，账号页的非管理员浏览器回归无法在本轮完成
+- Resolution:
+  - 恢复 dev 浏览器同源访问模式，把 backend 切换责任下沉到 `VITE_PROXY_API_TARGET`
+  - 收敛请求头注入逻辑，避免无 body GET 请求携带多余 JSON 头
+  - 放宽锁按钮定位条件并改用可见文本点击 `Fail`，提升 Element Plus 场景下的浏览器脚本稳定性
+  - 将账号页浏览器验证缺口明确记录为剩余验证项，而不是继续保留“能力未落地”的错误结论
+- Verification:
+  - `cd software/frontend && npm run build`
+  - `cd /tmp/robot-qc-playwright-runner && npx playwright test --reporter=line`
+  - 浏览器黄金链路结果：`1 passed (3.2s)`
+- Unverified items:
+  - 账号页的 `qc_manager` / `reviewer` 浏览器态复核仍待有效测试口令
+- Files changed:
+  - `software/frontend/vite.config.ts`
+  - `software/frontend/src/api/client.ts`
+  - `/tmp/robot-qc-playwright-runner/tests/robot-qc-golden-path.spec.js`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 继续补 `qc-history` 导出/批次报告，收口历史页剩余占位缺口
+  - 引入正式 migration 流程，替代当前 `bootstrap.initialize_schema()` 的过渡式 schema 修补
+  - 在拿到有效非管理员测试口令后，补一轮账号页浏览器验证，确认管理员/主管/审核员前端权限呈现一致
+
+## 2026-06-22 (Robot QC V1 production hardening phase 2 ingestion validation)
+
+- Type: implementation
+- Status: phase 2 landed and locally validated
+- Importance: critical
+- Reusable: yes
+- Objective: 打通真实扫描入库链路，修复旧本地数据库与当前模型的 schema 漂移，完成 ingestion 的本地闭环验证
+- Work completed:
+  - 在 `software/backend/app/services/ingestion.py` 落地真实扫描入库能力：扫描允许目录、识别 processed episode、按 source fingerprint 做幂等跳过、写入 `ingest_jobs` / `batches` / `episodes` / `audit_events`
+  - 在 `software/backend/app/api/routes/qc.py` 新增 `/api/database/scan` 并返回真实 ingest job 结果，同时为派发计划与人工质检提交补齐角色限制
+  - 更新前端 `software/frontend/src/types/qc.ts`、`src/api/client.ts`、`src/pages/database-view.vue`，接入真实扫描表单、入库任务列表与后端错误 `detail` 展示
+  - 清理剩余前端占位语义：`dashboard.vue`、`AppLayout.vue`、`task-pool.vue`、`manual-qc.vue`、`qc-history.vue` 改为仅展示当前已落地能力
+  - 扩展 `software/backend/app/services/bootstrap.py`，增加 SQLite 旧库补字段/补索引逻辑，并提供 `--ensure-schema-only` 入口用于仅修复本地 schema 基线
+  - 对当前本地 SQLite 运行 `python -m app.services.bootstrap --ensure-schema-only`，补齐 `users.is_active`、`users.password_changed_at`、`episodes.source_*`/`ingest_status`/candidate flags 以及 `ingest_jobs` 表
+  - 使用真实样例目录 `/home/tbl/Project/data_collect/data/raw/process` 执行扫描 smoke test，成功生成 `indexed` 状态入库任务并导入 1 条 episode
+- Business logic impact: V1.0 从“前端有扫描入口但未完成运行时验证”推进到“真实本地数据可被后端扫描入库并在数据库中持久化”；旧开发 SQLite 库也具备继续联调当前功能的最低兼容基线
+- Problems encountered:
+  - 当前机器上的历史 SQLite 库缺少 `users.is_active` 字段与 `ingest_jobs` 表，导致任何真实扫描验证都会在 ORM 查询阶段失败
+  - 运行环境不提供 `apply_patch`，需要继续使用文件编辑工具修改代码
+- Resolution:
+  - 将旧库兼容补丁集中收敛到 `bootstrap.initialize_schema()` 后置步骤，仅对 SQLite 执行最小补字段/补索引逻辑
+  - 增加 `--ensure-schema-only` 模式，使本地修复 schema 不再要求重复创建管理员账号
+  - 重新在隔离 `.conda-env` 中执行 schema 修复和 ingestion smoke test，确认真实扫描链路已经可跑通
+- Verification:
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -m compileall app main.py'`
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -m app.services.bootstrap --ensure-schema-only'`
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -c "from app.core.db import SessionLocal; from app.models import User, IngestJob; db = SessionLocal(); user = db.query(User).first(); print(user.username if user else None, user.is_active if user else None); print(db.query(IngestJob).count()); db.close()"'`
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -c "from app.core.db import SessionLocal; from app.models import User; from app.services.ingestion import run_ingest_scan; db = SessionLocal(); user = db.query(User).filter(User.username == \"admin\").first() or db.query(User).first(); job = run_ingest_scan(db, source_path=\"/home/tbl/Project/data_collect/data/raw/process\", batch_name=\"\", operator=user); print(job.id, job.status, job.detail, job.episodes, job.imported_episodes, job.skipped_episodes); db.close()"'`
+  - `cd software/frontend && npm run build`
+- Unverified items:
+  - 尚未在浏览器端重新完整复跑“扫描入库 → 派发 → manual QC → history”最新链路
+  - PostgreSQL 生产基线仍未具备正式 migration 脚本，当前 schema 修复只覆盖本地 SQLite 兼容
+  - review lock / claim / release / version 冲突保护仍未实现
+- Files changed:
+  - `software/backend/app/services/ingestion.py`
+  - `software/backend/app/api/routes/qc.py`
+  - `software/backend/app/services/bootstrap.py`
+  - `software/frontend/src/types/qc.ts`
+  - `software/frontend/src/api/client.ts`
+  - `software/frontend/src/pages/database-view.vue`
+  - `software/frontend/src/pages/dashboard.vue`
+  - `software/frontend/src/components/AppLayout.vue`
+  - `software/frontend/src/pages/task-pool.vue`
+  - `software/frontend/src/pages/manual-qc.vue`
+  - `software/frontend/src/pages/qc-history.vue`
+  - `software/frontend/src/api/mock.ts`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 实现 review lock / claim / release / lock expiry / version 控制，补齐多人并发审核保护
+  - 在浏览器端复跑最新业务闭环，并确认扫描入库后的批次可以直接进入派发和人工质检
+
+## 2026-06-22 (Robot QC V1 production hardening phase 0/1 baseline)
+
+- Type: implementation
+- Status: phase 0 recorded, phase 1 baseline landed
+- Importance: critical
+- Reusable: yes
+- Objective: 按“公司内网可直接投入使用”标准，先记录生产就绪性缺口，并移除默认 demo 启动路径，建立显式初始化和安全部署基线
+- Work completed:
+  - 在 `.project-log/current-session.md` 与 `.project-log/progress.md` 记录生产就绪性审计结论，明确 P0/P1 缺口：demo 启动链路、默认口令、SQLite 部署、无真实入库、无 RBAC/lock/并发保护、前端占位入口未收口
+  - 重写 `software/backend/app/main.py`，移除 `Base.metadata.create_all()` 与 `seed_demo_data()` 的默认 startup 行为
+  - 扩展 `software/backend/app/core/config.py`，补充 `FRONTEND_ORIGIN`、`EXTRA_FRONTEND_ORIGINS`、`SESSION_COOKIE_SECURE`、production 判定与统一 CORS origins 计算
+  - 在 `software/backend/app/main.py` 增加 production 守卫：生产环境若仍使用默认 `SECRET_KEY` 或 SQLite，则启动直接失败
+  - 调整 `software/backend/app/api/routes/qc.py` 的 cookie 配置，改为读取 `SESSION_COOKIE_SECURE`
+  - 重写 `software/backend/app/services/bootstrap.py` 为显式初始化脚本，提供 `python -m app.services.bootstrap --admin-username ... --admin-password ...` 建库并创建首个管理员的入口
+  - 更新 `software/frontend/src/pages/login.vue`，移除默认管理员账号/初始密码展示与预填值，避免继续传递 demo 口令
+  - 更新 `software/deploy/docker-compose.yml` 与 `software/deploy/README.txt`，将部署基线切到 PostgreSQL + 显式初始化流程
+- Business logic impact: 系统从“服务一启动就自动建表并灌演示数据”切换到“空库保持空、必须显式初始化管理员、生产环境拒绝默认密钥和 SQLite”，这是从演示态迈向可控生产基线的第一步
+- Problems encountered:
+  - 当前工程尚未引入正式 migration 框架，Phase 1 只能先用显式初始化脚本承接建库动作
+  - 现有前端和历史验证都默认依赖 `admin/Admin@123` 演示账号，需要同步清理文案和后续验证口径
+- Resolution:
+  - 先把隐式 startup 行为整体拆除，避免继续扩大 demo 假设
+  - 将 `create_all()` 收敛到手工初始化入口，作为 migration 上线前的过渡控制点
+  - 先在 UI 和部署文档中移除默认口令，再在下一阶段补正式 migration 与真实入库
+- Verification:
+  - 待执行：`env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -m compileall app main.py'`
+  - 待执行：显式初始化命令 `python -m app.services.bootstrap --admin-username ... --admin-password ...`
+  - 待执行：以空库启动 backend，确认不会自动建表/灌数；production + 默认密钥/SQLite 组合应直接拒绝启动
+  - 待执行：前端重新 build，确认登录页不再展示默认口令
+- Unverified items:
+  - 显式初始化后的 login/session/browser golden path 还未按新基线重跑
+  - PostgreSQL compose 运行时还未实际验收
+  - migration 框架与真实 batch/episode 入库 API 尚未落地
+- Files changed:
+  - `software/backend/app/main.py`
+  - `software/backend/app/core/config.py`
+  - `software/backend/app/api/routes/qc.py`
+  - `software/backend/app/services/bootstrap.py`
+  - `software/frontend/src/pages/login.vue`
+  - `software/deploy/docker-compose.yml`
+  - `software/deploy/README.txt`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 先在隔离 `.conda-env` 下验证显式初始化、空库启动和 production 守卫行为
+  - 然后进入 Phase 2，落真实扫描入库 API 和 ingest job 状态链路
+
+## 2026-06-22 (Robot QC V1 real manual QC sample integration)
+
+- Type: implementation
+- Status: validated in isolated runtime and browser flow
+- Importance: high
+- Reusable: yes
+- Objective: 用本地真实样例 `episode_000099` 替换 manual QC 页面里的静态占位 metrics / timeline，并让前端入口直接走到这条样例数据
+- Work completed:
+  - 在 `software/backend/app/core/config.py` 增加 `COLLECTION_DATA_ROOT` 与 `SAMPLE_PROCESSED_ROOT` 配置，支持优先读取仓库内 `data/raw/process/episode_000099`
+  - 在 `software/backend/app/services/payloads.py` 增加 processed episode 发现与解析逻辑，读取 `manifest.json`、`metadata.json`、`telemetry.npz`
+  - 基于真实 telemetry 派生 `Q_motion`、平滑度、同步异常率、跟踪误差、速度 p95、力度 p95 六张指标卡
+  - 基于同步异常、跟踪误差和高动态区间生成 timeline 片段，并补上相邻片段合并与最小时长裁剪，避免 UI 上出现过碎 chips
+  - 修正分数型指标的等级映射逻辑，避免低分被错误标记为 `good`
+  - 在 `software/backend/app/services/bootstrap.py` 中加入 `episode_000099` 与 `task_005`，让 dashboard / task-pool / manual-qc 能从现有入口直接访问真实样例
+  - 更新 `software/backend/requirements.txt`，在隔离 backend env 中补充 `numpy`
+  - 重新构建前端静态资源，确保 demo 入口和页面加载的是最新数据链路
+- Business logic impact: manual QC 工作台从“后端静态占位演示”推进到“基于本地真实样例的可操作 V1”；老板演示时可以直接打开现有任务看到真实 telemetry 派生结果
+- Problems encountered:
+  - 初版 score level 逻辑反了，导致 `Q_motion=1.8` 被错误标成 `good`
+  - 初版 timeline 片段过碎，秒级 chips 可读性差
+  - `FastAPI TestClient` 依赖的 `httpx` 不在隔离环境中
+- Resolution:
+  - 调整 `_metric_level(..., reverse=True)` 判定方向
+  - 为 timeline 增加按 label 的相邻片段合并与最小时长约束
+  - 改用隔离 uvicorn + `curl` + Playwright 做端到端验证，未额外污染 ROS/system Python
+- Verification:
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -m compileall app main.py'`
+  - `cd software/frontend && npm run build`
+  - `curl -c /tmp/robot_qc_cookies.txt -H 'Content-Type: application/json' -d '{"username":"admin","password":"Admin@123"}' http://127.0.0.1:18080/api/auth/login`
+  - `curl -b /tmp/robot_qc_cookies.txt http://127.0.0.1:18080/api/bootstrap`
+  - `curl -b /tmp/robot_qc_cookies.txt http://127.0.0.1:18080/api/episodes/episode_000099/qc-context`
+  - `cd /tmp/robot-qc-playwright-runner && npx playwright test --reporter=line`
+- Unverified items:
+  - 若后续接入更多真实 episode，仍需验证批量样例下的 timeline 阈值是否需要按任务类型细分
+- Files changed:
+  - `software/backend/app/core/config.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/backend/app/services/bootstrap.py`
+  - `software/backend/requirements.txt`
+  - `software/frontend/dist/*`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 继续把 demo seed / 本地样例模式扩展成真实批次扫描入库流程
+  - 视下一阶段优先级决定是否补更细粒度帧级质检视图或自动规则建议
+
+## 2026-06-22 (Robot QC V1 containerized deployment validation)
+
+- Type: validation
+- Status: validated in Docker runtime
+- Importance: high
+- Reusable: yes
+- Objective: 在本机 Docker 权限环境中完成 Robot QC V1 compose 实机验收，确认交付版部署链路可用
+- Work completed:
+  - 解决 Docker Hub 拉取受限问题，完成 Docker 登录后成功拉取 `python:3.10-slim` 与 `nginx:1.29-alpine`
+  - 将 `software/frontend/Dockerfile` 调整为直接打包宿主预构建 `dist` 的 nginx 镜像，避开容器内 npm 安装超时
+  - 更新 `software/frontend/.dockerignore`，确保 `dist` 会进入 Docker build context
+  - 成功执行 `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up --build -d`
+  - 验证 `http://127.0.0.1:8080` 返回 200，`/api/health` 通过 nginx 反向代理返回 `{"status":"ok"}`
+  - 验证 `/api/auth/login`、`/api/auth/session`、`/api/task-pool` 通过前端入口联通 backend
+  - 验证 frontend 容器内访问 `http://127.0.0.1/api/health` 可成功反代到 backend
+  - 完成容器日志检查并在验收后执行 `docker compose ... down` 清理
+- Business logic impact: V1.0 从“具备部署包装”推进到“已在本机完成容器级实机验收”；交付链路已覆盖 compose、nginx 反代、鉴权与核心业务入口
+- Problems encountered:
+  - Docker Hub 匿名拉取命中限制，基础镜像无法拉取
+  - 前端 lockfile 与 `npm ci` 不一致，且容器内访问 npm registry 超时
+  - `dist` 一度被 `.dockerignore` 排除，导致 nginx 镜像无法复制静态产物
+- Resolution:
+  - 使用用户已完成的 Docker 登录恢复镜像拉取
+  - 改为宿主机先执行 `npm run build --prefix software/frontend`，容器仅打包静态产物
+  - 移除 `.dockerignore` 中对 `dist` 的排除
+- Verification:
+  - `npm run build --prefix /home/tbl/Project/data_collect/software/frontend`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml up --build -d`
+  - `curl -I http://127.0.0.1:8080`
+  - `curl http://127.0.0.1:8080/api/health`
+  - `curl -X POST http://127.0.0.1:8080/api/auth/login ...`
+  - `curl http://127.0.0.1:8080/api/auth/session`
+  - `curl http://127.0.0.1:8080/api/task-pool`
+  - `docker exec robot-qc-frontend sh -c 'wget -qO- http://127.0.0.1/api/health'`
+  - `docker compose -f /home/tbl/Project/data_collect/software/deploy/docker-compose.yml down`
+- Unverified items:
+  - 容器化入口下的浏览器 golden path 复跑结果
+  - manual QC metrics / timeline 的真实后端数据
+- Files changed:
+  - `software/frontend/Dockerfile`
+  - `software/frontend/.dockerignore`
+  - `software/deploy/README.txt`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 在 `http://127.0.0.1:8080` 上复跑浏览器 golden path，补齐最终交付验收
+  - 视交付优先级决定是否继续实现 manual QC metrics / timeline 的真实数据
+
+## 2026-06-22 (Robot QC V1 browser golden-path validation)
+
+- Type: validation
+- Status: validated in isolated browser runtime
+- Importance: high
+- Reusable: yes
+- Objective: 在不污染 ROS/system Python 的前提下跑通浏览器端完整业务闭环，确认真实鉴权与手动 QC 页面交互可用
+- Work completed:
+  - 在 `/tmp/robot-qc-playwright-runner` 创建隔离 Playwright runner，并本地安装 `playwright` 与 `@playwright/test`
+  - 基于实际前端页面文案和可访问性结构修正登录、任务跳转、Fail 结果和主原因码选择器
+  - 跑通 `login → dashboard → task-pool → manual-qc → qc-history → logout` 浏览器链路
+  - 验证未登录访问 `/dashboard` 会被路由守卫重定向到 `/login`
+  - 验证手动 QC 提交后历史审计页能看到 `browser e2e validation`、`王主管`、`sync_bad`
+  - 验证退出登录后再次访问受保护页面会重新跳转到登录页
+- Business logic impact: V1.0 从“API 与页面单点可用”推进到“真实账号、会话、派发、人工 QC、审计、登出闭环已完成浏览器级验收”
+- Problems encountered:
+  - 初版脚本使用了过时文案 `进入质检平台`，实际按钮文案为 `进入系统`
+  - manual QC 页面 `Fail` 结果与主原因码是 Element Plus 组件，不能用朴素文本点击方式稳定驱动
+- Resolution:
+  - 改为基于 label / role / 组件容器的稳定选择器
+  - 使用独立临时 npm 工作区运行 Playwright，未修改项目依赖与宿主 Python 环境
+- Verification:
+  - `cd /tmp/robot-qc-playwright-runner && npx playwright test --reporter=line`
+- Unverified items:
+  - 有 Docker 权限环境下的 `docker compose up --build -d` 容器实机验收
+- Files changed:
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+  - `/tmp/robot-qc-playwright-runner/playwright.config.js`
+  - `/tmp/robot-qc-playwright-runner/tests/robot-qc-golden-path.spec.js`
+- Next steps:
+  - 在有 Docker 权限的环境执行 compose 启动并验收前后端联通
+  - 视交付节奏决定是否补 manual QC metrics / timeline 的真实后端数据
+
+# Progress Log
+
+## 2026-06-22 (Robot QC V1 real auth integration)
+
+- Type: implementation
+- Status: validated in isolated runtime
+- Importance: high
+- Reusable: yes
+- Objective: 用真实账号鉴权替换 demo bootstrap，并在不污染 ROS/system Python 的前提下完成登录态联调
+- Work completed:
+  - 新增 `software/backend/app/core/security.py`，实现 PBKDF2-SHA256 密码哈希与 HMAC session token
+  - 扩展 `software/backend/app/core/config.py`，补充 `SECRET_KEY`、cookie 名称和 session 生命周期配置
+  - 更新 `software/backend/app/services/bootstrap.py`，为默认管理员写入真实密码哈希，并兼容旧 demo hash 升级
+  - 在 `software/backend/app/api/routes/qc.py` 增加 `/api/auth/login`、`/api/auth/logout`、`/api/auth/session`
+  - 为 `/api/bootstrap`、`/api/dashboard`、`/api/task-pool`、`/api/qc-history`、`/api/qc/manual/*` 等业务接口补充鉴权保护
+  - 更新 `software/backend/app/services/payloads.py`，改为基于当前登录用户返回 payload
+  - 更新前端 `software/frontend/src/api/client.ts`、`src/stores/session.ts`、`src/router/index.ts`、`src/pages/login.vue`、`src/components/AppLayout.vue`，接入 cookie session、登录页、登出和路由守卫
+  - 更新 `software/frontend/src/pages/manual-qc.vue`，移除前端伪造 operator，改由后端使用当前登录人落审计
+- Business logic impact: V1.0 从“demo 登录可演示”推进到“真实账号 + 会话态 + 审计身份可信”；人工质检提交人不再由前端伪造
+- Problems encountered:
+  - 8001 端口已有旧 backend 占用，初次联调命中了不含 auth 路由的旧实例
+  - `apply_patch` 在当前环境不可用
+- Resolution:
+  - 改用 8002 端口启动新 backend 实例完成验证
+  - 使用文件编辑工具替代 `apply_patch`
+- Verification:
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -m compileall app main.py'`
+  - `cd software/frontend && npm run build`
+  - `curl -X POST http://127.0.0.1:8002/api/auth/login ...`
+  - `curl http://127.0.0.1:8002/api/auth/session`
+  - `curl http://127.0.0.1:8002/api/bootstrap`
+  - `curl -X POST http://127.0.0.1:8002/api/qc/manual/episode_000124 ...`
+  - `curl -X POST http://127.0.0.1:8002/api/auth/logout ...`
+  - logout 后再次请求 `/api/auth/session` 返回 `401`
+- Unverified items:
+  - 浏览器端完整 golden path 验证
+  - 有 Docker 权限环境下的 compose 实机验收
+- Files changed:
+  - `software/backend/app/core/security.py`
+  - `software/backend/app/core/config.py`
+  - `software/backend/app/services/bootstrap.py`
+  - `software/backend/app/services/payloads.py`
+  - `software/backend/app/schemas/qc.py`
+  - `software/backend/app/api/routes/qc.py`
+  - `software/frontend/src/api/client.ts`
+  - `software/frontend/src/stores/session.ts`
+  - `software/frontend/src/router/index.ts`
+  - `software/frontend/src/pages/login.vue`
+  - `software/frontend/src/components/AppLayout.vue`
+  - `software/frontend/src/pages/manual-qc.vue`
+  - `software/frontend/src/main.ts`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 启动前端并在浏览器走通 login → dashboard → task-pool → manual-qc → qc-history → logout
+  - 在有 Docker 权限的环境执行 `docker compose up --build -d` 并验收前后端联通
+
+## 2026-06-22 (Robot QC V1 internal deployment packaging)
+
+- Type: implementation
+- Status: partially validated
+- Importance: high
+- Reusable: yes
+- Objective: 为 Robot QC V1.0 增加可直接用于公司内网演示和交付的部署包装，并完成联调级校验
+- Work completed:
+  - 新增 `software/frontend/Dockerfile`，构建 Vue 产物并用 nginx 提供静态站点
+  - 新增 `software/frontend/nginx.conf`，前端同源代理 `/api` 到 backend
+  - 新增 `software/frontend/.dockerignore`
+  - 新增 `software/deploy/docker-compose.yml`，编排 frontend + backend，后端持久化 SQLite 数据卷并挂载 `/data/collection_data`
+  - 新增 `software/deploy/README.txt`，补充内网启动/停止/访问说明
+  - 修正前端站点标题为 `Robot QC Platform`
+  - 修正侧边栏重复入口，合并为“人工质检与派发”
+  - 前端生产构建通过；backend `python3 -m compileall` 通过；`docker compose config` 通过
+  - 使用项目内 `software/backend/.conda-env` 建立隔离 Python 运行环境，未修改 ROS/system Python
+  - 在隔离环境下启动 backend 并通过 `/api/health`、`/api/bootstrap`、`/api/task-pool` smoke test
+- Business logic impact: V1.0 从“页面与 API 可编译”推进到“具备内网部署包装 + 可在无 Docker 权限主机上做后端运行验收”；离老板演示版还差浏览器端完整验收与鉴权补齐
+- Problems encountered:
+  - 环境内 `apply_patch` 不可用，改用文件编辑工具完成修改
+  - 本机无法访问 Docker daemon，`docker compose up --build` 无法执行
+  - 宿主 ROS 环境设置了 `PYTHONPATH`，会污染隔离 Python 的依赖解析
+- Resolution:
+  - 部署文件已补齐并通过 compose 配置级校验
+  - 构建与语法层校验已完成
+  - 通过 `conda create -p software/backend/.conda-env ...` 提供项目内隔离运行方案
+  - 运行时使用 `env -u PYTHONPATH PYTHONNOUSERSITE=1`，避免 ROS 路径和 user-site 包泄漏到 backend
+- Verification:
+  - `cd software/frontend && npm run build`
+  - `python3 -m compileall software/backend`
+  - `docker compose -f software/deploy/docker-compose.yml config`
+  - `env -u PYTHONPATH PYTHONNOUSERSITE=1 bash -lc 'cd software/backend && .conda-env/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8001'`
+  - `curl http://127.0.0.1:8001/api/health`
+  - `curl http://127.0.0.1:8001/api/bootstrap`
+  - `curl http://127.0.0.1:8001/api/task-pool`
+- Unverified items:
+  - `docker compose up --build -d` 容器实际启动结果
+  - 浏览器端完整 golden path 验证
+  - 真实账号登录流程
+- Files changed:
+  - `software/frontend/src/components/AppLayout.vue`
+  - `software/frontend/index.html`
+  - `software/frontend/Dockerfile`
+  - `software/frontend/nginx.conf`
+  - `software/frontend/.dockerignore`
+  - `software/deploy/docker-compose.yml`
+  - `software/deploy/README.txt`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 在有 Docker 权限的环境执行 compose 启动并验收 `/api/health`
+  - 用浏览器走通 login → dashboard → task-pool → manual-qc → qc-history
+  - 继续补真实账号认证和密码校验
+
+## 2026-06-16 (报告 01 扩展完成 — 19 数据集/生态覆盖)
+
+- Type: workflow
+- Status: validated
+- Importance: high
+- Reusable: yes
+- Objective: 补全报告 01 的空缺，覆盖 ALOHA、Dobb-E、灵巧手遥操作前沿数据集、RLBench 等
+- Work completed:
+  - 新增 §3.16 ALOHA / Mobile ALOHA：硬件隐式 QC、频率诊断+自动拒绝、同构主从映射、ALOHA Unleashed 质量vs多样性 trade-off
+  - 新增 §3.17 Dobb-E：论文专设 QC 小节、人工视频审核、非专家操作者挑战、隐私过滤
+  - 新增 §3.18 灵巧手遥操作前沿：ActionNet (LeRobot V2)、BiDex (MANUS 手套精度 ~20ms)、DexMimicGen (仿真成功率检查)
+  - 新增 §3.19 RLBench：可组合成功谓词 (GraspCondition+DetectedCondition+ProximitySensor)、任务验证工具
+  - 更新 §3.20 跨数据集对比表：从 9 列扩展到 14 列，新增 ALOHA/Dobb-E/ALOHA/DobbE/LIBERO/FurnBench/UMI/BEHAVIOR/ActionNet/RLBench
+  - 更新 §4 综合对照表：从 11 扩展到 18 数据集
+  - 更新 §5 可迁移规则：从 18 条扩展到 27 条（§5.3 新增 17-19，§5.4 新增 20-23，§5.5 新增 24-27 灵巧手专项建议）
+  - 更新 §6 参考资料：新增 ALOHA/MobileALOHA/ALOHAUnleashed/Dobb-E/ActionNet/BiDex/DexMimicGen/RLBench
+- Business logic impact: 报告 01 从"10+ 数据集"扩展到 19 数据集/生态；灵巧手 QC 空白已明确标记
+- Key findings:
+  - 19 个公开数据集中仅 3 个有真正的显式 QC 系统（BEHAVIOR-1K/LeRobot/RoboMimic）
+  - 灵巧手 QC 是完整研究空白 — 所有现有数据集 QC 均针对夹爪场景
+  - ALOHA 硬件隐式约束哲学对 TeleDex 有最高参考价值
+  - DexMimicGen 的"仿真检查→过滤"范式可借鉴但需适配真实遥操作
+- Problems encountered: None
+- Resolution: Not applicable
+- Verification: 所有新增数据集信息与原论文交叉核对一致
+- Unverified items: BiDex MANUS 手套延迟实测数据；ActionNet 完整 QC 流程细节
+- Files changed:
+  - `doc/reports/01_public_dataset_implicit_qc.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - L3 灵巧手专项适配（per-finger chatter, 0~255 归一化）
+  - 报告 03 数据策展框架调研
+  - 可迁移规则落地为 TeleDex 实现规格
+
+## 2026-06-16 (L3 遥操作质量深入调研完成)
+
+- Type: workflow
+- Status: validated
+- Importance: high
+- Reusable: yes
+- Objective: 深入调研 L3 遥操作数据质量 — Consistency Matters + Forge + RINSE + Python 工具生态 + 轨迹异常检测
+- Work completed:
+  - 下载并精读 Consistency Matters (arXiv:2412.14309) 全文，提取 10 项公式表（6 类维度：smoothness, path efficiency, joint limit avoidance, manipulability, effort, consistency）
+  - 确认关键结论：一致性指标预测 70-89% 任务成功率
+  - 深入调研 Forge (Tigunait, 2024)：8 项主要指标 + 3 项扩展指标，全部公式与权重，MIT 许可，pip installable
+  - 确认 Forge 的 `analyze_episode_arrays()` 可直接接受 TeleDex telemetry.npz 的 numpy 数组
+  - 调研 monalysa (SPARC+LDLJ)、trajectopy (ATE/RPE)、PyEyesWeb、democlean (KSG MI)、DemInf (VAE+MI) 等 Python 工具
+  - 调研 RINSE (arXiv:2604.23000)：SAL (谱弧长) + TED (轨迹包络距离)，SAL 过滤 +16% 成功率
+  - 调研轨迹异常检测：通用方法 (GeoInformatica 2025, 10 库对比) + 机器人前沿 (RC-NF/VLAConf/世界模型)
+  - 发现遥操作异常检测是研究空白 — 建议从统计/启发式方法起步
+  - 更新报告 02：§3.2 (score_lerobot)、§3.3 (Consistency Matters)、§3.5 (PSD/RINSE)、§3.6 (Forge)、§3.7 (Python 工具生态)、§3.8 (异常检测)
+  - 更新 §2.1 调研状态表、报告状态行
+- Business logic impact: B2 节点 L3 子任务全部完成；L3 遥操作质量从 DQAF 的 4 指标扩展到 11+ 指标体系；Forge 确认为主落地工具
+- Problems encountered:
+  - Consistency Matters agent 因 DeepSeek 不支持 image_url 报错 → 改用 curl + pdftotext 直接下载提取 PDF 文本
+  - 大 agent 输出文件 (3.2MB, 259KB) 无法 Read → 用 python3 json 解析脚本提取最终文本
+- Resolution: 全部通过替代方法解决
+- Verification: 10 项 Consistency Matters 公式与 PDF 原文交叉核对一致；Forge 8 指标与 GitHub 源码一致
+- Unverified items: monalysa/democlean/DemInf 实际运行效果；灵巧手 per-finger 改造代码未编写；异常检测前沿方法 (RC-NF) 代码未发布
+- Files changed:
+  - `doc/reports/02_data_quality_assessment_frameworks.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - L2 VLM prompt 设计（视觉质量检查 prompt 模板）
+  - L3 灵巧手专项适配（per-finger chatter, 0~255 空间归一化）
+  - L4 子任务计划 Π 生成机制
+  - 实际 TeleDex 样本标定阈值
+
+
+
+- Type: workflow
+- Status: validated
+- Importance: high
+- Reusable: yes
+- Objective: 精读 DQAF 论文，将 DQAF 管线与 4 层 QC 架构融合，建立 TeleDex episode-level QC 统一框架
+- Work completed:
+  - 精读 DQAF 论文 (2605.26349v1) 全部内容：管线四阶段、公式体系、实验结果
+  - 分析 DQAF 在 TeleDex 4 层架构中的对应位置：L1 不在 DQAF 范围、L2 对应 VLM 语义层、L3 对应 telemetry 层、L4 对应语义进度层
+  - 识别 DQAF 的 7 项局限性及 TeleDex 增强方向
+  - 建立完整的 4 层 QC 架构总览 (L1 硬性门控 → L2 视觉+VLM → L3 遥操作质量★ → L4 任务完成度 → 聚合反馈)
+  - 设计 27 项统一指标映射表 (M01-M27)，覆盖 L1-L4 全部层级
+  - 设计段级违规诊断机制（DQAF Section IV-D 适配 TeleDex）
+  - 提出初始聚合权重方案 (Q_motion 0.30 权重最高)
+  - 设计 TeleDex 中文反馈模板
+  - 更新报告 02 §1/§3.1/§4/§5
+  - 阅读用户总结文档（调研报告.txt + 报告总结）
+- Business logic impact: B2 节点从"未开始"推进到"DQAF 精读完成 + 框架建立"；下一步深入 Consistency Matters + Forge 填充 L3
+- Problems encountered: Edit 大段内容时触发长度限制，分批小量写入解决
+- Resolution: 分批次 Edit，每次 200-400 行
+- Verification: 报告 02 内容与 DQAF 论文原文交叉核对一致
+- Unverified items: 27 项指标的具体阈值需实际样本标定；权重需人工 review 300-500 条后回归
+- Files changed:
+  - `doc/reports/02_data_quality_assessment_frameworks.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 深入调研 Consistency Matters (Sakr et al., 2024) → 扩展 L3 指标
+  - 调研 Forge (Tigunait, 2024) 源码 → 可复用实现
+  - 映射 L3 指标到 TeleDex telemetry.npz 字段
+  - score_lerobot_episodes 文档调研 → §3.2
+
+## 2026-06-16 (采纳 GPT 调研路线：02→01→03，DQAF 优先)
+
+- Type: decision
+- Status: validated
+- Importance: high
+- Reusable: yes
+- Objective: 记录并采纳 GPT 反馈的 2–3 周调研执行路线
+- Work completed:
+  - 确认报告推进顺序：**02 → 01 → 03**（按价值，非编号）
+  - 确认第一任务：**DQAF 精读 + TeleDex episode-level 指标映射表**
+  - 写入 Week 1–3 排期至 `handoff/pending-tasks.md` 和 `00_research_plan.md`
+  - 更新 `business-logic/main.md`、`decision-records.md`、`open-questions.md`（P0-4/P1-5）
+  - 明确暂缓项：QoQ/DemInf/SCIZOR 深入、score_lerobot 代码复现
+  - 明确需团队确认 5 项：success 标签、task/语言字段、实际样本、关节 limit 表、tactile 启用
+- Business logic impact: B2 优先于 B1/B3；当前边 B2→D；核心交付物为 `04` §7 指标映射表
+- Problems encountered: None
+- Resolution: Not applicable
+- Verification: 用户明确确认按此路线执行
+- Unverified items: P0-1~P0-4、P1-5 待团队/平台方确认
+- Files changed:
+  - `.project-log/business-logic/main.md`
+  - `.project-log/business-logic/decision-records.md`
+  - `.project-log/business-logic/open-questions.md`
+  - `.project-log/handoff/pending-tasks.md`
+  - `doc/reports/00_research_plan.md`
+  - `.project-log/progress.md`
+  - `.project-log/current-session.md`
+- Next steps:
+  - Day 1：DQAF 精读 → `02` §1
+  - Day 2：TeleDex QC 指标映射表 v0.1 → `04` §7
+
+## 2026-06-16 (汇总报告基线章节整理)
+
+- Type: workflow
+- Status: validated
+- Importance: high
+- Reusable: yes
+- Objective: 将现有材料整理进汇总报告，确立 TeleDex 平台 QC 基线
+- Work completed:
+  - 重写 `doc/reports/04_teledex_qc_summary.md` v0.1 基线稿
+  - §1–§5：项目背景、TeleDex 架构、平台已有 QC 能力详细盘点、数据资产速查、DROID 外部参照
+  - §3 按采集/转换/产物三阶段梳理平台已有能力，并列出明确缺口
+  - §6–§9 占位，待三报告完成后补充
+  - 提供基线 QC 读取指南（manifest → metadata → telemetry → cameras）
+- Business logic impact: 节点 E 从"未开始"推进到"基线章节完成"；后续调研明确为"在平台已有能力上增强"
+- Problems encountered: None
+- Resolution: Not applicable
+- Verification: 内容与官方 PDF、teledex-data-format.md、DROID 调研报告交叉核对一致
+- Unverified items: 平台 QC 阈值需实际样本标定；OQ-01~06 仍开放
+- Files changed: `doc/reports/04_teledex_qc_summary.md`
+- Next steps:
+  - 按三报告计划推进深入调研
+  - 调研结论回填 §6–§8
+
+## 2026-06-16 (三报告调研结构确定)
+
+- Type: decision
+- Status: validated
+- Importance: high
+- Reusable: yes
+- Objective: 将 GPT 初稿 survey 拆分为三份深入报告 + 汇总报告的工作结构
+- Work completed:
+  - 创建 `doc/reports/00_research_plan.md`（工作计划）
+  - 创建报告 01/02/03 大纲（含统一调研模板、任务清单、对照表）
+  - 创建汇总报告 04 骨架
+  - 将 DROID 调研成果整合入报告 01
+  - 更新 business-logic（B1/B2/B3 并行节点）、requirements、handoff
+- Business logic impact: 主路径从单一 B 节点拆分为 B1+B2+B3 并行三报告，D/E 为 TeleDex 适配与汇总
+- Problems encountered: None
+- Resolution: Not applicable
+- Verification: 文件结构已创建，与初稿 survey 章节映射一致
+- Unverified items: 三报告内容均待深入调研填充
+- Files changed:
+  - `doc/reports/00_research_plan.md`
+  - `doc/reports/01_public_dataset_implicit_qc.md`
+  - `doc/reports/02_data_quality_assessment_frameworks.md`
+  - `doc/reports/03_data_curation_frameworks.md`
+  - `doc/reports/04_teledex_qc_summary.md`
+  - `.project-log/business-logic/main.md`
+  - `.project-log/business-logic/graph.md`
+  - `.project-log/requirements.md`
+  - `.project-log/handoff/pending-tasks.md`
+- Next steps:
+  - 按优先级推进三报告（建议先 RH20T + DQAF）
+
+## 2026-06-16 (TeleDex 数据说明文档完整阅读)
+
+- Type: workflow
+- Status: validated
+- Importance: high
+- Reusable: yes
+- Objective: 完整阅读 Linker Open TeleDex 官方数据说明文档，建立 QC 工作起点
+- Work completed:
+  - 阅读 `doc/Linker Open TeleDex数据采集系统-数据说明文档 .pdf`（V3.0，19页）
+  - 创建 `api/teledex-data-format.md`（完整 schema + QC 起点分析）
+  - 更新 `hardware/interface-protocols.md`、`business-logic/nodes.md`（节点 C）
+  - 部分解答 Q-20260616-002（平台内置 QC 能力）
+  - 解决 KI-20260616-003（telemetry.npz schema 已归档）
+- Business logic impact: 节点 C 从"部分完成"推进到"大部分完成"；QC 调研起点明确为 processed 数据 + 平台已有同步/裁剪能力
+- Problems encountered: None
+- Resolution: Not applicable
+- Verification: PDF 全文已通过 Read 工具 + pdftotext 双重确认
+- Unverified items:
+  - 采集端是否有实时 QC 提示（文档未说明）
+  - 实际样本上的 QC 指标验证（仍无样本）
+- Files changed:
+  - `.project-log/api/teledex-data-format.md`（新建）
+  - `.project-log/hardware/interface-protocols.md`
+  - `.project-log/business-logic/nodes.md`
+  - `.project-log/business-logic/open-questions.md`
+  - `.project-log/debugging/known-issues.md`
+- Next steps:
+  - 基于 TeleDex 格式提出 QC 指标适配方案（节点 C→D）
+  - 继续 RH20T / DQAF 公开数据集调研（节点 B）
+
+## 2026-06-16 (project-log initialization complete)
+
+- Type: workflow
+- Status: validated
+- Importance: high
+- Reusable: no
+- Objective: 完成 project-log 完整初始化
+- Work completed:
+  - 创建 `business-logic/archived/archived-logic.md`（归档 KitchenDex-Data 早期方案）
+  - 创建 `architecture/`（software、hardware、communication、deployment）
+  - 创建 `hardware/`（hardware-list、sdk-mapping、interface-protocols）
+  - 创建 `api/`（internal-api、sdk-api、communication-api）
+  - 创建 `config/`（config-schema、runtime-config、parameter-mapping）
+  - 创建 `debugging/`（known-issues、debugging-history）
+  - 创建 `distillation/`（state.yaml、candidate-register、sync-status、runs/）
+  - 创建 `handoff/`（pending-tasks、next-steps、temporary-notes）
+  - 更新 `current-session.md`
+- Business logic impact: None（记录结构完善，主干逻辑未变）
+- Problems encountered: None
+- Resolution: Not applicable
+- Verification: 目录结构符合 project-log skill 推荐完整结构；最小必需项 + 机器人项目推荐项均已创建
+- Unverified items:
+  - TeleDex telemetry.npz 完整 schema 仍待补充（KI-20260616-003）
+- Files changed: `.project-log/` 下新增 architecture、hardware、api、config、debugging、distillation、handoff、archived 目录及文件
+- Next steps:
+  - 继续节点 B：RH20T、DQAF 等公开数据集 QC 调研
+  - 推进节点 C：Linker TeleDex QC 适配方案
+
+## 2026-06-16 12:05 Local Time
+
+- Type: workflow
+- Status: validated
+- Importance: high
+- Reusable: no
+- Objective: 初始化调研项目工程记录
+- Work completed:
+  - 创建.project-log目录结构
+  - 创建requirements.md（明确调研目标）
+  - 创建business-logic目录（main.md、graph.md、nodes.md、edges.md）
+  - 创建open-questions.md（记录调研过程中的不确定问题）
+  - 创建decision-records.md（记录项目定位决策）
+  - 创建constraints.md（记录调研约束）
+- Business logic impact: 初始化调研流程business logic
+- Problems encountered: None
+- Resolution: Not applicable
+- Verification: 文件创建成功，目录结构符合project-log规范
+- Unverified items: None
+- Files changed: .project-log/下所有文件
+- Next steps:
+  - 继续公开数据集QC调研（RH20T、DQAF等）
+  - 深度分析Linker TeleDex数据格式，提出QC适配方案
+  - 整合调研报告
+
+## 2026-06-16 Earlier
+
+- Type: workflow
+- Status: validated
+- Importance: high
+- Reusable: maybe
+- Objective: 完成DROID数据集QC调研
+- Work completed:
+  - 下载并分析droid_100数据集
+  - 创建droid_qc_deep_research.py脚本分析数据
+  - 生成DROID QC调研报告（doc/droid_qc_research/DROID_QC调研报告.md）
+  - 提取7条可迁移QC规则
+- Business logic impact: 完成节点B的DROID调研部分
+- Problems encountered: PDF读取工具无法提取文本
+- Resolution: 使用pdftotext命令行工具成功提取PDF内容
+- Verification: 调研报告已生成，数据分析脚本运行成功
+- Unverified items: RH20T、DQAF等数据集调研待完成
+- Files changed:
+  - scripts/droid/droid_qc_deep_research.py
+  - doc/droid_qc_research/DROID_QC调研报告.md
+  - doc/droid_qc_research/droid_qc_summary.json
+- Next steps:
+  - 继续其他数据集调研
+  - 整合公开数据集QC对比表
+
+---
+
+## 2026-06-25 双视角审计 + 批量修复轮次
+
+- 审计：admin/reviewer 双角色真实 chromium 深度体验，产出 `audit-report-draft.md`（正确性+可用性双维度），方法论沉淀为 `~/.claude/skills/multi-role-ux-audit`
+- HIGH 修复：派发抽检%静默重置（v-if→v-show+二次确认）、assigned+fail 状态机黑洞（dispatch跳过done episode+migration 0007）、根路径/白屏崩溃（自我重定向→/login）
+- MEDIUM 修复：task-pool reviewer越权（按角色裁剪payload）、删除→停用文案、跨页计数统一口径（migration 0008）、锁释放（onBeforeRouteLeave+管理员强制释放）、派发可发现性、评分环固定Q_motion、任务类型名校验
+- LOW 修复：登录detail-only错误+空值校验、默认有活类型、返回按钮角色对齐、下载mimeType扩展名、无媒体禁用播放、全局中文locale
+- 验证：重建镜像+alembic upgrade head（0007/0008）+生产栈重启；db/API实测矛盾态=0、待分类4/303、reviewer越权已堵；chromium实测根路径不白屏+admin dashboard正常
+- 12 files changed, +335/-44, commit ec4b075 → main

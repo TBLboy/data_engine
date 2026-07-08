@@ -103,16 +103,17 @@ const chartHoverTimeSec = ref<number | null>(null)
 const chartDragging = ref(false)
 const suppressFrameWatcher = ref(false)
 const chartPlaybackCursorLeftPx = ref(0)
+const chartPlaybackCursorLeftPxR = ref(0)
 const chartPlaybackCursorVisible = ref(false)
 const chartHoverCursorLeftPx = ref(0)
+const chartHoverCursorLeftPxR = ref(0)
 const chartHoverCursorVisible = ref(false)
 const chartCursorTopPx = ref(0)
 const chartCursorHeightPx = ref(0)
 let chartL: Chart | null = null
 let chartR: Chart | null = null
 let playbackLoopId: number | null = null
-let scrubRafId: number | null = null
-let pendingScrubTimeSec: number | null = null
+let lastScrubMs = 0
 
 const episodeId = computed(() => String(route.params.id))
 const fps = computed(() => payload.value?.episode.fps || 30)
@@ -204,16 +205,16 @@ const applyTimeToPlayback = async (targetSec: number) => {
   drawChartOverlay()
 }
 
-const queueScrubToTime = (targetSec: number) => {
-  pendingScrubTimeSec = targetSec
-  if (scrubRafId !== null) return
-  scrubRafId = requestAnimationFrame(async () => {
-    scrubRafId = null
-    if (pendingScrubTimeSec == null) return
-    const target = pendingScrubTimeSec
-    pendingScrubTimeSec = null
-    await applyTimeToPlayback(target)
-  })
+const scrubToTime = (targetSec: number) => {
+  const clampedSec = Math.max(0, Math.min(durationSec.value || targetSec, targetSec))
+  const frame = Math.max(0, Math.min(maxFrame.value, Math.round(clampedSec * fps.value)))
+  suppressFrameWatcher.value = true
+  currentFrame.value = frame
+  const targetTime = durationSec.value ? Math.min(frame / fps.value, durationSec.value) : frame / fps.value
+  for (const video of activeVideoElements()) {
+    video.currentTime = targetTime
+  }
+  drawChartOverlay()
 }
 
 const chartTimeFromPointer = (event: MouseEvent, chart: Chart | null, canvas: HTMLCanvasElement | null) => {
@@ -231,7 +232,10 @@ const handleChartPointerMove = (event: MouseEvent, chart: Chart | null, canvas: 
   chartHoverTimeSec.value = nextTime
   drawChartOverlay()
   if (chartDragging.value && nextTime != null) {
-    queueScrubToTime(nextTime)
+    const now = performance.now()
+    if (now - lastScrubMs < 16) return
+    lastScrubMs = now
+    scrubToTime(nextTime)
   }
 }
 
@@ -241,23 +245,20 @@ const handleChartPointerLeave = () => {
   drawChartOverlay()
 }
 
-const handleChartPointerDown = async (event: MouseEvent, chart: Chart | null, canvas: HTMLCanvasElement | null) => {
+const handleChartPointerDown = (event: MouseEvent, chart: Chart | null, canvas: HTMLCanvasElement | null) => {
   const nextTime = chartTimeFromPointer(event, chart, canvas)
   if (nextTime == null) return
   chartDragging.value = true
   chartHoverTimeSec.value = nextTime
   pauseAll()
-  await applyTimeToPlayback(nextTime)
+  scrubToTime(nextTime)
 }
 
 const stopChartDragging = () => {
   if (!chartDragging.value) return
   chartDragging.value = false
-  if (scrubRafId !== null) {
-    cancelAnimationFrame(scrubRafId)
-    scrubRafId = null
-  }
-  pendingScrubTimeSec = null
+  suppressFrameWatcher.value = false
+  lastScrubMs = 0
   drawChartOverlay()
 }
 
@@ -276,41 +277,47 @@ const drawChartOverlay = () => {
 }
 
 const updateChartCursorPosition = () => {
-  const ch = chartL
-  const canvas = chartCanvasL.value
-  if (!ch || !canvas) {
-    chartPlaybackCursorVisible.value = false
-    chartHoverCursorVisible.value = false
-    return
-  }
-  const xScale = ch.scales.x
-  const chartArea = ch.chartArea
-  if (!xScale || !chartArea) {
+  const canvasL = chartCanvasL.value
+  const canvasR = chartCanvasR.value
+  if (!canvasL || !canvasR) {
     chartPlaybackCursorVisible.value = false
     chartHoverCursorVisible.value = false
     return
   }
 
-  const displayWidth = canvas.getBoundingClientRect().width || ch.width || 1
-  const displayHeight = canvas.getBoundingClientRect().height || ch.height || 1
-  const scale = displayWidth / (ch.width || displayWidth || 1)
-  const scaleY = displayHeight / (ch.height || displayHeight || 1)
+  const calcCursor = (ch: Chart, canvas: HTMLCanvasElement, time: number) => {
+    const xScale = ch.scales.x
+    const chartArea = ch.chartArea
+    if (!xScale || !chartArea) return null
+    const displayWidth = canvas.getBoundingClientRect().width || ch.width || 1
+    const displayHeight = canvas.getBoundingClientRect().height || ch.height || 1
+    const scale = displayWidth / (ch.width || displayWidth || 1)
+    const scaleY = displayHeight / (ch.height || displayHeight || 1)
+    const pixel = Number(xScale.getPixelForValue(time))
+    if (!Number.isFinite(pixel)) return null
+    return { left: pixel * scale, top: chartArea.top * scaleY, height: Math.max((chartArea.bottom - chartArea.top) * scaleY, 0) }
+  }
 
-  chartCursorTopPx.value = chartArea.top * scaleY
-  chartCursorHeightPx.value = Math.max((chartArea.bottom - chartArea.top) * scaleY, 0)
-
-  const playbackX = Number(xScale.getPixelForValue(currentTimeSec.value))
-  chartPlaybackCursorVisible.value = Number.isFinite(playbackX)
-  chartPlaybackCursorLeftPx.value = playbackX * scale
+  const playbackL = chartL ? calcCursor(chartL, canvasL, currentTimeSec.value) : null
+  const playbackR = chartR ? calcCursor(chartR, canvasR, currentTimeSec.value) : null
+  chartPlaybackCursorVisible.value = playbackL != null && playbackR != null
+  if (playbackL) {
+    chartPlaybackCursorLeftPx.value = playbackL.left
+    chartCursorTopPx.value = playbackL.top
+    chartCursorHeightPx.value = playbackL.height
+  }
+  if (playbackR) chartPlaybackCursorLeftPxR.value = playbackR.left
 
   const hoverTime = chartHoverTimeSec.value
   if (hoverTime == null || !Number.isFinite(hoverTime)) {
     chartHoverCursorVisible.value = false
     return
   }
-  const hoverX = Number(xScale.getPixelForValue(hoverTime))
-  chartHoverCursorVisible.value = Number.isFinite(hoverX)
-  chartHoverCursorLeftPx.value = hoverX * scale
+  const hoverL = chartL ? calcCursor(chartL, canvasL, hoverTime) : null
+  const hoverR = chartR ? calcCursor(chartR, canvasR, hoverTime) : null
+  chartHoverCursorVisible.value = hoverL != null && hoverR != null
+  if (hoverL) chartHoverCursorLeftPx.value = hoverL.left
+  if (hoverR) chartHoverCursorLeftPxR.value = hoverR.left
 }
 
 const stopPlaybackLoop = () => {
@@ -454,14 +461,22 @@ const renderChart = () => {
     return ds
   }
 
+  const maxTime = cd.timestamps.length ? cd.timestamps[cd.timestamps.length - 1] : 0
+  const yAxisWidth = isArm ? 72 : 56
+
   const baseOptions = (title: string): any => ({
     responsive: true,
     maintainAspectRatio: false,
     animation: false,
     parsing: false,
     scales: {
-      x: { type: 'linear', title: { display: true, text: '时间 (s)' } },
-      y: { title: { display: true, text: yTitle } }
+      x: { type: 'linear', min: 0, max: maxTime, title: { display: true, text: '时间 (s)' } },
+      y: {
+        title: { display: true, text: yTitle },
+        afterFit(scale: any) {
+          scale.width = yAxisWidth
+        }
+      }
     },
     plugins: {
       legend: { display: false },
@@ -831,12 +846,12 @@ const submit = async () => {
               <div
                 v-show="chartPlaybackCursorVisible"
                 class="chart-cursor-line playback"
-                :style="{ left: `${chartPlaybackCursorLeftPx}px`, top: `${chartCursorTopPx}px`, height: `${chartCursorHeightPx}px` }"
+                :style="{ left: `${chartPlaybackCursorLeftPxR}px`, top: `${chartCursorTopPx}px`, height: `${chartCursorHeightPx}px` }"
               ></div>
               <div
                 v-show="chartHoverCursorVisible"
                 class="chart-cursor-line hover"
-                :style="{ left: `${chartHoverCursorLeftPx}px`, top: `${chartCursorTopPx}px`, height: `${chartCursorHeightPx}px` }"
+                :style="{ left: `${chartHoverCursorLeftPxR}px`, top: `${chartCursorTopPx}px`, height: `${chartCursorHeightPx}px` }"
               ></div>
               <canvas
                 ref="chartCanvasR"
