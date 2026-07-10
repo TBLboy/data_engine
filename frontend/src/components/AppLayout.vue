@@ -6,20 +6,37 @@ import {
   Finished,
   FolderOpened,
   Monitor,
-  Setting,
   User,
   VideoCamera
 } from '@element-plus/icons-vue'
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import BugReportDialog from './BugReportDialog.vue'
 import { useSessionStore } from '../stores/session'
+import { fetchNotifications } from '../api/client'
 
 const route = useRoute()
 const router = useRouter()
 const session = useSessionStore()
 const bugDialogVisible = ref(false)
+
+const bugCount = ref(0)
+const rereviewCount = ref(0)
+
+async function refreshNotifications() {
+  try {
+    const n = await fetchNotifications()
+    bugCount.value = n.bugCount
+    rereviewCount.value = n.rereviewCount
+  } catch { /* silently ignore */ }
+}
+onMounted(() => {
+  if (session.user?.role === 'admin' || session.user?.role === 'qc_manager') {
+    refreshNotifications()
+    setInterval(refreshNotifications, 30000)
+  }
+})
 
 const menuItems = [
   { path: '/dashboard', label: '工作台', icon: Monitor, roles: ['admin', 'qc_manager', 'viewer'] },
@@ -27,13 +44,13 @@ const menuItems = [
   { path: '/database', label: '数据总库', icon: Files, roles: ['admin', 'qc_manager'] },
   { path: '/task-types', label: '任务类型管理', icon: CollectionTag, roles: ['admin', 'qc_manager'] },
   { path: '/task-pool', label: '人工质检入口', icon: VideoCamera },
-  { path: '/rereview-approvals', label: '重新质检审批', icon: Finished, roles: ['admin', 'qc_manager'] },
   { path: '/qc-history', label: '历史审计', icon: Finished, roles: ['admin', 'qc_manager'] },
   { path: '/dataset-management', label: '训练数据集', icon: FolderOpened },
   { path: '/accounts', label: '账号管理', icon: User, roles: ['admin', 'qc_manager'] }
 ]
 
 const isAdmin = computed(() => session.user?.role === 'admin')
+const isQcManager = computed(() => session.user?.role === 'qc_manager')
 
 const visibleMenuItems = computed(() => menuItems.filter((item) => !item.roles || item.roles.includes(session.user?.role ?? 'viewer')))
 
@@ -60,6 +77,10 @@ const handleUserCommand = async (command: string) => {
     router.push('/bug-management')
     return
   }
+  if (command === 'rereview-approvals') {
+    router.push('/rereview-approvals')
+    return
+  }
   if (command === 'logout') {
     await logout()
   }
@@ -84,11 +105,6 @@ const handleUserCommand = async (command: string) => {
         </el-menu-item>
       </el-menu>
 
-      <div v-if="isAdmin" class="settings-entry" @click="router.push('/settings')">
-        <el-icon><Setting /></el-icon>
-        <span>设置</span>
-      </div>
-
       <div class="storage-card">
         <div class="storage-title">MinIO 对象存储</div>
         <div class="storage-path">默认 bucket: yaocao</div>
@@ -110,7 +126,10 @@ const handleUserCommand = async (command: string) => {
           <el-dropdown trigger="click" @command="handleUserCommand">
             <div class="user-dropdown-trigger">
               <el-button plain @click.stop="logout">退出登录</el-button>
-              <el-avatar>{{ session.user?.avatar ?? '?' }}</el-avatar>
+              <el-badge v-if="isAdmin || isQcManager" :value="bugCount + rereviewCount" :hidden="bugCount + rereviewCount === 0" class="avatar-badge">
+                <el-avatar>{{ session.user?.avatar ?? '?' }}</el-avatar>
+              </el-badge>
+              <el-avatar v-else>{{ session.user?.avatar ?? '?' }}</el-avatar>
               <div class="user-meta">
                 <div>{{ session.user?.name ?? '未登录' }}</div>
                 <span>{{ session.user?.role ?? '-' }}</span>
@@ -119,7 +138,8 @@ const handleUserCommand = async (command: string) => {
             </div>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item v-if="isAdmin" command="bug-management">BUG管理</el-dropdown-item>
+                <el-dropdown-item v-if="isAdmin" command="bug-management">BUG管理 <span v-if="bugCount > 0" class="menu-badge">{{ bugCount }}</span></el-dropdown-item>
+                <el-dropdown-item v-if="isAdmin || isQcManager" command="rereview-approvals">重新质检审批 <span v-if="rereviewCount > 0" class="menu-badge">{{ rereviewCount }}</span></el-dropdown-item>
                 <el-dropdown-item v-if="isAdmin" command="settings">设置</el-dropdown-item>
                 <el-dropdown-item command="logout">退出登录</el-dropdown-item>
               </el-dropdown-menu>
@@ -138,24 +158,7 @@ const handleUserCommand = async (command: string) => {
 </template>
 
 <style scoped>
-.settings-entry {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 46px;
-  margin: 6px 8px;
-  padding: 0 20px;
-  border-radius: 12px;
-  color: #cbd5e1;
-  font-size: 14px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
 
-.settings-entry:hover {
-  color: #fff;
-  background: rgba(37, 99, 235, 0.22);
-}
 
 .user-dropdown-trigger {
   display: flex;

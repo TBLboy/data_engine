@@ -1,3 +1,53 @@
+
+## 2026-07-10 14:35 CST
+
+- Type: bugfix
+- Status: resolved, verified
+- Importance: critical
+- Reusable: yes
+- Objective: 修复"申请重新质检" Internal Server Error — audit_events 表两列宽度溢出
+
+- Root cause:
+  - **`detail` 列**：模型定义 `String(500)`，生产 DB 实际为 `VARCHAR(64)`（历史漂移）。复检 audit detail 字符串 65 字节超限
+  - **`id` 列**：模型 + baseline migration 均定义 `String(64)`，但复检 audit ID 格式 `audit_rereview_req_{episode_id}_{timestamp}` = 67 字符，天然超限
+  - 另：reviewer 历史任务池调用未定义的 `format_time()` 导致 NameError
+
+- Work completed:
+  - 新增 `format_time(dt)` helper 函数
+  - DB 直接执行 `ALTER TABLE audit_events ALTER COLUMN detail TYPE VARCHAR(500)` 和 `ALTER COLUMN id TYPE VARCHAR(128)`
+  - 模型 `audit.py` 中 `id` 列从 `String(64)` 改为 `String(128)`
+  - Dockerfile 改为 `start.sh` 启动脚本，自动在容器启动时执行 `alembic upgrade head`
+  - 排查过程确认：其他 audit 事件（claim/submit/dispatch 等）ID 均在 61 字符以内，不受影响。只有 rereview 三种事件 ID 前缀过长
+
+- Problems encountered:
+  - Alembic `op.alter_column` / `op.execute` 在容器内未生效（疑似 Docker 层缓存导致 migration 文件未进镜像）
+  - `_audit_detail` 临时截断方案误伤 `_active_lock_owner` 函数体，已通过 git checkout 撤回
+  - 初始排查方向错误——一直聚焦 `detail` 列，实际第二次报错是 `id` 列
+
+- New deployment risk analysis:
+  - `detail` 列：新机部署 **不会** 遇到此问题（baseline migration 已创建为 500，当前环境漂移是孤立问题）
+  - `id` 列：新机部署 **会** 遇到此问题（baseline migration 20260623_0001 仍为 64）。目前模型已修正为 128，但 baseline migration 未同步更新——新机初始化时 baseline 建表后 `id` 仍为 64，需追加 migration 或提前修改 baseline
+
+- Business logic impact: 无新增
+
+- Resolution:
+  - `docker exec` 进 DB 容器直接执行 ALTER TABLE 绕过所有缓存和 Alembic 机制
+  - `git commit` 包含 format_time helper、模型 id 列修正、Dockerfile start.sh 改造
+
+- Verification:
+  - DB: `detail` = VARCHAR(500)、`id` = VARCHAR(128)
+  - Backend compile OK，容器 healthy
+  - 浏览器：复检申请不再报 Internal Server Error
+
+- Files changed:
+  - `backend/app/api/routes/qc.py`
+  - `backend/app/models/audit.py`
+  - `backend/Dockerfile`
+  - `backend/start.sh` (new)
+
+- Next steps:
+  - 同步修改 baseline migration `20260623_0001` 中 `audit_events.id` 从 64 到 128，确保新机部署零问题
+  - 继续浏览器端到端验收 reviewer 双卡片 + 申请重检 + admin 审批 + admin 认领 done
 ## 2026-07-10 17:45 CST
 
 - Type: deployment

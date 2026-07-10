@@ -90,6 +90,8 @@ docker compose -f deploy/docker-compose.yml up --build -d backend frontend
 - 前端页面通过 Vue Router 加载，刷新非根路径页面时 nginx 会返回 index.html
 - MinIO 凭据不对会导致扫描和视频播放失败，但登录和页面浏览不受影响
 - 数据库 migration 支持增量升级，重复执行 alembic upgrade head 是安全的
+- 从 v20260710 起，backend 容器启动脚本 (start.sh) 会自动执行 alembic upgrade head，
+  日常更新只需 docker compose up -d --build backend，无需手动跑 migration
 ```
 
 ---
@@ -105,6 +107,9 @@ docker compose -f deploy/docker-compose.yml up --build -d
 
 # 如果数据库 schema 有更新
 docker compose -f deploy/docker-compose.yml exec backend alembic upgrade head
+
+# 注：日常部署/更新只需 docker compose up -d --build backend，
+# start.sh 会在容器启动时自动执行 alembic upgrade head
 ```
 
 ## 完全重置

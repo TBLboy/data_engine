@@ -7,7 +7,7 @@ from app.core.db import Base
 class AuditEvent(Base):
     __tablename__ = 'audit_events'
 
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
     operator: Mapped[str] = mapped_column(String(64), nullable=False)
     action: Mapped[str] = mapped_column(String(128), nullable=False)
     target: Mapped[str] = mapped_column(String(128), nullable=False)

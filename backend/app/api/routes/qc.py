@@ -120,14 +120,15 @@ def healthcheck() -> dict[str, str]:
 def _utcnow() -> datetime:
     return datetime.utcnow()
 
+def format_time(dt):
+    return dt.replace(microsecond=0).isoformat() if dt else ''
 
 def _active_lock_owner(task: QcTask) -> str:
     if task.lock_owner_user_id and task.lock_expires_at and task.lock_expires_at > _utcnow():
         return task.lock_owner_user_id
     return ''
-
-
 def _clear_task_lock(task: QcTask) -> None:
+
     task.lock_owner_user_id = ''
     task.lock_owner_name = ''
     task.lock_acquired_at = None
@@ -2275,3 +2276,16 @@ def ai_chat_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get('/notifications')
+def get_notification_counts(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    bug_count = db.query(BugReport).filter(BugReport.status == 'open').count()
+    rereview_count = db.query(QcRereviewRequest).filter(QcRereviewRequest.status == 'pending').count()
+    return {
+        'bugCount': bug_count,
+        'rereviewCount': rereview_count,
+    }

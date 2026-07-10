@@ -824,3 +824,14 @@ export async function* postChatStream(payload: AiChatRequest) {
     reader.releaseLock()
   }
 }
+
+// --- notifications ---
+
+export interface NotificationCounts {
+    bugCount: number
+    rereviewCount: number
+}
+
+export function fetchNotifications(): Promise<NotificationCounts> {
+    return request<NotificationCounts>('/notifications')
+}

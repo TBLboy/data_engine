@@ -873,3 +873,26 @@ p {
 .audit-revision {
   margin-bottom: 0;
 }
+
+.avatar-badge .el-badge__content {
+  font-size: 10px;
+  height: 16px;
+  min-width: 16px;
+  line-height: 16px;
+  padding: 0 4px;
+}
+
+.menu-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #f56c6c;
+  color: #fff;
+  font-size: 11px;
+  margin-left: 8px;
+  vertical-align: middle;
+}

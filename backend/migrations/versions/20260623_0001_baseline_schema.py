@@ -20,7 +20,7 @@ depends_on = None
 def upgrade() -> None:
     op.create_table(
         'audit_events',
-        sa.Column('id', sa.String(length=64), nullable=False),
+        sa.Column('id', sa.String(length=128), nullable=False),
         sa.Column('operator', sa.String(length=64), nullable=False),
         sa.Column('action', sa.String(length=128), nullable=False),
         sa.Column('target', sa.String(length=128), nullable=False),
@@ -30,7 +30,7 @@ def upgrade() -> None:
     )
     op.create_table(
         'task_types',
-        sa.Column('id', sa.String(length=64), nullable=False),
+        sa.Column('id', sa.String(length=128), nullable=False),
         sa.Column('name', sa.String(length=128), nullable=False),
         sa.Column('description', sa.String(length=255), nullable=False),
         sa.Column('total_batches', sa.Integer(), nullable=False),
@@ -39,7 +39,7 @@ def upgrade() -> None:
     )
     op.create_table(
         'users',
-        sa.Column('id', sa.String(length=64), nullable=False),
+        sa.Column('id', sa.String(length=128), nullable=False),
         sa.Column('username', sa.String(length=64), nullable=False),
         sa.Column('name', sa.String(length=64), nullable=False),
         sa.Column('role', sa.String(length=32), nullable=False),
@@ -52,7 +52,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_users_username'), 'users', ['username'], unique=True)
     op.create_table(
         'batches',
-        sa.Column('id', sa.String(length=64), nullable=False),
+        sa.Column('id', sa.String(length=128), nullable=False),
         sa.Column('task_type_id', sa.String(length=64), nullable=False),
         sa.Column('name', sa.String(length=128), nullable=False),
         sa.Column('imported_at', sa.DateTime(), nullable=False),
@@ -70,7 +70,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_batches_task_type_id'), 'batches', ['task_type_id'], unique=False)
     op.create_table(
         'episodes',
-        sa.Column('id', sa.String(length=64), nullable=False),
+        sa.Column('id', sa.String(length=128), nullable=False),
         sa.Column('batch_id', sa.String(length=64), nullable=False),
         sa.Column('task_name', sa.String(length=128), nullable=False),
         sa.Column('duration_sec', sa.Float(), nullable=False),
@@ -102,7 +102,7 @@ def upgrade() -> None:
     op.create_index(op.f('ix_qc_review_revisions_episode_id'), 'qc_review_revisions', ['episode_id'], unique=False)
     op.create_table(
         'qc_tasks',
-        sa.Column('id', sa.String(length=64), nullable=False),
+        sa.Column('id', sa.String(length=128), nullable=False),
         sa.Column('episode_id', sa.String(length=64), nullable=False),
         sa.Column('batch_id', sa.String(length=64), nullable=False),
         sa.Column('batch_name', sa.String(length=128), nullable=False),
