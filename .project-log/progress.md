@@ -1,3 +1,105 @@
+## 2026-07-10 17:45 CST
+
+- Type: deployment
+- Status: deployed, verified
+- Importance: high
+- Reusable: no
+- Objective: 部署本轮全部变更到生产容器。
+- Work completed:
+  - `docker compose up --build -d backend frontend` 重建并启动，backend healthy、frontend running。
+  - `alembic upgrade head` 成功将数据库从 20260708_0018 升级到 20260710_0019（新增 `qc_rereview_requests` 表）。
+  - 修复了两处构建失败：import 缺失 `ReviewerCurrentTasksPayloadSchema` / `ReviewerHistoryTasksPayloadSchema`；删除重复的 rereview 路由代码块。
+- Business logic impact: 无新增，本轮仅部署验证。
+- Problems encountered:
+  - 首次 backend 构建启动报错 `NameError: ReviewerCurrentTasksPayloadSchema is not defined` — import 遗漏。
+  - 再次启动报错 `RereviewRequestItemSchema is not defined` — 文件中有 linter 产生的重复路由块使用了未导入的 schema 和旧 URL。
+- Resolution:
+  - 补充 `ReviewerCurrentTasksPayloadSchema`、`ReviewerHistoryTasksPayloadSchema` import。
+  - 删除重复的旧 rereview 路由块（lines 924-1050），保留末尾我手写的版本。
+- Verification:
+  - `docker compose ps backend frontend` 确认 backend Up (healthy)、frontend Up。
+  - alembic history 确认 head = 20260710_0019。
+- Files changed: `backend/app/api/routes/qc.py`（import 补全 + 删除重复代码）
+- Next steps: 浏览器端到端验收 reviewer 双卡片 / 申请重检 / admin 审批 / admin 认领 done。
+
+## 2026-07-10 17:30 CST
+
+- Type: feature
+- Status: implemented, compiled
+- Importance: high
+- Reusable: yes
+- Objective: 兑现 reviewer 当前/历史任务池、admin 接管 done、重新质检申请与审批的完整闭环。
+- Work completed:
+  - 后端 claim/submit/release 状态机收口：reviewer 仅可认领 assigned+派发给自己 的任务；admin 可认领 new/assigned/done 的 active 任务；admin 认领 done 时执行 reopen（episode 重置为 in_review/pending）。
+  - release 仅允许 in_review 状态；submit 仅允许 active+in_review+本人锁。
+  - 新增 `QcRereviewRequest` 模型 + migration `20260710_0019_qc_rereview_requests.py`。
+  - 新增后端路由：POST `/qc/episodes/{id}/rereview-request`、GET `/admin/rereview-requests`、POST `/admin/rereview-requests/{id}/approve`、POST `/admin/rereview-requests/{id}/reject`。
+  - 新增后端路由：GET `/reviewer/tasks/current`、GET `/reviewer/tasks/history`（分页，history 含 hasPendingRequest）。
+  - manual-qc context 新增 viewMode/canClaim/canSubmit/taskStatus 权限标志。
+  - 前端 `task-pool.vue` reviewer 改为双卡片独立分页：我的任务清单 + 历史任务清单。
+  - 前端 `task-pool.vue` 历史卡 `申请重新质检` 按钮已启用，支持填写原因提交申请。
+  - 新增 `rereview-approvals.vue`（admin/qc_manager 审批页），支持批准/拒绝并补备注。
+  - 路由 + 侧边栏菜单已接入 `rereview-approvals`。
+  - 前端 `manual-qc.vue` claim/submit 按钮改为受后端权限标志控制；历史查看模式加提示 alert。
+- Business logic impact: 任务状态机与角色权限规则已落地到代码。reviewer 当前池不再含 done，done 只能通过审批流重新分配。
+- Problems encountered:
+  - build 首次失败：`rereview-approvals.vue` 引入了未使用的 `computed`。
+- Resolution: 移除 `computed` import 后重 build 通过。
+- Verification:
+  - Python `py_compile` 全部通过。
+  - `npm run build` 通过，产出 `rereview-approvals-CwwoPixG.js`、`task-pool-CzSt90lE.js` 等新 chunk。
+- Unverified items:
+  - 需要在生产/测试环境执行 `alembic upgrade head`（升级到 20260710_0019）。
+  - 需要浏览器端到端验证 reviewer 双卡片 + 申请重检 + admin 审批 + admin 认领 done 完整路径。
+- Files changed:
+  - `backend/app/api/routes/qc.py`
+  - `backend/app/models/qc.py`
+  - `backend/app/models/__init__.py`
+  - `backend/app/schemas/qc.py`
+  - `backend/app/services/payloads.py`
+  - `backend/migrations/versions/20260710_0019_qc_rereview_requests.py`
+  - `frontend/src/api/client.ts`
+  - `frontend/src/components/AppLayout.vue`
+  - `frontend/src/pages/manual-qc.vue`
+  - `frontend/src/pages/rereview-approvals.vue`
+  - `frontend/src/pages/task-pool.vue`
+  - `frontend/src/router/index.ts`
+  - `.project-log/business-logic/main.md`
+  - `.project-log/business-logic/decision-records.md`
+  - `.project-log/debugging/known-issues.md`
+  - `.project-log/progress.md`
+  - `.project-log/current-session.md`
+- Next steps: 执行 migration + Docker 部署后做浏览器验收测试。
+
+## 2026-07-10 15:10 CST
+
+- Type: decision
+- Status: validated
+- Importance: high
+- Reusable: yes
+- Objective: 明确 reviewer 当前任务池 / 历史任务池、admin 接管 assigned/done 任务、claim 权限与 reopen 语义，作为下一阶段代码实现的正式业务规则。
+- Work completed:
+  - 审计现有 `QcTask` / `Episode` / claim / release / submit / task-pool 链路，确认当前任务池把 `done` 混入 reviewer 当前列表、reviewer 可认领未派发任务、`done` 缺少清晰阻断与 reopen 规则。
+  - 与用户确认新的目标业务逻辑：reviewer 当前任务池只保留 `assigned/in_review`；历史任务池单独展示已完成历史记录；admin 允许直接接管 `done`，且该动作明确语义为 `reopen + ownership transfer`。
+  - 将新规则细化写入 `.project-log/business-logic/main.md`，补齐角色行为、任务池定义、claim/release/submit 约束、admin reopen done 的状态重置要求、前端页面改造点。
+  - 在 `.project-log/business-logic/decision-records.md` 记录正式决策；新增 `.project-log/debugging/known-issues.md` 记录现状漏洞与修复目标，供后续实现时逐条对照。
+- Business logic impact: 主干业务逻辑已更新；后续实现必须遵守“任务池视图靠查询区分、admin 认领 done = 正式 reopen”规则。
+- Problems encountered:
+  - 现有代码中 `is_active` 与任务池视图语义容易混淆。
+  - 如果历史任务池只依赖当前 `QcTask.status='done'`，admin 接管 done 后旧 reviewer 历史记录可能消失。
+- Resolution:
+  - 明确 `is_active` 只表示当前有效任务尝试，不再承担“当前池/历史池”语义。
+  - 将 reviewer 历史任务池定义为“已完成历史记录 / revision 视图”，而不是简单复用当前 active task 查询。
+- Verification:
+  - 已通过代码审计确认相关后端/前端入口与状态机现状；本次仅更新业务逻辑文档，未改代码。
+- Unverified items:
+  - 业务规则已确认，但尚未真正改动后端接口、前端页面与数据库查询逻辑。
+- Files changed:
+  - `.project-log/business-logic/main.md`
+  - `.project-log/business-logic/decision-records.md`
+  - `.project-log/debugging/known-issues.md`
+- Next steps: 按新业务规则实施后端 claim/release/submit 权限收口、reviewer 当前/历史任务池分页接口、manual-qc 权限模式与前端双卡片页面改造。
+
 ## 2026-07-08 19:25 CST
 
 - Type: feature + infrastructure + bugfix

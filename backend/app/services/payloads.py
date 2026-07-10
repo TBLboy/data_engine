@@ -276,6 +276,28 @@ def serialize_task(task: QcTask, current_user: User | None = None) -> dict:
     }
 
 
+def _manual_qc_permissions(task: QcTask | None, current_user: User | None = None) -> tuple[str, bool, bool]:
+    if not task or not current_user:
+        return 'history', False, False
+
+    task_payload = serialize_task(task, current_user)
+    review_lock = task_payload['reviewLock']
+    if current_user.role == 'admin':
+        can_claim = bool(task.is_active and task.status in ('new', 'assigned', 'done') and (not review_lock['isLocked'] or review_lock['isMine']))
+        can_submit = bool(review_lock['isMine'] and task.status == 'in_review')
+        return 'active', can_claim, can_submit
+
+    if current_user.role == 'reviewer':
+        can_claim = bool(task.is_active and task.status == 'assigned' and task.assignee == current_user.name and not review_lock['isLocked'])
+        can_submit = bool(review_lock['isMine'] and task.status == 'in_review')
+        if task.status == 'done':
+            return 'history', False, False
+        return 'active', can_claim, can_submit
+
+    can_submit = bool(review_lock['isMine'] and task.status == 'in_review')
+    return ('active' if task.status != 'done' else 'history'), False, can_submit
+
+
 def serialize_bug_report(report: BugReport) -> dict:
     import json as _json
     filenames: list[str] = []
@@ -748,8 +770,9 @@ def history_payload(db: Session, revision_page: int = 1, revision_page_size: int
     audit_total = audit_query.count()
     audits = audit_query.offset((audit_page - 1) * audit_page_size).limit(audit_page_size).all()
 
-    episodes = _active_episode_query(db).order_by(Episode.updated_at.desc()).all()
-    batches = _batch_query(db).options(joinedload(Batch.episodes)).order_by(Batch.imported_at.desc()).all()
+    episodes = _active_episode_query(db).options(joinedload(Episode.batch)).order_by(Episode.updated_at.desc()).all()
+    # batch.episode_count / sampled_episode_count 等已冗余在 Batch 表中，无需 joinedload episodes
+    batches = _batch_query(db).order_by(Batch.imported_at.desc()).all()
     return {
         'auditRecords': [serialize_audit(item) for item in audits],
         'auditTotal': audit_total,
@@ -769,37 +792,98 @@ def _latest_activity_time(batch: Batch) -> datetime | None:
 
 def build_history_report_payload(db: Session, selected_batch_id: str = 'all') -> dict:
     batches = _batch_query(db).order_by(Batch.imported_at.desc()).all()
-    revisions = db.query(QcReviewRevision).order_by(QcReviewRevision.time.desc(), QcReviewRevision.revision_no.desc()).all()
-    audits = db.query(AuditEvent).order_by(AuditEvent.time.desc()).all()
-    episodes = _active_episode_query(db).order_by(Episode.updated_at.desc()).all()
 
     scoped_batches = batches if selected_batch_id == 'all' else [item for item in batches if item.id == selected_batch_id]
     scoped_batch_ids = {item.id for item in scoped_batches}
-    scoped_episodes = [item for item in episodes if item.batch_id in scoped_batch_ids]
-    scoped_episode_ids = {item.id for item in scoped_episodes}
-    scoped_task_ids = {task.id for episode in scoped_episodes for task in episode.qc_tasks}
-    scoped_revisions = [item for item in revisions if item.episode.batch_id in scoped_batch_ids]
-    scoped_audits = [
-        item for item in audits
-        if item.target in scoped_batch_ids
-        or item.target in scoped_episode_ids
-        or any(f'task={task_id}' in item.detail for task_id in scoped_task_ids)
-    ]
 
-    done_episodes = [item for item in scoped_episodes if item.qc_status == 'done']
-    fail_episodes = [item for item in scoped_episodes if item.qc_result == 'fail']
-    pass_episodes = [item for item in scoped_episodes if item.qc_result == 'pass']
-    sampled_episodes = [item for item in scoped_episodes if item.sampled_for_qc == 1]
+    if not scoped_batch_ids:
+        return {
+            'generatedAt': format_time(datetime.utcnow()),
+            'selectedBatchId': selected_batch_id,
+            'summary': {'batchCount': 0, 'episodeCount': 0, 'sampledEpisodeCount': 0, 'completedSampleCount': 0, 'failEpisodeCount': 0, 'passEpisodeCount': 0, 'passRate': 0.0, 'auditEventCount': 0, 'revisionCount': 0},
+            'batchReports': [], 'topReasons': [], 'reviewers': [], 'recentEpisodes': [], 'recentRevisions': [], 'recentAuditRecords': [],
+        }
 
+    # ── 全部 episode（带 batch 预加载，避免 serialize 时 N+1）──
+    episodes = _active_episode_query(db).options(joinedload(Episode.batch)).filter(Episode.batch_id.in_(scoped_batch_ids)).order_by(Episode.updated_at.desc()).all()
+    scoped_episode_ids = {item.id for item in episodes}
+
+    # ── SQL 聚合：episode 统计 ──
+    ep_row = db.query(
+        func.count(Episode.id).label('total'),
+        func.coalesce(func.sum(case((Episode.sampled_for_qc == 1, 1), else_=0)), 0).label('sampled'),
+        func.coalesce(func.sum(case((Episode.qc_status == 'done', 1), else_=0)), 0).label('done'),
+        func.coalesce(func.sum(case((Episode.qc_result == 'fail', 1), else_=0)), 0).label('fail'),
+        func.coalesce(func.sum(case((Episode.qc_result == 'pass', 1), else_=0)), 0).label('passed'),
+    ).filter(Episode.batch_id.in_(scoped_batch_ids)).first()
+    total_ep, sampled_ep, done_ep, fail_ep, pass_ep = ep_row
+
+    # ── SQL 聚合：每 batch 的 fail / pass / done ──
+    batch_ep_stats = {}
+    for row in db.query(
+        Episode.batch_id,
+        func.coalesce(func.sum(case((Episode.qc_result == 'fail', 1), else_=0)), 0).label('fail_cnt'),
+        func.coalesce(func.sum(case((Episode.qc_result == 'pass', 1), else_=0)), 0).label('pass_cnt'),
+        func.coalesce(func.sum(case((Episode.qc_status == 'done', 1), else_=0)), 0).label('done_cnt'),
+    ).filter(Episode.batch_id.in_(scoped_batch_ids)).group_by(Episode.batch_id).all():
+        batch_ep_stats[row.batch_id] = (row.fail_cnt, row.pass_cnt, row.done_cnt)
+
+    # ── SQL 聚合：每 batch 的 revision 数 ──
+    batch_rev_counts = dict(
+        db.query(Episode.batch_id, func.count(QcReviewRevision.id))
+        .join(QcReviewRevision, QcReviewRevision.episode_id == Episode.id)
+        .filter(Episode.batch_id.in_(scoped_batch_ids))
+        .group_by(Episode.batch_id).all()
+    )
+
+    # ── SQL 聚合：每 batch 的 reviewer 数 ──
+    batch_reviewer_counts = dict(
+        db.query(Episode.batch_id, func.count(func.distinct(Episode.reviewer)))
+        .filter(Episode.batch_id.in_(scoped_batch_ids), Episode.reviewer != '-')
+        .group_by(Episode.batch_id).all()
+    )
+
+    # ── SQL：每 batch 最近 revision 时间 ──
+    batch_latest_rev = dict(
+        db.query(Episode.batch_id, func.max(QcReviewRevision.time))
+        .join(QcReviewRevision, QcReviewRevision.episode_id == Episode.id)
+        .filter(Episode.batch_id.in_(scoped_batch_ids))
+        .group_by(Episode.batch_id).all()
+    )
+
+    # ── 审计事件（按 batch scope 过滤，不追 task 维度）──
+    scoped_audits = db.query(AuditEvent).filter(
+        AuditEvent.target.in_(scoped_batch_ids | scoped_episode_ids)
+    ).order_by(AuditEvent.time.desc()).all()
+    # 每 batch 审计计数
+    batch_audit_counts: dict[str, int] = {}
+    for audit in scoped_audits:
+        if audit.target in scoped_batch_ids:
+            batch_audit_counts[audit.target] = batch_audit_counts.get(audit.target, 0) + 1
+        elif audit.target in scoped_episode_ids:
+            # 找到该 episode 所属 batch
+            for ep in episodes:
+                if ep.id == audit.target:
+                    batch_audit_counts[ep.batch_id] = batch_audit_counts.get(ep.batch_id, 0) + 1
+                    break
+
+    # ── Revision（按 batch scope 过滤）──
+    scoped_revisions = db.query(QcReviewRevision).join(Episode).filter(
+        Episode.batch_id.in_(scoped_batch_ids)
+    ).order_by(QcReviewRevision.time.desc(), QcReviewRevision.revision_no.desc()).all()
+    revision_total = len(scoped_revisions)
+    audit_total = len(scoped_audits)
+
+    # ── Reviewer 与 Reason 统计（已有 SQL 聚合，保持不变）──
     reviewer_rows = db.query(
         Episode.reviewer.label('name'),
-        func.sum(case((Episode.qc_status.in_(['assigned', 'in_review']), 1), else_=0)).label('assigned'),
-        func.sum(case((Episode.qc_status == 'done', 1), else_=0)).label('done'),
-        func.sum(case((Episode.qc_result == 'pass', 1), else_=0)).label('passed'),
+        func.coalesce(func.sum(case((Episode.qc_status.in_(['assigned', 'in_review']), 1), else_=0)), 0).label('assigned'),
+        func.coalesce(func.sum(case((Episode.qc_status == 'done', 1), else_=0)), 0).label('done'),
+        func.coalesce(func.sum(case((Episode.qc_result == 'pass', 1), else_=0)), 0).label('passed'),
     ).filter(
         Episode.reviewer != '-',
         Episode.batch_id.in_(scoped_batch_ids),
-    ).group_by(Episode.reviewer).order_by(Episode.reviewer.asc()).all() if scoped_batch_ids else []
+    ).group_by(Episode.reviewer).order_by(Episode.reviewer.asc()).all()
 
     reason_counts = db.query(
         Episode.reason_code,
@@ -807,25 +891,17 @@ def build_history_report_payload(db: Session, selected_batch_id: str = 'all') ->
     ).filter(
         Episode.reason_code != '-',
         Episode.batch_id.in_(scoped_batch_ids),
-    ).group_by(Episode.reason_code).order_by(func.count(Episode.id).desc(), Episode.reason_code.asc()).all() if scoped_batch_ids else []
+    ).group_by(Episode.reason_code).order_by(func.count(Episode.id).desc(), Episode.reason_code.asc()).all()
     total_reasons = sum(item.count for item in reason_counts)
     category_map = {item['reason']: item['category'] for item in reason_stats_payload()}
 
+    # ── 构建 batch_reports（使用 SQL 聚合数据）──
     batch_reports = []
     for batch in scoped_batches:
-        batch_episode_ids = {episode.id for episode in batch.episodes}
-        batch_done = [episode for episode in batch.episodes if episode.qc_status == 'done']
-        batch_fail = [episode for episode in batch.episodes if episode.qc_result == 'fail']
-        batch_pass = [episode for episode in batch.episodes if episode.qc_result == 'pass']
-        batch_revisions = [revision for revision in scoped_revisions if revision.episode_id in batch_episode_ids]
-        batch_task_ids = {task.id for episode in batch.episodes for task in episode.qc_tasks}
-        batch_audits = [
-            audit for audit in scoped_audits
-            if audit.target == batch.id
-            or audit.target in batch_episode_ids
-            or any(f'task={task_id}' in audit.detail for task_id in batch_task_ids)
-        ]
-        batch_reviewers = {episode.reviewer for episode in batch.episodes if episode.reviewer != '-'}
+        fail_cnt, pass_cnt, done_cnt = batch_ep_stats.get(batch.id, (0, 0, 0))
+        rev_time = batch_latest_rev.get(batch.id)
+        candidates = [t for t in (batch.imported_at, rev_time) if t is not None]
+        latest_activity = max(candidates) if candidates else None
         batch_reports.append({
             'batchId': batch.id,
             'batchName': batch.name,
@@ -836,14 +912,14 @@ def build_history_report_payload(db: Session, selected_batch_id: str = 'all') ->
             'episodeCount': batch.episode_count,
             'sampledEpisodeCount': batch.sampled_episode_count,
             'completedSampleCount': batch.completed_sample_count,
-            'failEpisodeCount': len(batch_fail),
-            'passEpisodeCount': len(batch_pass),
-            'passRate': round((len(batch_pass) / len(batch_done)) * 100, 1) if batch_done else 0.0,
+            'failEpisodeCount': fail_cnt,
+            'passEpisodeCount': pass_cnt,
+            'passRate': round((pass_cnt / done_cnt) * 100, 1) if done_cnt else 0.0,
             'topReason': batch.top_reason,
-            'reviewerCount': len(batch_reviewers),
-            'auditEventCount': len(batch_audits),
-            'revisionCount': len(batch_revisions),
-            'latestActivityAt': format_optional_time(_latest_activity_time(batch)),
+            'reviewerCount': batch_reviewer_counts.get(batch.id, 0),
+            'auditEventCount': batch_audit_counts.get(batch.id, 0),
+            'revisionCount': batch_rev_counts.get(batch.id, 0),
+            'latestActivityAt': format_optional_time(latest_activity),
         })
 
     return {
@@ -851,14 +927,14 @@ def build_history_report_payload(db: Session, selected_batch_id: str = 'all') ->
         'selectedBatchId': selected_batch_id,
         'summary': {
             'batchCount': len(scoped_batches),
-            'episodeCount': len(scoped_episodes),
-            'sampledEpisodeCount': len(sampled_episodes),
-            'completedSampleCount': len(done_episodes),
-            'failEpisodeCount': len(fail_episodes),
-            'passEpisodeCount': len(pass_episodes),
-            'passRate': round((len(pass_episodes) / len(done_episodes)) * 100, 1) if done_episodes else 0.0,
-            'auditEventCount': len(scoped_audits),
-            'revisionCount': len(scoped_revisions),
+            'episodeCount': total_ep or 0,
+            'sampledEpisodeCount': sampled_ep or 0,
+            'completedSampleCount': done_ep or 0,
+            'failEpisodeCount': fail_ep or 0,
+            'passEpisodeCount': pass_ep or 0,
+            'passRate': round((pass_ep / done_ep) * 100, 1) if done_ep else 0.0,
+            'auditEventCount': audit_total,
+            'revisionCount': revision_total,
         },
         'batchReports': batch_reports,
         'topReasons': [
@@ -873,13 +949,13 @@ def build_history_report_payload(db: Session, selected_batch_id: str = 'all') ->
         'reviewers': [
             {
                 'name': item.name,
-                'assigned': item.assigned or 0,
-                'done': item.done or 0,
-                'passRate': round(((item.passed or 0) / (item.done or 0)) * 100, 1) if item.done else 0.0,
+                'assigned': item.assigned,
+                'done': item.done,
+                'passRate': round((item.passed / item.done) * 100, 1) if item.done else 0.0,
             }
             for item in reviewer_rows
         ],
-        'recentEpisodes': [serialize_episode(item) for item in scoped_episodes[:20]],
+        'recentEpisodes': [serialize_episode(item) for item in episodes[:20]],
         'recentRevisions': [serialize_revision(item) for item in scoped_revisions[:40]],
         'recentAuditRecords': [serialize_audit(item) for item in scoped_audits[:60]],
     }
@@ -1038,6 +1114,7 @@ def manual_qc_context_payload(db: Session, episode_id: str, current_user: User |
         'expiresAt': None,
         'version': 0,
     }
+    view_mode, can_claim, can_submit = _manual_qc_permissions(task, current_user)
     real_context = _build_real_manual_qc_context(db, episode_id)
 
     if real_context:
@@ -1054,6 +1131,10 @@ def manual_qc_context_payload(db: Session, episode_id: str, current_user: User |
             'revisions': [serialize_revision(item) for item in revisions],
             'reviewLock': review_lock,
             'media': _manual_qc_media(db, episode_id, current_user),
+            'taskStatus': task.status if task else None,
+            'viewMode': view_mode,
+            'canClaim': can_claim,
+            'canSubmit': can_submit,
         }
 
     return {
@@ -1065,6 +1146,10 @@ def manual_qc_context_payload(db: Session, episode_id: str, current_user: User |
         'revisions': [serialize_revision(item) for item in revisions],
         'reviewLock': review_lock,
         'media': _manual_qc_media(db, episode_id, current_user),
+        'taskStatus': task.status if task else None,
+        'viewMode': view_mode,
+        'canClaim': can_claim,
+        'canSubmit': can_submit,
     }
 
 

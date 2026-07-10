@@ -81,7 +81,8 @@ const refreshPage = async () => {
   if (!selectedBatchId.value) {
     selectedBatchId.value = 'all'
   }
-  await loadReport()
+  // 报告在后台加载，不阻塞主页面渲染
+  loadReport()
 }
 
 onMounted(refreshPage)
@@ -186,7 +187,7 @@ const reasonTagType = (category: string) => {
         title="当前角色仅可查看在线历史与审计明细，批次报告与正式导出仅对管理员和质检主管开放。"
       />
 
-      <el-row :gutter="18" v-loading="loading || reportLoading">
+      <el-row :gutter="18" v-loading="loading">
         <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-blue"><span>审计事件</span><strong>{{ payload?.auditTotal ?? 0 }}</strong><small>{{ selectedBatchLabel }}</small></el-card></el-col>
         <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-green"><span>历史 Revision</span><strong>{{ payload?.revisionTotal ?? 0 }}</strong><small>支持按批次筛选</small></el-card></el-col>
         <el-col :span="6"><el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-orange"><span>Fail 记录</span><strong>{{ summary?.failEpisodeCount ?? episodes.filter((item) => item.qcResult === 'fail').length }}</strong><small>可追溯主原因码</small></el-card></el-col>

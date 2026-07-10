@@ -136,6 +136,208 @@ Accepted, & R_{fail} \le \theta
 
 - 完整设计文档：`software/dataset_consumption_batch_rejection_agent_guide.tex`
 
+## QC 任务池 / 历史任务池 / admin 重新质检 — 业务规则（2026-07-10 已确认）
+
+### 目标
+
+在现有人工质检体系上补齐 reviewer 当前任务池、reviewer 历史任务池、admin 直接接管已完成任务重新质检、以及 claim 权限收口规则，避免已完成任务被普通 reviewer 反复重做，同时保留 admin 的最高权限干预能力。
+
+### 核心语义
+
+- `QcTask.is_active` 表示**当前有效任务尝试 / 当前有效派发版本**，**不表示**“是否已完成”。
+- `QcTask.status` 表示当前任务尝试的处理进度，现阶段继续使用：`new / assigned / in_review / done`。
+- reviewer 的“当前任务池 / 历史任务池”是**业务视图**，由查询规则区分，不直接等价于数据库某一个字段。
+- admin 认领 `done` 任务不是“临时查看”，而是**直接 reopen 这条任务并接管所有权**。
+
+### 当前任务池与历史任务池定义
+
+#### reviewer 当前任务池
+
+必须同时满足：
+
+- `QcTask.is_active = 1`
+- `QcTask.assignee = 当前 reviewer`
+- `QcTask.status in ('assigned', 'in_review')`
+
+业务语义：
+
+- 这里只显示 reviewer 现在还能继续处理的任务。
+- 这里**绝不能出现 `done`**。
+- admin 接管后，任务必须立刻从原 reviewer 当前池消失。
+
+#### reviewer 历史任务池
+
+业务语义上应表示：
+
+- “该 reviewer 曾经完成过的人工质检记录”
+- 支持查看历史结果，并可对历史结果发起重新处理入口（reviewer 侧是申请重新质检；admin 侧可直接接管）
+
+实现口径建议：
+
+- 展示层以 `QcReviewRevision` / 完成记录为主，而不是简单依赖“当前 `QcTask.status='done'` 这一行还归属谁”。
+- 原因：若 admin 接管并 reopen 了原 `done` task，旧 reviewer 的历史记录不能因此消失。
+
+### 角色行为规则
+
+#### reviewer
+
+- `new`：不可认领（任务尚未正式进入其任务池）
+- `assigned`：仅当 `assignee == 当前 reviewer` 时可认领
+- `in_review`：仅锁持有人本人可继续提交或释放
+- `done`：不可认领；只能在历史任务池中查看历史，并按产品入口申请重新质检
+
+#### admin
+
+- `new`：可认领
+- `assigned`：可认领，即直接接管任务所有权
+- `in_review`：若他人有效锁仍在，则不可接管；若锁过期，可接管
+- `done`：可认领；认领动作的语义是 **reopen + ownership transfer**
+
+#### qc_manager
+
+当前先按非 admin 收口处理：
+
+- 不享有“直接接管 done 任务”的最高权限语义
+- 若后续业务决定与 admin 完全等权，再单独放开
+
+### admin 认领 done 的 reopen 语义
+
+当 admin 对 `done` 状态任务执行认领时，后端必须在同一事务中完成：
+
+1. 校验任务 `is_active = 1`
+2. 校验不存在他人的有效锁
+3. 将任务所有权切换给 admin
+4. 将 `QcTask.status: done -> in_review`
+5. 设置新的 lock owner / expires_at
+6. `QcTask.version += 1`
+7. 将 `Episode.reviewer` 改为 admin
+8. 将 `Episode.qc_status: done -> in_review`
+9. 将 `Episode.qc_result: pass/fail -> pending`
+10. 将 `Episode.reason_code` 重置为 `-`
+11. 将 `Episode.manual_qc_status` 重置为 `NOT_REVIEWED`
+12. 保留旧 `QcReviewRevision` 不删除，等待本次重新提交后追加新的 revision
+13. 写入审计日志，明确记录这是“admin reopen done task”
+
+禁止出现的脏状态：
+
+- `QcTask.status = in_review` 但 `Episode.qc_status = done`
+- admin 已接管，但旧 reviewer 当前任务池里仍能查到此任务
+- 旧历史 revision 被覆盖或删除
+
+### claim 接口业务约束
+
+#### reviewer claim
+
+必须同时满足：
+
+- `QcTask.is_active = 1`
+- `QcTask.status = 'assigned'`
+- `QcTask.assignee = 当前 reviewer`
+- 没有他人的有效锁
+
+禁止：
+
+- 认领 `new`
+- 认领 `done`
+- 认领派发给别人的任务
+- 认领 inactive 旧任务
+
+#### admin claim
+
+允许：
+
+- `is_active = 1`
+- `status in ('new', 'assigned', 'done')`
+- 若 `status = 'in_review'`，仅在锁过期后才能接管
+
+业务结果：
+
+- claim 成功后，任务所有权立即转移给 admin
+- 原 reviewer 当前任务池必须刷新后消失该任务
+- 若是 `done`，同时触发 reopen 语义
+
+### submit / release 约束
+
+#### submit
+
+只允许对满足以下条件的任务提交：
+
+- 当前 active task
+- `status = 'in_review'`
+- lock owner 是当前用户
+- version 原子匹配
+
+禁止：
+
+- 找不到 active task 时回退提交旧任务
+- 无锁提交
+- 对 `done` / `assigned` 直接提交
+
+#### release
+
+只允许：
+
+- `status = 'in_review'`
+- 当前用户是锁持有人，或 admin 明确执行强制释放
+
+禁止：
+
+- 对 `done` 执行 release 后把任务变回 `assigned/new`
+
+### 前端页面改造点
+
+#### reviewer /task-pool
+
+改为双卡片：
+
+1. **我的任务清单**
+   - 数据源：reviewer 当前任务池
+   - 独立分页
+   - 操作：`进入质检`
+
+2. **历史任务清单**
+   - 数据源：reviewer 历史完成记录
+   - 独立分页
+   - 操作：`进入质检`（建议实际呈现为历史查看模式）、`申请重新质检`
+
+#### admin /task-pool
+
+- 仍保留全局 QC 任务明细视图
+- `进入质检` 后允许对 `new/assigned/done` 执行 claim
+- 若 claim 的是 `done`，UI 文案需明确是“接管并重新质检”
+
+#### manual-qc 页面
+
+需要根据后端返回的任务状态 / 权限标志控制按钮：
+
+- reviewer 查看历史任务时：默认只读，不允许 claim/submit
+- admin 打开可接管的 `done` 任务时：允许 claim，claim 后进入重新质检状态
+- 页面需能正确处理“任务已被 admin 接管 / 版本已变更 / 锁已变化”的冲突提示
+
+### 审计要求
+
+admin 接管 reviewer 任务或 reopen done 任务时，审计必须记录：
+
+- 原审核员
+- 新审核员
+- 原状态
+- 是否从 `done` reopen
+- task id / episode id / version
+- 操作时间
+
+### 现状漏洞（待实现时一并修复）
+
+当前代码已确认存在以下问题：
+
+- reviewer 任务池查询会混入 `done`
+- reviewer 仍可认领 `未派发` 任务
+- `done` 任务缺少 claim 阻断
+- admin claim 会直接覆盖 assignee/reviewer，但没有清晰的 reopen 语义约束
+- `release` 可错误作用于 `done`，造成 task/episode 状态矛盾
+- `submit` 存在回退到非 active task 的风险
+
+上述漏洞在实现本轮任务池/历史池改造时必须同步收口。
+
 ## Verification Status
 
 - A: 已完成

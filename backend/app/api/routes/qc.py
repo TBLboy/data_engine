@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.config import BUG_REPORT_UPLOAD_DIR, get_settings
 from app.core.db import get_db
 from app.core.security import create_session_token, hash_password, verify_password, verify_session_token
-from app.models import AuditEvent, Batch, BugReport, Episode, EpisodeInventory, EpisodeObject, GeneralConfig, L3V2Config, ListRecord, QcReviewRevision, QcTask, ScanJob, TaskType, User
+from app.models import AuditEvent, Batch, BugReport, Episode, EpisodeInventory, EpisodeObject, GeneralConfig, L3V2Config, ListRecord, QcRereviewRequest, QcReviewRevision, QcTask, ScanJob, TaskType, User
 from app.schemas.qc import (
     AccountListPayloadSchema,
     AccountSchema,
@@ -45,8 +45,13 @@ from app.schemas.qc import (
     ManualQcSubmitRequest,
     ManualQcSubmitResponseSchema,
     QcTaskSchema,
+    RereviewRequestCreateSchema,
+    RereviewRequestDecisionSchema,
+    RereviewRequestListPayloadSchema,
     ResetPasswordRequest,
+    ReviewerCurrentTasksPayloadSchema,
     ReviewerDashboardPayloadSchema,
+    ReviewerHistoryTasksPayloadSchema,
     SessionPayloadSchema,
     TaskPoolPayloadSchema,
     TaskTypeCreateRequest,
@@ -137,6 +142,55 @@ def _active_batch_tasks(db: Session, batch_id: str):
     return db.query(QcTask).filter(QcTask.batch_id == batch_id, QcTask.is_active == 1)
 
 
+def _current_reviewer_tasks_query(db: Session, reviewer_name: str):
+    return db.query(QcTask).filter(
+        QcTask.is_active == 1,
+        QcTask.assignee == reviewer_name,
+        QcTask.status.in_(['assigned', 'in_review']),
+    )
+
+
+def _history_reviewer_revisions_query(db: Session, reviewer_name: str):
+    return db.query(QcReviewRevision).filter(
+        QcReviewRevision.operator == reviewer_name,
+    )
+
+
+def _serialize_rereview_request(item: QcRereviewRequest, db: Session) -> dict:
+    episode = db.query(Episode).filter(Episode.id == item.episode_id).first()
+    batch = db.query(Batch).filter(Batch.id == item.batch_id).first()
+    return {
+        'id': item.id,
+        'episodeId': item.episode_id,
+        'batchId': item.batch_id,
+        'batchName': batch.name if batch else '',
+        'taskId': item.task_id,
+        'requesterUserId': item.requester_user_id,
+        'requesterName': item.requester_name,
+        'reason': item.reason,
+        'status': item.status,
+        'approverUserId': item.approver_user_id,
+        'approverName': item.approver_name,
+        'decisionNote': item.decision_note,
+        'createdAt': item.created_at.replace(microsecond=0).isoformat() if item.created_at else '',
+        'decidedAt': item.decided_at.replace(microsecond=0).isoformat() if item.decided_at else None,
+    }
+
+
+def _create_rereview_task_from_done(task: QcTask, episode: Episode, requester_name: str) -> None:
+    _clear_task_lock(task)
+    task.assignee = requester_name
+    task.status = 'assigned'
+    task.version += 1
+    episode.qc_status = 'assigned'
+    episode.qc_result = 'pending'
+    episode.reviewer = requester_name
+    episode.reason_code = '-'
+    episode.manual_qc_status = 'NOT_REVIEWED'
+    episode.manual_qc_result_id = None
+    episode.updated_at = _utcnow()
+
+
 def _supersede_pending_batch_tasks(db: Session, batch_id: str, *, next_generation: int) -> list[QcTask]:
     """退役该批次所有旧任务（包括 done），为新派发版本让路。"""
     tasks = _active_batch_tasks(db, batch_id).all()
@@ -150,19 +204,36 @@ def _supersede_pending_batch_tasks(db: Session, batch_id: str, *, next_generatio
 
 
 def _ensure_task_claimable(task: QcTask, current_user: User) -> None:
+    if task.is_active != 1:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='任务已失效，请刷新后重试')
+
     active_owner = _active_lock_owner(task)
     # 锁已自然过期但任务状态仍卡在 in_review → 回退，防止出现"进行中却待认领"矛盾态
     if not active_owner and task.status == 'in_review':
         task.status = 'assigned' if task.assignee != '未派发' else 'new'
         _clear_task_lock(task)
+
     if active_owner and active_owner != current_user.id:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='任务已被其他审核员认领')
-    if current_user.role == 'reviewer' and task.assignee not in ('未派发', current_user.name):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='该任务未派发给当前审核员')
+
+    if current_user.role == 'admin':
+        if task.status not in ('new', 'assigned', 'done'):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='当前任务状态不支持管理员认领')
+        return
+
+    if current_user.role == 'reviewer':
+        if task.status != 'assigned':
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='当前任务状态不可认领')
+        if task.assignee != current_user.name:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='该任务未派发给当前审核员')
+        return
+
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='当前角色不允许认领该任务')
 
 
 def _claim_task(task: QcTask, episode: Episode, current_user: User) -> None:
     now = _utcnow()
+    previous_status = task.status
     _clear_task_lock(task)
     task.lock_owner_user_id = current_user.id
     task.lock_owner_name = current_user.name
@@ -173,6 +244,11 @@ def _claim_task(task: QcTask, episode: Episode, current_user: User) -> None:
     task.version += 1
     episode.qc_status = 'in_review'
     episode.reviewer = current_user.name
+    if previous_status == 'done':
+        episode.qc_result = 'pending'
+        episode.reason_code = '-'
+        episode.manual_qc_status = 'NOT_REVIEWED'
+        episode.manual_qc_result_id = None
     episode.updated_at = now
 
 
@@ -785,6 +861,67 @@ def task_pool(db: Session = Depends(get_db), current_user: User = Depends(get_cu
     return task_pool_payload(db, current_user)
 
 
+@router.get('/reviewer/tasks/current', response_model=ReviewerCurrentTasksPayloadSchema)
+def reviewer_current_tasks(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'reviewer')
+    query = _current_reviewer_tasks_query(db, current_user.name)
+    total = query.count()
+    items = query.order_by(QcTask.created_at.desc(), QcTask.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    return {
+        'items': [serialize_task(item, current_user) for item in items],
+        'total': total,
+        'page': page,
+        'pageSize': page_size,
+    }
+
+
+@router.get('/reviewer/tasks/history', response_model=ReviewerHistoryTasksPayloadSchema)
+def reviewer_history_tasks(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'reviewer')
+    query = _history_reviewer_revisions_query(db, current_user.name)
+    total = query.count()
+    revisions = query.order_by(QcReviewRevision.time.desc(), QcReviewRevision.revision_no.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    items = []
+    for revision in revisions:
+        latest_task = db.query(QcTask).filter(QcTask.episode_id == revision.episode_id).order_by(QcTask.is_active.desc(), QcTask.dispatch_generation.desc(), QcTask.created_at.desc()).first()
+        has_pending = db.query(QcRereviewRequest).filter(
+            QcRereviewRequest.episode_id == revision.episode_id,
+            QcRereviewRequest.requester_user_id == current_user.id,
+            QcRereviewRequest.status == 'pending',
+        ).first() is not None
+        items.append({
+            'episodeId': revision.episode_id,
+            'batchId': revision.episode.batch_id,
+            'batchName': revision.episode.batch.name,
+            'taskName': revision.episode.task_name,
+            'result': revision.result,
+            'primaryReason': revision.primary_reason,
+            'revisionNo': revision.revision_no,
+            'operator': revision.operator,
+            'time': format_time(revision.time),
+            'note': revision.note,
+            'currentTaskStatus': latest_task.status if latest_task else None,
+            'currentTaskAssignee': latest_task.assignee if latest_task else None,
+            'hasPendingRequest': has_pending,
+        })
+    return {
+        'items': items,
+        'total': total,
+        'page': page,
+        'pageSize': page_size,
+    }
+
+
 @router.get('/qc-history', response_model=HistoryPayloadSchema)
 def qc_history(
     revision_page: int = Query(1, ge=1),
@@ -1389,13 +1526,15 @@ def release_manual_qc(
     task = _active_task_for_episode(db, episode_id)
     if not task:
         raise HTTPException(status_code=404, detail='Qc task not found')
+    if task.status != 'in_review':
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='当前任务不处于审核中，不能释放')
 
     active_owner = _active_lock_owner(task)
     is_manager = current_user.role in ('admin', 'qc_manager')
     if active_owner and active_owner != current_user.id and not is_manager:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='当前锁属于其他审核员')
-    if not active_owner and current_user.role == 'reviewer' and task.assignee not in ('未派发', current_user.name):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='该任务未派发给当前审核员')
+    if not active_owner:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='当前任务没有有效审核锁，不能释放')
 
     now = _utcnow()
     _clear_task_lock(task)
@@ -1410,7 +1549,7 @@ def release_manual_qc(
     db.add(AuditEvent(
         id=f'audit_release_{episode_id}_{int(now.timestamp())}',
         operator=current_user.name,
-        action='释放人工质检锁',
+        action='释放人工质检锁' if not is_manager or active_owner == current_user.id else '强制释放人工质检锁',
         target=episode_id,
         detail=f'task={task.id} version={task.version}',
         time=now,
@@ -1432,12 +1571,16 @@ def submit_manual_qc(
     if not episode:
         raise HTTPException(status_code=404, detail='Episode not found')
 
-    task = _active_task_for_episode(db, episode_id) or db.query(QcTask).filter(QcTask.episode_id == episode_id).first()
+    task = _active_task_for_episode(db, episode_id)
     if task:
+        if task.status != 'in_review':
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='当前任务不处于审核中，不能提交')
         if payload.version != task.version:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='任务版本已变更，请刷新后重试')
         if _active_lock_owner(task) != current_user.id:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='请先认领该任务后再提交')
+    else:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='当前不存在可提交的有效任务')
 
     now = _utcnow()
     episode.qc_result = payload.result
@@ -1883,6 +2026,166 @@ def ai_create_conversation(
             for m in msgs
         ],
     ).model_dump()
+
+
+@router.post('/qc/episodes/{episode_id}/rereview-request')
+def request_rereview(
+    episode_id: str,
+    payload: RereviewRequestCreateSchema,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """提交重新质检申请。"""
+    episode = db.query(Episode).filter(Episode.id == episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail='Episode not found')
+
+    task = _active_task_for_episode(db, episode_id)
+    if not task:
+        raise HTTPException(status_code=404, detail='Qc task not found')
+    if task.status != 'done':
+        raise HTTPException(status_code=400, detail='只有已完成的质检任务才能申请重新质检')
+
+    if not payload.reason or not payload.reason.strip():
+        raise HTTPException(status_code=400, detail='申请原因不能为空')
+
+    existing = db.query(QcRereviewRequest).filter(
+        QcRereviewRequest.episode_id == episode_id,
+        QcRereviewRequest.requester_user_id == current_user.id,
+        QcRereviewRequest.status == 'pending',
+    ).first()
+    if existing:
+        raise HTTPException(status_code=409, detail='该任务已有待审批的重新质检申请')
+
+    now = _utcnow()
+    req = QcRereviewRequest(
+        id=f'rrq_{uuid.uuid4().hex[:16]}',
+        episode_id=episode_id,
+        task_id=task.id,
+        batch_id=task.batch_id,
+        requester_user_id=current_user.id,
+        requester_name=current_user.name,
+        reason=payload.reason.strip(),
+        status='pending',
+    )
+    db.add(req)
+    db.add(AuditEvent(
+        id=f'audit_rereview_req_{episode_id}_{int(now.timestamp())}',
+        operator=current_user.name,
+        action='申请重新质检',
+        target=episode_id,
+        detail=f'request={req.id} task={task.id} reason={payload.reason.strip()[:120]}',
+        time=now,
+    ))
+    db.commit()
+    db.refresh(req)
+    return _serialize_rereview_request(req, db)
+
+
+@router.get('/admin/rereview-requests', response_model=RereviewRequestListPayloadSchema)
+def list_rereview_requests(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status_filter: str = Query('pending', alias='status'),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    query = db.query(QcRereviewRequest)
+    if status_filter and status_filter != 'all':
+        query = query.filter(QcRereviewRequest.status == status_filter)
+    total = query.count()
+    items = query.order_by(QcRereviewRequest.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    return {
+        'items': [_serialize_rereview_request(item, db) for item in items],
+        'total': total,
+        'page': page,
+        'pageSize': page_size,
+    }
+
+
+@router.post('/admin/rereview-requests/{request_id}/approve')
+def approve_rereview_request(
+    request_id: str,
+    payload: RereviewRequestDecisionSchema,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    req = db.query(QcRereviewRequest).filter(QcRereviewRequest.id == request_id).first()
+    if not req:
+        raise HTTPException(status_code=404, detail='申请不存在')
+    if req.status != 'pending':
+        raise HTTPException(status_code=409, detail='该申请已被处理')
+
+    episode = db.query(Episode).filter(Episode.id == req.episode_id).first()
+    if not episode:
+        raise HTTPException(status_code=404, detail='Episode not found')
+
+    task = _active_task_for_episode(db, req.episode_id)
+    if not task:
+        raise HTTPException(status_code=404, detail='Qc task not found')
+    if task.id != req.task_id:
+        raise HTTPException(status_code=409, detail='任务已被重新派发，请刷新后处理')
+
+    if task.status != 'done':
+        raise HTTPException(status_code=409, detail='任务已被重新处理，申请不再有效')
+    if _active_lock_owner(task):
+        raise HTTPException(status_code=409, detail='任务正在被审核中，请稍后再试')
+
+    now = _utcnow()
+    _create_rereview_task_from_done(task, episode, req.requester_name)
+    req.status = 'approved'
+    req.approver_user_id = current_user.id
+    req.approver_name = current_user.name
+    req.decision_note = payload.note.strip()
+    req.decided_at = now
+
+    db.add(AuditEvent(
+        id=f'audit_rereview_approve_{req.episode_id}_{int(now.timestamp())}',
+        operator=current_user.name,
+        action='批准重新质检',
+        target=req.episode_id,
+        detail=f'request={req.id} task={req.task_id} assignee={req.requester_name} note={payload.note.strip()[:120]}',
+        time=now,
+    ))
+    db.commit()
+    db.refresh(req)
+    return _serialize_rereview_request(req, db)
+
+
+@router.post('/admin/rereview-requests/{request_id}/reject')
+def reject_rereview_request(
+    request_id: str,
+    payload: RereviewRequestDecisionSchema,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    req = db.query(QcRereviewRequest).filter(QcRereviewRequest.id == request_id).first()
+    if not req:
+        raise HTTPException(status_code=404, detail='申请不存在')
+    if req.status != 'pending':
+        raise HTTPException(status_code=409, detail='该申请已被处理')
+
+    now = _utcnow()
+    req.status = 'rejected'
+    req.approver_user_id = current_user.id
+    req.approver_name = current_user.name
+    req.decision_note = payload.note.strip()
+    req.decided_at = now
+
+    db.add(AuditEvent(
+        id=f'audit_rereview_reject_{req.episode_id}_{int(now.timestamp())}',
+        operator=current_user.name,
+        action='拒绝重新质检',
+        target=req.episode_id,
+        detail=f'request={req.id} note={payload.note.strip()[:120]}',
+        time=now,
+    ))
+    db.commit()
+    db.refresh(req)
+    return _serialize_rereview_request(req, db)
 
 
 @router.get('/ai-assistant/health')

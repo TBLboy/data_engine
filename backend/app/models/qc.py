@@ -95,6 +95,24 @@ class TaskOperationLog(Base):
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), server_default=func.now())
 
 
+class QcRereviewRequest(Base):
+    __tablename__ = 'qc_rereview_requests'
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    episode_id: Mapped[str] = mapped_column(ForeignKey('episodes.id'), nullable=False, index=True)
+    task_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    batch_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    requester_user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    requester_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, default='', nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default='pending', nullable=False, index=True)
+    approver_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approver_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    decision_note: Mapped[str] = mapped_column(Text, default='', nullable=False)
+    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), server_default=func.now())
+    decided_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+
+
 class BugReport(Base):
     __tablename__ = 'bug_reports'
 

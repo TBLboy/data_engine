@@ -283,7 +283,9 @@ const episodeNumber = computed(() => {
 const reviewLock = computed(() => payload.value?.reviewLock)
 const media = computed(() => payload.value?.media ?? [])
 const mediaByVariant = computed(() => media.value.filter((item) => item.variant === selectedVariant.value))
-const canSubmit = computed(() => Boolean(reviewLock.value?.isMine && !submitting.value))
+const canClaim = computed(() => Boolean(payload.value?.canClaim && !claiming.value))
+const canSubmit = computed(() => Boolean(payload.value?.canSubmit && !submitting.value))
+const isHistoryView = computed(() => payload.value?.viewMode === 'history')
 const lockTagType = computed(() => {
   if (reviewLock.value?.isMine) return 'success'
   if (reviewLock.value?.isLocked) return 'danger'
@@ -980,7 +982,7 @@ const submit = async () => {
             <small v-if="reviewLock?.expiresAt">锁到期时间 {{ reviewLock.expiresAt }}</small>
             <small v-else>认领后方可提交质检结果</small>
             <div class="lock-actions">
-              <el-button type="primary" :loading="claiming" :disabled="Boolean(reviewLock?.isLocked && !reviewLock?.isMine)" @click="claim">
+              <el-button type="primary" :loading="claiming" :disabled="!canClaim" @click="claim">
                 {{ reviewLock?.isMine ? '重新认领' : '认领任务' }}
               </el-button>
               <el-button :loading="releasing" :disabled="!reviewLock?.isMine && !(isManager && reviewLock?.isLocked)" @click="release">{{ reviewLock?.isMine ? '释放锁' : '强制释放' }}</el-button>
@@ -1227,7 +1229,14 @@ const submit = async () => {
         <el-card shadow="never" class="qc-card">
           <template #header>质检结论提交</template>
           <el-alert
-            v-if="!reviewLock?.isMine"
+            v-if="isHistoryView"
+            title="当前为历史查看模式。如需重新处理，请由管理员接管已完成任务或走重新质检流程。"
+            type="info"
+            :closable="false"
+            style="margin-bottom: 12px"
+          />
+          <el-alert
+            v-else-if="!reviewLock?.isMine"
             :title="reviewLock?.isLocked ? `当前任务已由 ${reviewLock.ownerName || '其他审核员'} 认领` : '请先认领任务后再提交结果'"
             type="warning"
             :closable="false"

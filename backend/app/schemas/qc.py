@@ -250,6 +250,72 @@ class ManualQcContextSchema(BaseModel):
     revisions: list[QcRevisionSchema]
     reviewLock: ReviewLockSchema
     media: list[ManualQcMediaSchema]
+    taskStatus: str | None = None
+    viewMode: str = 'active'
+    canClaim: bool = False
+    canSubmit: bool = False
+
+
+class ReviewerCurrentTasksPayloadSchema(BaseModel):
+    items: list[QcTaskSchema]
+    total: int
+    page: int
+    pageSize: int
+
+
+class ReviewerHistoryTaskItemSchema(BaseModel):
+    episodeId: str
+    batchId: str
+    batchName: str
+    taskName: str
+    result: str
+    primaryReason: str
+    revisionNo: int
+    operator: str
+    time: str
+    note: str
+    currentTaskStatus: str | None = None
+    currentTaskAssignee: str | None = None
+    hasPendingRequest: bool = False
+
+
+class ReviewerHistoryTasksPayloadSchema(BaseModel):
+    items: list[ReviewerHistoryTaskItemSchema]
+    total: int
+    page: int
+    pageSize: int
+
+
+class RereviewRequestCreateSchema(BaseModel):
+    reason: str
+
+
+class RereviewRequestDecisionSchema(BaseModel):
+    note: str = ''
+
+
+class RereviewRequestItemSchema(BaseModel):
+    id: str
+    episodeId: str
+    batchId: str
+    batchName: str
+    taskId: str
+    requesterUserId: str
+    requesterName: str
+    reason: str
+    status: str
+    approverUserId: str | None = None
+    approverName: str | None = None
+    decisionNote: str = ''
+    createdAt: str
+    decidedAt: str | None = None
+
+
+class RereviewRequestListPayloadSchema(BaseModel):
+    items: list[RereviewRequestItemSchema]
+    total: int
+    page: int
+    pageSize: int
 
 
 class AuditRecordSchema(BaseModel):

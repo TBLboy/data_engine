@@ -337,9 +337,13 @@ class AiChatService:
             })
             return
 
-        for chunk_text in stream_generator:
-            full_text += chunk_text
-            yield _sse_event("text", {"text": chunk_text})
+        for chunk_kind, chunk_text in stream_generator:
+            if chunk_kind == "think":
+                # 思考过程不发内容给前端，但发 heartbeat 保持连接不断开
+                yield _sse_event("status", {"phase": "thinking"})
+            else:
+                full_text += chunk_text
+                yield _sse_event("text", {"text": chunk_text})
 
         # 8. 校验 + 保存
         valid, warnings = validate_llm_output(

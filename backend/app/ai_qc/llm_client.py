@@ -33,7 +33,7 @@ def call_ollama(prompt: str, *, base_url: str, model: str, timeout_seconds: int)
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
-                "options": {"temperature": 0.3, "num_predict": 1024},
+                "options": {"temperature": 0.3, "num_predict": 2048},
             },
             timeout=timeout_seconds,
         )
@@ -61,10 +61,11 @@ def call_ollama_stream(
     base_url: str,
     model: str,
     timeout_seconds: int,
-) -> Generator[str, None, None] | None:
+) -> Generator[tuple[str, str], None, None] | None:
     """调用 Ollama chat API（流式），逐 token yield。失败返回 None。
 
-    返回一个 Generator，每次 yield 一个新的文本片段。
+    返回一个 Generator，每次 yield 一个 (kind, text) 元组。
+    kind 为 "think" 表示思考过程（不展示给用户），"text" 表示正式回复。
     如果连接失败/超时，返回 None。
     """
     try:
@@ -75,7 +76,7 @@ def call_ollama_stream(
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": True,
-                "options": {"temperature": 0.3, "num_predict": 1024},
+                "options": {"temperature": 0.3, "num_predict": 2048},
             },
             timeout=timeout_seconds,
         ) as resp:
@@ -89,9 +90,13 @@ def call_ollama_stream(
                 try:
                     import json as _json
                     chunk = _json.loads(line)
-                    content = (chunk.get("message") or {}).get("content", "")
+                    msg = chunk.get("message") or {}
+                    content = msg.get("content", "")
+                    thinking = msg.get("thinking", "")
+                    if thinking:
+                        yield ("think", thinking)
                     if content:
-                        yield content
+                        yield ("text", content)
                     if chunk.get("done"):
                         break
                 except Exception:

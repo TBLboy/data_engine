@@ -25,6 +25,16 @@ a {
   text-decoration: none;
 }
 
+/* 覆盖浏览器自动填充的浅蓝底色 */
+.el-input__inner:-webkit-autofill,
+.el-input__inner:-webkit-autofill:hover,
+.el-input__inner:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px #fff inset;
+  box-shadow: 0 0 0 1000px #fff inset;
+  -webkit-text-fill-color: #1f2937;
+  transition: background-color 5000s ease-in-out 0s;
+}
+
 #app {
   min-height: 100vh;
 }

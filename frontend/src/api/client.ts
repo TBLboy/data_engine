@@ -178,6 +178,64 @@ export interface ManualQcContext {
   revisions: QcRevision[]
   reviewLock: ReviewLock
   media: ManualQcMedia[]
+  taskStatus: string | null
+  viewMode: 'active' | 'history'
+  canClaim: boolean
+  canSubmit: boolean
+}
+
+export interface ReviewerCurrentTasksPayload {
+  items: QcTask[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+export interface ReviewerHistoryTaskItem {
+  episodeId: string
+  batchId: string
+  batchName: string
+  taskName: string
+  result: string
+  primaryReason: string
+  revisionNo: number
+  operator: string
+  time: string
+  note: string
+  currentTaskStatus: string | null
+  currentTaskAssignee: string | null
+  hasPendingRequest: boolean
+}
+
+export interface ReviewerHistoryTasksPayload {
+  items: ReviewerHistoryTaskItem[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+export interface RereviewRequestItem {
+  id: string
+  episodeId: string
+  batchId: string
+  batchName: string
+  taskId: string
+  requesterUserId: string
+  requesterName: string
+  reason: string
+  status: string
+  approverUserId: string | null
+  approverName: string | null
+  decisionNote: string
+  createdAt: string
+  decidedAt: string | null
+}
+
+export interface RereviewRequestListPayload {
+  items: RereviewRequestItem[]
+  total: number
+  page: number
+  pageSize: number
 }
 
 export interface ManualQcMediaRefreshRequest {
@@ -357,6 +415,42 @@ export async function fetchReviewerDashboard() {
 
 export async function fetchTaskPool() {
   return request<TaskPoolPayload>('/task-pool')
+}
+
+export async function fetchReviewerCurrentTasks(page = 1, pageSize = 10) {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+  return request<ReviewerCurrentTasksPayload>(`/reviewer/tasks/current?${params.toString()}`)
+}
+
+export async function fetchReviewerHistoryTasks(page = 1, pageSize = 10) {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+  return request<ReviewerHistoryTasksPayload>(`/reviewer/tasks/history?${params.toString()}`)
+}
+
+export async function createRereviewRequest(episodeId: string, reason: string) {
+  return request<RereviewRequestItem>(`/qc/episodes/${episodeId}/rereview-request`, {
+    method: 'POST',
+    body: JSON.stringify({ reason })
+  })
+}
+
+export async function fetchRereviewRequests(page = 1, pageSize = 20, statusFilter = 'pending') {
+  const params = new URLSearchParams({ page: String(page), page_size: String(pageSize), status: statusFilter })
+  return request<RereviewRequestListPayload>(`/admin/rereview-requests?${params.toString()}`)
+}
+
+export async function approveRereviewRequest(requestId: string, note = '') {
+  return request<RereviewRequestItem>(`/admin/rereview-requests/${requestId}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ note })
+  })
+}
+
+export async function rejectRereviewRequest(requestId: string, note = '') {
+  return request<RereviewRequestItem>(`/admin/rereview-requests/${requestId}/reject`, {
+    method: 'POST',
+    body: JSON.stringify({ note })
+  })
 }
 
 export async function fetchHistory(

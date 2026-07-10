@@ -1,6 +1,24 @@
-### 2026-06-29 — RDDQF v1.2 新增：管理员任务池管理、导出增强、状态溯源
+### 2026-07-10 — QC 任务池拆分 + admin 可直接接管 done 任务
 
-- Decision: v1.2 在批次驳回模块基础上新增三大能力：(1) 导出字段从 11 个扩展到 ~25 个（含 L3 分数、MinIO 路径等）；(2) 管理员可管理审核员任务池（撤回/转派/释放 pending 任务，支持批量）；(3) Episode 状态溯源面板
+- Decision: reviewer 的人工质检入口正式拆分为“我的任务清单（当前可处理任务）”与“历史任务清单（已完成历史记录）”；同时允许 admin 直接认领 `done` 状态任务，认领动作语义定义为 **reopen + ownership transfer**，而不是新增独立 admin 审批入口
+- Context: 当前 reviewer 任务池把 `done` 任务也混在当前列表中，导致已完成数据仍可重新进入质检；同时产品希望避免为 admin 增加额外按钮和独立流程，保持最高权限角色可直接处理异常任务
+- Alternatives considered:
+  - 方案 A：所有角色统一走“申请重新质检 → 审批 → 新建复检任务”
+  - 方案 B：admin 直接接管 `done` 任务；reviewer 通过历史池入口申请重新质检
+- Reason:
+  - 方案 A 审计更严谨，但对 admin 来说链路过长、交互复杂
+  - 方案 B 更符合“admin 最高权限”的产品直觉，同时仍可通过严格后端状态机避免双重归属和历史污染
+- Implementation detail:
+  - reviewer 当前任务池：`is_active=1 AND assignee=当前 reviewer AND status in ('assigned','in_review')`
+  - reviewer 历史任务池：按 reviewer 的已完成历史记录 / revision 展示，不再让 `done` 混入当前任务池
+  - reviewer claim 仅允许：active + assigned + assignee=本人 + 无他人有效锁
+  - admin claim 允许：active + `status in ('new','assigned','done')`，但若他人 `in_review` 锁有效则禁止接管
+  - admin 认领 `done` 时，必须原子执行：`task.done -> in_review`、切换 assignee/lock owner、`episode.done -> in_review`、`episode.qc_result -> pending`、`manual_qc_status -> NOT_REVIEWED`、保留旧 revision 并等待新提交追加 revision
+  - `release` 禁止对 `done` 生效；`submit` 禁止回退提交非 active task
+  - 新增 `QcRereviewRequest` 模型，reviewer 历史卡可提交申请，admin/qc_manager 通过 `rereview-approvals` 页面审批，审批通过后复用原 task reopen（不回退新建 task）
+- Impacted nodes: D
+- Status: implemented
+
 - Context: v1.0 批次驳回模块已落地。实际使用中发现导出字段不够丰富（缺少 MinIO 路径和 L3 分数）、管理员无法回收卡住的任务（质检员请假等场景）、前端缺少状态判定原因展示
 - Reason: 下游训练团队需要 MinIO 路径信息来定位原始数据；管理员需要任务管理权限来处理异常情况（请假、负载不均、错误派发）；质检员需要看到"为什么这条 episode 不能用于训练"
 - Implementation detail:
