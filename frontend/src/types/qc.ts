@@ -244,6 +244,60 @@ export interface ReasonStat {
   category: string
 }
 
+export interface DataAssetSummary {
+  episodeCount: number
+  batchCount: number
+  taskTypeCount: number
+  failureReasonCount: number
+  totalDurationSec: number
+  totalFrameCount: number
+  durationCoveredEpisodeCount: number
+  durationMissingEpisodeCount: number
+  frameCoveredEpisodeCount: number
+  frameMissingEpisodeCount: number
+  statisticsScope: string
+  freshness: {
+    oldestRefreshedAt: string | null
+    newestRefreshedAt: string | null
+    staleBatchCount: number
+    calculationVersion: string
+  }
+}
+
+export interface DataAssetBatchRow {
+  batchId: string
+  batchName: string
+  taskTypeId: string
+  taskTypeName: string
+  episodeCount: number
+  totalDurationSec: number
+  durationCoveredEpisodeCount: number
+  totalFrameCount: number
+  frameCoveredEpisodeCount: number
+  reviewedCount: number
+  qualifiedCount: number
+  unqualifiedCount: number
+  manualPassCount: number
+  manualFailCount: number
+  pendingDatasetCount: number
+  failureRate: number | null
+  rejectThreshold: number
+  qcStatus: string
+  batchDecision: string
+  batchDecisionReason: string
+  createdAt: string
+  adjudicatedAt: string | null
+  updatedAt: string | null
+  refreshedAt: string | null
+}
+
+export interface DataAssetBatchListPayload {
+  items: DataAssetBatchRow[]
+  page: number
+  pageSize: number
+  total: number
+}
+
 export interface ReviewerWorkload {
   name: string
   assigned: number

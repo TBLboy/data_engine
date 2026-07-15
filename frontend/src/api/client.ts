@@ -7,6 +7,8 @@ import type {
   DatasetBatchRow,
   DatasetEpisodeListPayload,
   DatasetTaskSummary,
+  DataAssetBatchListPayload,
+  DataAssetSummary,
   DispatchPreview,
   EpisodeRow,
   HistoryExportPayload,
@@ -130,6 +132,15 @@ export interface DatabaseQuery {
   batchId?: string
   qcStatus?: string
   qcResult?: string
+}
+
+export interface DataAssetBatchQuery {
+  page?: number
+  pageSize?: number
+  keyword?: string
+  taskTypeId?: string
+  batchDecision?: string
+  qcStatus?: string
 }
 
 export interface IngestScanRequest {
@@ -360,6 +371,28 @@ export async function scanDatabase(payload: IngestScanRequest) {
   return request<IngestJob>('/database/scan', {
     method: 'POST',
     body: JSON.stringify(payload)
+  })
+}
+
+export async function fetchDataAssetSummary() {
+  return request<DataAssetSummary>('/data-assets/summary')
+}
+
+export async function fetchDataAssetBatches(query: DataAssetBatchQuery = {}) {
+  const params = new URLSearchParams()
+  if (query.page) params.set('page', String(query.page))
+  if (query.pageSize) params.set('page_size', String(query.pageSize))
+  if (query.keyword) params.set('keyword', query.keyword)
+  if (query.taskTypeId) params.set('task_type_id', query.taskTypeId)
+  if (query.batchDecision) params.set('batch_decision', query.batchDecision)
+  if (query.qcStatus) params.set('qc_status', query.qcStatus)
+  const suffix = params.size ? `?${params.toString()}` : ''
+  return request<DataAssetBatchListPayload>(`/data-assets/batches${suffix}`)
+}
+
+export async function rebuildDataAssets() {
+  return request<{ success: boolean; rebuiltBatchCount: number }>('/data-assets/rebuild', {
+    method: 'POST'
   })
 }
 

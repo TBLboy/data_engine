@@ -1,6 +1,8 @@
 from app.core.db import Base
 from app.models.ai_assistant import AiConversation, AiMessage
 from app.models.control_plane import (
+    BatchAssetRecomputeJob,
+    BatchAssetRollup,
     ClassificationRule,
     DiscoveredPrefix,
     EpisodeInventory,
@@ -25,6 +27,8 @@ __all__ = [
     'L3V2Config',
     'AuditEvent',
     'Batch',
+    'BatchAssetRecomputeJob',
+    'BatchAssetRollup',
     'ClassificationRule',
     'DiscoveredPrefix',
     'Episode',

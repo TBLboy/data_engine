@@ -8,6 +8,7 @@ class Batch(Base):
     __tablename__ = 'batches'
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    list_id: Mapped[str | None] = mapped_column(ForeignKey('lists.id'), nullable=True, index=True)
     task_type_id: Mapped[str] = mapped_column(ForeignKey('task_types.id'), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     imported_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), nullable=False)
@@ -34,6 +35,7 @@ class Batch(Base):
     adjudicated_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
 
     task_type = relationship('TaskType', back_populates='batches')
+    list_record = relationship('ListRecord')
     episodes = relationship('Episode', back_populates='batch')
     qc_tasks = relationship('QcTask', back_populates='batch')
     decision_logs = relationship('BatchDecisionLog', back_populates='batch')

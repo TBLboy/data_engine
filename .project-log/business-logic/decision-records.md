@@ -1,3 +1,31 @@
+### 2026-07-15 — 数据总库长期架构升级路线：Route C'
+
+- Decision: 数据总库的“总体资产统计 + 批次级资产画像”正式采用 **Route C'：显式 Batch–List 关系 + 批次级派生投影 + PostgreSQL 持久化重算队列 + 周期性对账**。这条路线作为后续代码改造的正式业务逻辑边界，不再继续把资产画像能力塞进现有 Episode 明细接口，也不把越来越多的统计字段直接堆进 `batches`。
+- Context: 当前平台已经形成三层稳定结构：1）MinIO 控制面事实层（`lists / episode_inventory / episode_objects`）；2）业务实体层（`batches / episodes`）；3）QC 与训练消费层（`qc_tasks / qc_review_revisions / batch_decision_log`）。在这个基础上，数据总库新增的总量卡片和批次画像本质上属于读模型/统计投影，不再适合继续依赖实时 Episode 聚合或继续扩张 `batches` 表语义。
+- Alternatives considered:
+  - 方案 A：继续基于 `episodes` 实时 `GROUP BY` 聚合，按请求即时计算 summary 和 batch 画像
+  - 方案 B：把总时长、总帧数、覆盖率等画像字段直接冗余到 `batches`
+  - 方案 C：事实表 + 显式关系 + 独立统计投影 + dirty 重算机制
+- Reason:
+  - 方案 A 在当前数千 Episode 规模下也许可用，但随着后续增加时长/帧数/模态覆盖/标注覆盖/L3 分布等维度，会反复扫描大量明细，且 summary 与 batch 列表容易出现统计口径漂移
+  - 方案 B 虽然查询便宜，但会把 `batches` 变成混合了业务状态与分析状态的膨胀实体，不利于后续扩展和对账修复
+  - 方案 C' 最符合当前代码形态：保留现有控制面/业务面/消费面事实源，新增可重建的派生投影层，既保证页面读性能，又不破坏原始业务事实
+- Implementation detail:
+  - `batches.list_id` 作为正式的 Batch–List 显式关系字段落到业务模型中，但第一阶段采用 **可空字段 + 历史回填验证 + 兼容观察 + 再决定是否收紧为非空**，不直接假设历史数据全部可唯一映射
+  - 批次级派生统计投影的正式实体固定为 `batch_asset_rollups`，仅保存可确定性重建的聚合结果，例如：`episode_count`、`total_duration_sec`、`duration_covered_episode_count`、`duration_missing_episode_count`、`total_frame_count`、`frame_covered_episode_count`、`frame_missing_episode_count`、`sampled_episode_count`、`reviewed_count`、`manual_pass_count`、`manual_fail_count`、`qualified_count`、`unqualified_count`、`pending_dataset_count`、`last_episode_updated_at`、`source_watermark`、`calculation_version`、`refreshed_at`
+  - 第一版**不复制**这些业务状态字段进投影表：`task_type_id`、`batch_name`、`qc_status`、`batch_decision`、`reject_threshold`、`failure_rate`；这些字段仍以 `batches` 或关联维表为准，投影层不生成新的权威口径
+  - 顶部总览不单独建全局总表；第一版直接对 `batch_asset_rollups` 求和，确保 summary 与 batch 列表使用完全一致的作用域
+  - 统计作用域正式固定为：**active list + active batch + indexed business episodes**，内部统一标识为 `active_list_active_batch_indexed_episodes`。不允许顶部卡片与 batch 列表采用不同过滤口径
+  - `duration_sec` 与 `frame_count` 的权威来源固定为扫描阶段持久化到 PostgreSQL 的 manifest 派生字段；其中 `frame_count` 定义为 manifest 声明的 episode 级帧数，不做多相机视频帧总和。覆盖规则固定为：`duration_sec > 0` 视为有效时长，`frame_count > 0` 视为有效帧数
+  - PostgreSQL 持久化 dirty/recompute 队列的正式实体固定为 `batch_asset_recompute_jobs`；同一 batch 的重算请求按 `batch_id` 合并，worker 以 batch 粒度执行**整批重算**，而不是做分散的 `+1/-1` 增量计数
+  - dirty 触发的核心事实变化包括：Episode 新增/移出作用域、`duration_sec`/`frame_count` 修改、`batch_id` 变更、人工 QC 结果变更、最终数据集状态变更、Batch–List 关系变更、List active/inactive 状态变更、管理员手动重建
+  - 周期性对账任务作为低频兜底链路，负责发现漏标记、漏重算和统计漂移；投影层可以重建，但不能反向替代业务事实源
+  - 数据资产读路径正式拆分为独立 API：`/api/data-assets/summary`、`/api/data-assets/batches`，并保留管理员手动全量重建入口；现有 `/api/database` 继续维持 Episode 明细浏览语义，不再作为长期聚合主路径
+  - 迁移顺序固定为：阶段 0 冻结统计口径与实时基线 SQL → 阶段 1 新增 `batches.list_id` 并回填 → 阶段 2 建立 `batch_asset_rollups` 与全量重建能力 → 阶段 3 引入 `batch_asset_recompute_jobs` 与自动重算链路 → 阶段 4 新增独立 API → 阶段 5 前端接入 → 阶段 6 切换与验收 → 阶段 7 清理兼容逻辑
+  - 统计能力正式上线前，必须先确认 manifest 派生字段在扫描链路中可稳定写库，避免时长/帧数基线不可信
+- Impacted nodes: D, D2
+- Status: confirmed
+
 ### 2026-07-10 — QC 任务池拆分 + admin 可直接接管 done 任务
 
 - Decision: reviewer 的人工质检入口正式拆分为“我的任务清单（当前可处理任务）”与“历史任务清单（已完成历史记录）”；同时允许 admin 直接认领 `done` 状态任务，认领动作语义定义为 **reopen + ownership transfer**，而不是新增独立 admin 审批入口
@@ -18,6 +46,10 @@
   - 新增 `QcRereviewRequest` 模型，reviewer 历史卡可提交申请，admin/qc_manager 通过 `rereview-approvals` 页面审批，审批通过后复用原 task reopen（不回退新建 task）
 - Impacted nodes: D
 - Status: implemented
+
+### 2026-07-10 — D2 导出增强 + admin 任务管理补强（补充记录）
+
+- Decision: 在已确认的批次驳回主流程之外，补齐训练数据导出的关键字段、管理员任务管理能力，以及前端状态原因展示所依赖的配套结构，作为 D2 的配套增强项纳入正式业务记录。
 
 - Context: v1.0 批次驳回模块已落地。实际使用中发现导出字段不够丰富（缺少 MinIO 路径和 L3 分数）、管理员无法回收卡住的任务（质检员请假等场景）、前端缺少状态判定原因展示
 - Reason: 下游训练团队需要 MinIO 路径信息来定位原始数据；管理员需要任务管理权限来处理异常情况（请假、负载不均、错误派发）；质检员需要看到"为什么这条 episode 不能用于训练"

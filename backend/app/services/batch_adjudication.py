@@ -4,6 +4,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from app.models import Batch, BatchDecisionLog, Episode, GeneralConfig, AuditEvent
+from app.services.data_assets import enqueue_batch_asset_recompute
 
 
 def adjudicate_batch(db: Session, batch_id: str, actor: str = 'system') -> BatchDecisionLog | None:
@@ -21,6 +22,7 @@ def adjudicate_batch(db: Session, batch_id: str, actor: str = 'system') -> Batch
         batch.batch_decision = 'PENDING'
         batch.batch_decision_reason = 'empty batch'
         _update_all_episodes_pending(db, batch_id)
+        enqueue_batch_asset_recompute(db, batch_id, reason='episode_qc_changed')
         db.commit()
         return None
 
@@ -37,6 +39,7 @@ def adjudicate_batch(db: Session, batch_id: str, actor: str = 'system') -> Batch
         _update_all_episodes_pending(db, batch_id)
         batch.manual_pass_count = manual_pass_count
         batch.manual_fail_count = manual_fail_count
+        enqueue_batch_asset_recompute(db, batch_id, reason='episode_qc_changed')
         db.commit()
         return None
 
@@ -124,6 +127,7 @@ def adjudicate_batch(db: Session, batch_id: str, actor: str = 'system') -> Batch
         episode.final_decision_policy_version = 'batch-reject-v1'
         episode.batch_decision_log_id = log.id
 
+    enqueue_batch_asset_recompute(db, batch_id, reason='episode_qc_changed')
     db.commit()
     return log
 

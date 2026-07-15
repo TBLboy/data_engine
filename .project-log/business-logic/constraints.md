@@ -46,6 +46,26 @@
 - 扫描结果（discovered_prefixes vs lists）采用两层 PostgreSQL 存储，分别跟踪原始发现与结构确认结果
 - 不支持前端直接访问 MinIO，所有媒体对象通过后端 API（presigned URL 或代理流）暴露，不把 bucket/prefix/key 规则暴露给前端
 - 对象存储与 PostgreSQL 之间的关联键由控制面字段定义，不直接使用 MinIO 路径字符串作为业务主键
+- 数据总库的总体资产统计与批次资产画像，长期必须以 PostgreSQL 中已持久化的事实字段为准，不在前端直接读 MinIO 或重新扫描对象计算
+- `duration_sec` 与 `frame_count` 的权威来源固定为扫描阶段持久化进 PostgreSQL 的 manifest 派生字段
+- `frame_count` 的定义固定为 manifest 声明的 episode 级帧数，不做多相机视频帧总和
+- 数据总库 summary 与 batch 画像必须共享完全相同的 active scope：active list + active batch + 位于该作用域内的业务 Episode
+- 上述统一作用域的内部标识固定为 `active_list_active_batch_indexed_episodes`
+- 长期正式形态中，数据总库的批次画像不继续依赖按请求实时扫描 `episodes` 主路径，而采用可重建的批次级统计投影层
+- 批次级统计投影层只保存可重建的聚合结果，不复制 `qc_status`、`batch_decision`、`task_type_id`、`reject_threshold`、`batch_name`、`failure_rate` 等业务状态作为新的权威事实
+- 批次级统计刷新不能只依赖 FastAPI 进程内的临时后台任务；正式方案采用 PostgreSQL 持久化 dirty 队列 + worker + 周期性对账
+- 数据资产聚合正式走独立 `/api/data-assets/*` 路径；现有 `/api/database` 保持 Episode 明细浏览语义，不再作为长期聚合主路径
+
+## Data Asset Architecture Constraints
+
+- `batches` 与 `lists` 的关联不再长期依赖 ID 字符串推导；正式演进方向为新增显式 `batches.list_id`
+- 任何基于 `Batch.id` / `List.id` 的字符串推导只允许作为历史兼容，不得继续作为正式统计主路径
+- `batches.list_id` 第一阶段允许可空，以支持历史映射回填、兼容观察和异常批次识别；在映射质量未验证前不得直接强制 `NOT NULL`
+- 批次级统计投影的正式实体固定为 `batch_asset_rollups`；dirty/recompute 队列的正式实体固定为 `batch_asset_recompute_jobs`
+- 顶部全局 summary 第一版直接由批次级统计投影求和生成，不额外建立独立全局总表作为唯一事实源
+- 统计投影层失效只允许影响展示新鲜度，不允许反向写坏业务事实或替代业务事实源
+- dirty 重算机制以“整批重算”作为默认策略，不做分散的 `+1/-1` 增量修补主路径
+- 若数据资产页面展示 `failure_rate`，沿用现有批次判定口径，不在投影层重新定义第二套分母语义
 
 ## Task Type Management Constraints
 

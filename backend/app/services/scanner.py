@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import time
 from collections import defaultdict
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models import AuditEvent, Batch, ClassificationRule, DiscoveredPrefix, Episode, EpisodeInventory, EpisodeObject, ListRecord, QcReviewRevision, QcTask, ScanJob, TaskType, User
 from app.services.authz import require_roles
+from app.services.data_assets import enqueue_batch_asset_recompute, enqueue_list_scope_recompute
 from app.services.minio_client import MinioService, get_minio_service
 
 
@@ -22,6 +24,8 @@ STATE_RANK = {
     'processable': 1,
     'qc_ready': 2,
 }
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -40,6 +44,27 @@ def _retry_minio(fn, max_retries: int = 2, base_delay: float = 3.0):
                 delay = base_delay * (attempt + 1)
                 time.sleep(delay)
     raise last_exc  # type: ignore[misc]
+
+
+def _read_json_object(service: MinioService, bucket: str, object_key: str) -> dict:
+    response = _retry_minio(lambda: service.get_object(bucket, object_key))
+    try:
+        return json.loads(response.read().decode('utf-8'))
+    finally:
+        response.close()
+        response.release_conn()
+
+
+def _extract_manifest_metrics(manifest: dict) -> tuple[float, int]:
+    try:
+        duration_sec = float(manifest.get('duration', 0.0) or 0.0)
+    except (TypeError, ValueError):
+        duration_sec = 0.0
+    try:
+        frame_count = int(manifest.get('frame_count', 0) or 0)
+    except (TypeError, ValueError):
+        frame_count = 0
+    return duration_sec, frame_count
 
 
 STALE_TIMEOUT_MINUTES = 30
@@ -157,6 +182,109 @@ def _cleanup_replaced_batch(
     if canonical_batch:
         canonical_batch.episode_count = db.query(Episode).filter(Episode.batch_id == canonical_batch_id).count()
         canonical_batch.name = canonical_batch_name
+        enqueue_batch_asset_recompute(db, canonical_batch_id, reason='scan_sync')
+
+
+def backfill_manifest_metrics(
+    db: Session,
+    *,
+    operator: User | None = None,
+    bucket: str | None = None,
+) -> dict[str, int]:
+    """Repair historical duration/frame_count from processed manifest.json files."""
+    service = get_minio_service()
+    query = (
+        db.query(EpisodeInventory, Episode, EpisodeObject.object_key, ListRecord.bucket, Batch.id)
+        .join(Episode, EpisodeInventory.ingested_episode_id == Episode.id)
+        .join(Batch, Episode.batch_id == Batch.id)
+        .join(ListRecord, EpisodeInventory.list_id == ListRecord.id)
+        .join(
+            EpisodeObject,
+            (EpisodeObject.episode_inventory_id == EpisodeInventory.id)
+            & (EpisodeObject.object_role == 'manifest'),
+        )
+    )
+    if bucket:
+        query = query.filter(ListRecord.bucket == bucket)
+
+    stats = {
+        'candidateEpisodeCount': 0,
+        'repairedEpisodeCount': 0,
+        'inventoryUpdatedCount': 0,
+        'episodeUpdatedCount': 0,
+        'manifestReadErrorCount': 0,
+        'manifestZeroMetricCount': 0,
+        'touchedBatchCount': 0,
+    }
+    touched_batch_ids: set[str] = set()
+
+    for index, (inventory, episode, manifest_key, row_bucket, batch_id) in enumerate(
+        query.order_by(EpisodeInventory.id.asc()).all(),
+        start=1,
+    ):
+        stats['candidateEpisodeCount'] += 1
+        try:
+            manifest = _read_json_object(service, row_bucket, manifest_key)
+            duration_sec, frame_count = _extract_manifest_metrics(manifest)
+        except Exception as exc:
+            stats['manifestReadErrorCount'] += 1
+            logger.warning(
+                '[manifest_backfill] failed bucket=%s key=%s error=%s: %s',
+                row_bucket,
+                manifest_key,
+                type(exc).__name__,
+                exc,
+            )
+            continue
+
+        if duration_sec <= 0 and frame_count <= 0:
+            stats['manifestZeroMetricCount'] += 1
+            continue
+
+        row_repaired = False
+        if inventory.duration_sec != duration_sec or inventory.frame_count != frame_count:
+            inventory.duration_sec = duration_sec
+            inventory.frame_count = frame_count
+            stats['inventoryUpdatedCount'] += 1
+            row_repaired = True
+
+        if episode.duration_sec != duration_sec or episode.frame_count != frame_count:
+            episode.duration_sec = duration_sec
+            episode.frame_count = frame_count
+            stats['episodeUpdatedCount'] += 1
+            row_repaired = True
+
+        manifest_episode_id = str(manifest.get('episode_id', '') or '').strip()
+        if manifest_episode_id and inventory.episode_id_from_manifest != manifest_episode_id:
+            inventory.episode_id_from_manifest = manifest_episode_id
+
+        if row_repaired:
+            stats['repairedEpisodeCount'] += 1
+            touched_batch_ids.add(batch_id)
+
+        if index % 100 == 0:
+            db.flush()
+
+    for batch_id in sorted(touched_batch_ids):
+        enqueue_batch_asset_recompute(db, batch_id, reason='scan_sync')
+    stats['touchedBatchCount'] = len(touched_batch_ids)
+
+    if operator:
+        now = _utcnow()
+        db.add(AuditEvent(
+            id=f'audit_manifest_backfill_{int(now.timestamp())}',
+            operator=operator.name,
+            action='回填 manifest 指标',
+            target=bucket or 'all_buckets',
+            detail=(
+                f"candidates={stats['candidateEpisodeCount']} repaired={stats['repairedEpisodeCount']} "
+                f"batches={stats['touchedBatchCount']} read_errors={stats['manifestReadErrorCount']}"
+            )[:500],
+            time=now,
+            operator_id=operator.id,
+        ))
+
+    return stats
 
 
 def _normalize_classification_text(list_prefix: str) -> tuple[str, str]:
@@ -429,6 +557,7 @@ def _execute_minio_scan(
             if not batch:
                 batch = Batch(
                     id=batch_id,
+                    list_id=list_id,
                     task_type_id=task_type.id,
                     name=canonical_batch_name,
                     imported_at=now,
@@ -443,6 +572,7 @@ def _execute_minio_scan(
                 )
                 db.add(batch)
             else:
+                batch.list_id = list_id
                 if batch.task_type_id == 'task_type:unclassified':
                     batch.task_type_id = task_type.id
                 batch.name = canonical_batch_name
@@ -538,18 +668,19 @@ def _execute_minio_scan(
 
                 duration_sec = 0.0
                 frame_count = 0
+                manifest: dict | None = None
                 if manifest_key:
                     try:
-                        resp = _retry_minio(
-                            lambda: get_minio_service().get_object(normalized_bucket, manifest_key)
+                        manifest = _read_json_object(service, normalized_bucket, manifest_key)
+                        duration_sec, frame_count = _extract_manifest_metrics(manifest)
+                    except Exception as exc:
+                        logger.warning(
+                            '[scan] manifest metrics unavailable bucket=%s key=%s error=%s: %s',
+                            normalized_bucket,
+                            manifest_key,
+                            type(exc).__name__,
+                            exc,
                         )
-                        manifest = json.loads(resp.read().decode('utf-8'))
-                        resp.close()
-                        resp.release_conn()
-                        duration_sec = float(manifest.get('duration', 0.0))
-                        frame_count = int(manifest.get('frame_count', 0))
-                    except Exception:
-                        pass
 
                 inventory.duration_sec = duration_sec
                 inventory.frame_count = frame_count
@@ -610,6 +741,7 @@ def _execute_minio_scan(
                 )
 
             batch.episode_count = len(raw_episode_names | processed_episode_names)
+            enqueue_batch_asset_recompute(db, batch.id, reason='scan_sync')
             task_type.total_batches = db.query(Batch).filter(Batch.task_type_id == task_type.id).count()
             task_type.total_episodes = db.query(Episode).join(Batch, Episode.batch_id == Batch.id).filter(Batch.task_type_id == task_type.id).count()
             scan_job.confirmed_lists = len(current_list_ids)
@@ -620,6 +752,8 @@ def _execute_minio_scan(
 
         for list_record in db.query(ListRecord).filter(ListRecord.bucket == normalized_bucket).all():
             if list_record.id not in current_list_ids:
+                if list_record.is_active:
+                    enqueue_list_scope_recompute(db, list_record.id, reason='list_scope_changed')
                 list_record.is_active = False
                 list_record.updated_at = _utcnow()
 

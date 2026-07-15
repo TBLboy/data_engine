@@ -1,4 +1,49 @@
 
+## 2026-07-15 CST
+
+- Type: decision
+- Status: validated
+- Importance: high
+- Reusable: yes
+- Objective: 在不开始新的代码改动的前提下，对照真实模型与现有命名，把“数据总库资产画像升级”的最终业务逻辑、正式对象和统计口径彻底固化到 `.project-log`，作为后续实现的唯一业务依据。
+
+- Work completed:
+  - 审阅“数据总库批次资产画像改造任务说明”、现有代码模型、当前迁移命名，以及 GPT 输出的《Robot_QC_数据资产架构升级分析报告》，确认长期路线采用 Route C'。
+  - 将正式决策写入 `.project-log/business-logic/decision-records.md`，并把过渡期的“命名候选”收口为正式对象：`batches.list_id`、`batch_asset_rollups`、`batch_asset_recompute_jobs`。
+  - 更新 `.project-log/business-logic/main.md`，补充正式数据对象、统一统计作用域 `active_list_active_batch_indexed_episodes`、`frame_count` 定义、投影层边界、独立 `/api/data-assets/*` 路径等关键约束。
+  - 更新 `.project-log/business-logic/graph.md` / `nodes.md` / `edges.md`，把该升级路线在逻辑图谱中收口为固定边界，而不是继续停留在泛化描述。
+  - 更新 `.project-log/business-logic/constraints.md`，把“独立资产 API”“不再以 `/api/database` 做长期聚合主路径”“failure_rate 不在投影层重定义”等稳定约束单独写清。
+  - 更新 `.project-log/current-session.md`，将当前会话状态收束为“仅更新 project-log，不开始新的代码改动”。
+
+- Business logic impact:
+  - 数据总库长期正式方案已经确定，不再继续采用“现有 Episode 明细接口上堆实时聚合”的演进路径。
+  - 后续代码实现必须以 `batches.list_id` + `batch_asset_rollups` + `batch_asset_recompute_jobs` + `active_list_active_batch_indexed_episodes` 为边界，任何新方案若偏离该路线，需要先重新更新 project-log 决策记录。
+
+- Problems encountered:
+  - GPT 报告中的个别字段类型和当前代码不完全一致，例如 `lists.id` 在真实代码中是字符串主键，不是数值主键，因此 project-log 固化时已按真实代码口径修正理解。
+  - 现有日志中“数据画像”仍残留“候选命名 / 待实现 / 继续讨论”类表述，若不先收口，后续实现阶段容易出现文档互相矛盾。
+
+- Resolution:
+  - 所有固化内容均以当前仓库真实模型、扫描逻辑和页面结构为准；把 GPT 报告作为参考分析，而不是原样照搬。
+  - 对不属于最终业务逻辑的细节不做过度承诺，只固化正式边界、正式对象、正式口径与正式职责分层。
+
+- Verification:
+  - 已人工核对 `main / decision-records / constraints / graph / nodes / edges / current-session / progress` 之间口径一致。
+  - 本次未开始新的代码改动，仅更新业务逻辑文档。
+
+- Files changed:
+  - `.project-log/business-logic/decision-records.md`
+  - `.project-log/business-logic/main.md`
+  - `.project-log/business-logic/graph.md`
+  - `.project-log/business-logic/nodes.md`
+  - `.project-log/business-logic/edges.md`
+  - `.project-log/business-logic/constraints.md`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+
+- Next steps:
+  - 在已固化的业务逻辑基础上，等待用户明确开始编码后，再进入数据总库资产画像升级实施：先冻结统计口径与基线 SQL，再按 `batches.list_id`、`batch_asset_rollups`、`batch_asset_recompute_jobs` 与自动重算链路推进。
+
 ## 2026-07-10 14:35 CST
 
 - Type: bugfix
@@ -3296,3 +3341,53 @@ PY'`
 - LOW 修复：登录detail-only错误+空值校验、默认有活类型、返回按钮角色对齐、下载mimeType扩展名、无媒体禁用播放、全局中文locale
 - 验证：重建镜像+alembic upgrade head（0007/0008）+生产栈重启；db/API实测矛盾态=0、待分类4/303、reviewer越权已堵；chromium实测根路径不白屏+admin dashboard正常
 - 12 files changed, +335/-44, commit ec4b075 → main
+
+## 2026-07-15 13:30 CST
+
+- Type: bugfix
+- Status: resolved, verified
+- Importance: critical
+- Reusable: yes
+- Objective: 修复数据资产统计页面 duration/frame_count 全为零的问题
+
+- Root cause:
+  - `backend/app/services/scanner.py` 中 `_execute_minio_scan` 的 manifest 读取逻辑使用 `except Exception: pass`，所有 manifest 读取异常（MinIO 连接抖动、response clean-up 异常等）被全部吞掉，`duration_sec`/`frame_count` 维持初始值 0。
+  - 5217 条 Episode 中只有 1 条有非零值——该条由手动质检页面 `manual_qc_context_payload()` 在读取详情时顺便回填。
+  - `episode_inventory` 表与 `episodes` 表的 duration/frame_count 均为 0，导致资产投影层汇总也为 0。
+  - 扫描器日志没有任何错误记录，因为异常被 `pass` 吃干净了。
+  - 4525 个 manifest JSON 文件实际存在于 MinIO 中，均包含有效的 `duration` 和 `frame_count` 字段。
+
+- Work completed:
+  1. **扫描器修复**：新增 `_read_json_object()` 和 `_extract_manifest_metrics()` 两个 helper 函数，替换原来的内联 try/except/pass。异常时至少打 warning 日志，不再静默吞掉。
+  2. **存量回填函数**：新增 `backfill_manifest_metrics()`，按 `episode_inventory → episode_objects(manifest) → MinIO get_object` 链路逐个读取 manifest 回填 `duration_sec`/`frame_count`，写入后自动排重算队列。
+  3. **CLI 入口**：`scan_worker.py` 新增 `repair-manifest-metrics` 命令，支持 `python -m app.services.scan_worker repair-manifest-metrics [operator_id] [bucket]`。
+  4. **存量回填执行**：重建后端镜像 → 在容器内执行回填命令，4525 条全部修复成功，0 个 manifest 读取错误。
+  5. **资产重算**：触发 `/api/data-assets/rebuild` 全量重算投影，验证 summary/batch list 接口返回正确值。
+
+- Business logic impact:
+  - 存量数据显示正确：总时长 ~50034 秒（原 21 秒），总帧数 ~823320（原 633），duration 覆盖 4524 条（原 1 条）。
+  - 692 条纯 raw 无 processed manifest 的 Episode 继续保持零值，这是真实数据口径，不是 bug。
+  - 后续扫描器重新运行时可正常写入新 Episode 的 duration/frame_count。
+
+- Problems encountered:
+  - `docker exec` 不带 stdin 导致 heredoc 被吃掉，需要改为 `sh -lc "python -c '...'"` 内联命令形式。
+  - 后端容器内无 `psql`，获取 admin ID 需要走 DB 容器。
+  - 4525 条 manifest 回填耗时约 13 秒，吞吐约 350 条/秒，属可接受范围。
+
+- Resolution:
+  - 对存量问题新增独立回填命令，不修改扫描器原有流程的接口签名。
+  - 扫描器本身的 fix 确保未来不再产生新数据全零的问题。
+
+- Verification:
+  - `/api/data-assets/summary`：「episodeCount」5216，「totalDurationSec」50034.19（原 21.07），「totalFrameCount」823320（原 633），「durationCoveredEpisodeCount」4524（原 1）
+  - `/api/data-assets/batches`：第一页 batch 「totalDurationSec」955.45 秒（原 0），「totalFrameCount」15243（原 0）
+  - `SELECT count(*) FROM episodes WHERE duration_sec > 0` → 4525/5217
+  - `SELECT count(*) FROM episode_inventory WHERE duration_sec > 0` → 4525/5217
+
+- Files changed:
+  - `backend/app/services/scanner.py`（新增 `_read_json_object`、`_extract_manifest_metrics`、`backfill_manifest_metrics`；修正 manifest 读取异常处理）
+  - `backend/app/services/scan_worker.py`（新增 `repair-manifest-metrics` 命令入口）
+
+- Next steps:
+  - 后续若触发全量扫描，可验证新增 Episode 的 manifest 指标能正常入库
+  - 692 条纯 raw Episode 待后处理流程完成后，重新扫描即可自动补全指标

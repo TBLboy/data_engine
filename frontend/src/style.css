@@ -16,7 +16,7 @@
 
 body {
   margin: 0;
-  min-width: 1280px;
+  min-width: 320px;
   min-height: 100vh;
 }
 
@@ -895,4 +895,118 @@ p {
   font-size: 11px;
   margin-left: 8px;
   vertical-align: middle;
+}
+
+@media (max-width: 1024px) {
+  .app-shell {
+    flex-direction: column;
+  }
+
+  .app-shell > .sidebar {
+    position: static;
+    width: 100% !important;
+    height: auto;
+  }
+
+  .app-shell > .el-container {
+    min-width: 0;
+  }
+
+  .storage-card {
+    position: static;
+    margin-top: 18px;
+  }
+
+  .topbar {
+    height: auto;
+    padding: 18px 20px;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .topbar-actions,
+  .toolbar-actions,
+  .hero-actions,
+  .player-actions,
+  .submit-row {
+    flex-wrap: wrap;
+  }
+
+  .main-view {
+    min-width: 0;
+    padding: 20px;
+  }
+
+  .page-title-row,
+  .boss-hero,
+  .manual-qc-grid,
+  .login-page {
+    grid-template-columns: 1fr;
+  }
+
+  .page-title-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .video-grid,
+  .login-feature-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .sidebar {
+    padding: 16px 12px;
+  }
+
+  .brand {
+    padding-bottom: 18px;
+  }
+
+  .topbar {
+    padding: 16px;
+  }
+
+  .topbar-title {
+    font-size: 16px;
+  }
+
+  .topbar-subtitle {
+    font-size: 12px;
+  }
+
+  .main-view {
+    padding: 16px;
+  }
+
+  .page-title-row {
+    padding: 20px;
+  }
+
+  h1,
+  .hero-copy h1,
+  .login-visual h1 {
+    font-size: 24px;
+    letter-spacing: 0;
+  }
+
+  .filter-grid,
+  .video-grid,
+  .login-feature-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .side-menu .el-menu-item {
+    margin: 4px 0;
+  }
+
+  .user-dropdown-trigger {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
 }

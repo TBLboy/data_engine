@@ -3,7 +3,7 @@
 ## Status
 
 - Research phase: Complete（公开数据集调研 + TeleDex 格式分析 + MinIO 数据湖实查均已完成）
-- Current phase: RDDQF v1.2 平台增强 — 导出字段增强、管理员任务池管理、Episode 状态溯源、任务操作日志 (LaTeX v1.2 设计文档已产出)
+- Current phase: RDDQF v1.2 平台增强 — 数据总库资产画像升级路线已确认，后续按 Route C' 推进实现
 
 ## Main Path
 
@@ -35,7 +35,7 @@ A → B1 + B2 + B3 → C → F → D → E
 | MinIO → PostgreSQL ingestion / manual QC 改造方案 | D | 待实现 |
 | 训练数据消费与批次驳回模块 | D2 | 待实现（代码未开始，业务规则已确认） |
 
-## Transition Phase — F Closed, D Ready
+## Transition Phase — F Closed, D Active
 
 当前业务逻辑主线已经从“定义 MinIO 控制面规则”推进到“按既定规则实施 Node D 改造”。Node F 已完成的实现前规则包括：
 
@@ -47,6 +47,7 @@ A → B1 + B2 + B3 → C → F → D → E
 - manual QC 的 MinIO 对象访问协议：媒体预览走短时 presigned URL，结构化对象与显式下载走后端受控接口
 - Node D manual QC API 合同：`qc-context` embedded `media[]`、按 `objectId` 定向 refresh、下载走独立 endpoint
 - `database` 页面长期性能方向已明确：不能继续依赖“全量 episodes 拉到前端后本地过滤”，后续正式方案应切换为“服务端分页 + 服务端筛选 + 前端短时缓存”
+- `数据总库` 的总体资产统计与批次级资产画像路线已确认：正式采用 Route C'，即显式 Batch–List 关系 + 批次级派生投影 + PostgreSQL 持久化重算队列 + 周期性对账
 
 仍保留但不阻塞实现的开放项：
 
@@ -59,6 +60,78 @@ A → B1 + B2 + B3 → C → F → D → E
 - PostgreSQL 是唯一业务查询入口和系统事实源
 - 前端继续只调后端 API，不直接耦合 MinIO 路径
 - `database` 页面不能长期依赖全量 episodes 前端本地过滤；随着数据规模和多用户远程访问增长，正式形态应由后端负责分页、筛选与总数统计，前端只渲染当前页
+- `数据总库` 后续的总体资产卡片和批次资产画像不再继续依赖实时 Episode 聚合主路径，也不直接堆叠在 `batches` 表中；正式形态采用可重建的批次级统计投影层 `batch_asset_rollups`
+- `batches` 与 `lists` 的正式业务关系固定为显式 `batches.list_id`；任何基于 ID 约定的推导只允许作为历史兼容，不再作为正式统计主路径
+- `batches.list_id` 第一阶段保持可空，以承接历史回填、兼容观察与异常批次识别；是否进一步收紧为 `NOT NULL` 留待单独决策
+- 批次级统计投影层只保存可重建的派生统计值，不复制 `qc_status`、`batch_decision`、`task_type_id`、`reject_threshold`、`batch_name`、`failure_rate` 等业务状态作为新的权威字段
+- 顶部 summary 与批次画像必须使用完全相同的 active scope，内部统一标识为 `active_list_active_batch_indexed_episodes`
+- 时长/帧数统计口径固定为扫描阶段持久化到 PostgreSQL 的 manifest 派生字段，其中 `frame_count` 是 manifest 声明的 episode 级帧数，不是多相机视频帧总和
+- 统计刷新采用 PostgreSQL 持久化 dirty 队列 `batch_asset_recompute_jobs` + worker 整批重算，并由周期性对账做低频兜底，不依赖 FastAPI 内存后台任务作为唯一可靠机制
+
+## 数据总库资产画像升级 — 已确认业务逻辑
+
+### 目标
+
+把当前以 Episode 明细浏览为主的 `数据总库`，扩展为同时具备：
+
+- 总体资产规模卡片；
+- 批次级资产画像；
+- 与 Episode 明细联动的服务端分页/筛选；
+- 面向后续大规模数据增长的稳定统计架构。
+
+### 正式路线
+
+正式采用 **Route C'**：
+
+```text
+显式 Batch–List 关系（`batches.list_id`）
+  +
+批次级派生统计投影（`batch_asset_rollups`）
+  +
+PostgreSQL 持久化 dirty 重算队列（`batch_asset_recompute_jobs`）
+  +
+周期性对账修复
+```
+
+### 正式数据对象
+
+- `batches.list_id`：Batch 与 List 的显式关联，作为长期正式关系字段
+- `batch_asset_rollups`：批次级可重建统计投影，承接 summary 与 batch profile 的聚合来源
+- `batch_asset_recompute_jobs`：按 batch 粒度持久化 dirty/recompute 请求的数据库队列
+- `/api/data-assets/*`：数据资产专用读接口；`/api/database` 保持 Episode 明细浏览语义
+
+### 作用域规则
+
+- 总体统计与批次画像统一只统计：active list + active batch + 位于该 active 作用域中的业务 Episode
+- 内部统计作用域名称固定为 `active_list_active_batch_indexed_episodes`
+- 不允许顶部 summary 与 batch 列表使用不同过滤口径
+- 不把 inactive list 外的历史残留 batch 混入当前数据资产画像
+
+### 时长与帧数规则
+
+- `duration_sec` 权威来源：扫描阶段写入 PostgreSQL 的 manifest 派生时长
+- `frame_count` 权威来源：扫描阶段写入 PostgreSQL 的 manifest 派生帧数
+- `frame_count` 定义为 manifest 声明的 episode 级帧数，不做多相机视频帧总和
+- `duration_sec > 0` 视为时长覆盖有效
+- `frame_count > 0` 视为帧数覆盖有效
+
+### 投影层边界规则
+
+- 新增批次级统计投影层，保存可确定性重建的统计值
+- 第一版不在投影层复制 `qc_status`、`batch_decision`、`task_type_id`、`batch_name`、`reject_threshold`、`failure_rate` 等业务状态
+- 全局 summary 第一版不单独建全局表，直接由批次投影求和生成
+- 若页面需要展示 `failure_rate`，沿用既有批次判定口径，不在资产投影层另起一套新语义
+
+### 刷新与一致性规则
+
+- 事实更新后通过 PostgreSQL 持久化 job 表 `batch_asset_recompute_jobs` 标记 batch dirty
+- worker 按 batch 粒度整批重算，不做分散的 `+1/-1` 增量修补
+- 周期性对账任务用于发现漏标记、漏重算和统计漂移
+- 投影层失效只影响展示新鲜度，不改变业务事实源
+- 数据资产聚合正式走独立 `/api/data-assets/*` 路径；`/api/database` 不再承接长期聚合职责
+
+### 相关既有业务约束（本次继续沿用，不因 Route C' 改变）
+
 - 任务派发与人工质检必须职责分离：工作台承接 batch 级任务生成与批量派发，`manual-qc` 页面只负责 claim/release/提交质检结果，不再承担派发入口
 - 系统必须按角色提供不同视图：`admin`/`qc_manager` 看到完整运营视图；`reviewer` 只开放个人任务看板、我的任务列表、人工质检流水线三个界面；`viewer` 只读访问工作台概览
 - reviewer 的工作模式是流水线式：从个人看板进入质检 → 提交 → 自动跳转下一条待质检任务，直到全部完成；提交后不应停留在原地或需要手动返回列表选择下一条

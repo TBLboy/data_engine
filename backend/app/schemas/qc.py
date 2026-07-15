@@ -482,6 +482,62 @@ class DashboardPayloadSchema(BaseModel):
     ingestJobs: list[IngestJobSchema]
 
 
+class DataAssetFreshnessSchema(BaseModel):
+    oldestRefreshedAt: str | None
+    newestRefreshedAt: str | None
+    staleBatchCount: int
+    calculationVersion: str
+
+
+class DataAssetSummarySchema(BaseModel):
+    episodeCount: int
+    batchCount: int
+    taskTypeCount: int
+    failureReasonCount: int
+    totalDurationSec: float
+    totalFrameCount: int
+    durationCoveredEpisodeCount: int
+    durationMissingEpisodeCount: int
+    frameCoveredEpisodeCount: int
+    frameMissingEpisodeCount: int
+    statisticsScope: str
+    freshness: DataAssetFreshnessSchema
+
+
+class DataAssetBatchRowSchema(BaseModel):
+    batchId: str
+    batchName: str
+    taskTypeId: str
+    taskTypeName: str
+    episodeCount: int
+    totalDurationSec: float
+    durationCoveredEpisodeCount: int
+    totalFrameCount: int
+    frameCoveredEpisodeCount: int
+    reviewedCount: int
+    qualifiedCount: int
+    unqualifiedCount: int
+    manualPassCount: int
+    manualFailCount: int
+    pendingDatasetCount: int
+    failureRate: float | None
+    rejectThreshold: float
+    qcStatus: str
+    batchDecision: str
+    batchDecisionReason: str
+    createdAt: str
+    adjudicatedAt: str | None
+    updatedAt: str | None
+    refreshedAt: str | None
+
+
+class DataAssetBatchListSchema(BaseModel):
+    items: list[DataAssetBatchRowSchema]
+    page: int
+    pageSize: int
+    total: int
+
+
 class DatabasePayloadSchema(BaseModel):
     episodes: list[EpisodeRowSchema]
     batches: list[BatchSummarySchema]
@@ -605,4 +661,3 @@ class ReviewerDashboardPayloadSchema(BaseModel):
     stats: ReviewerDashboardStatsSchema
     batchGroups: list[ReviewerBatchGroupSchema]
     nextTask: ReviewerNextTaskSchema | None = None
-

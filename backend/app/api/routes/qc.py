@@ -28,6 +28,8 @@ from app.schemas.qc import (
     BugReportStatusUpdateRequest,
     CreateAccountRequest,
     DashboardPayloadSchema,
+    DataAssetBatchListSchema,
+    DataAssetSummarySchema,
     DatabasePayloadSchema,
     DispatchPlanRequest,
     DispatchPreviewSchema,
@@ -61,6 +63,7 @@ from app.schemas.qc import (
     UpdateAccountStatusRequest,
 )
 from app.services.authz import require_roles
+from app.services.data_assets import data_asset_batch_rows, data_assets_summary, enqueue_batch_asset_recompute, rebuild_all_active_batch_rollups
 from app.services.minio_client import get_minio_service
 from app.services.payloads import (
     _superseded_task_counts_by_batch,
@@ -70,6 +73,7 @@ from app.services.payloads import (
     dashboard_payload,
     database_payload,
     dispatch_preview_payload,
+    format_optional_time,
     history_payload,
     home_payload,
     manual_qc_context_payload,
@@ -250,6 +254,10 @@ def _claim_task(task: QcTask, episode: Episode, current_user: User) -> None:
         episode.reason_code = '-'
         episode.manual_qc_status = 'NOT_REVIEWED'
         episode.manual_qc_result_id = None
+        episode.final_dataset_status = 'PENDING'
+        episode.final_decision_source = 'PENDING_NOT_ADJUDICATED'
+        episode.final_decision_reason = 'task reopened for rereview'
+        episode.is_exportable = False
     episode.updated_at = now
 
 
@@ -795,6 +803,103 @@ def database(
         qc_status=qc_status,
         qc_result=qc_result,
     )
+
+
+@router.get('/data-assets/summary', response_model=DataAssetSummarySchema)
+def data_assets_summary_route(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    summary = data_assets_summary(db)
+    return {
+        'episodeCount': summary.episode_count,
+        'batchCount': summary.batch_count,
+        'taskTypeCount': summary.task_type_count,
+        'failureReasonCount': summary.failure_reason_count,
+        'totalDurationSec': summary.total_duration_sec,
+        'totalFrameCount': summary.total_frame_count,
+        'durationCoveredEpisodeCount': summary.duration_covered_episode_count,
+        'durationMissingEpisodeCount': summary.duration_missing_episode_count,
+        'frameCoveredEpisodeCount': summary.frame_covered_episode_count,
+        'frameMissingEpisodeCount': summary.frame_missing_episode_count,
+        'statisticsScope': summary.statistics_scope,
+        'freshness': {
+            'oldestRefreshedAt': format_time(summary.oldest_refreshed_at) if summary.oldest_refreshed_at else None,
+            'newestRefreshedAt': format_time(summary.newest_refreshed_at) if summary.newest_refreshed_at else None,
+            'staleBatchCount': summary.stale_batch_count,
+            'calculationVersion': summary.calculation_version,
+        },
+    }
+
+
+@router.get('/data-assets/batches', response_model=DataAssetBatchListSchema)
+def data_assets_batches_route(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    keyword: str = Query(''),
+    task_type_id: str = Query(''),
+    batch_decision: str = Query(''),
+    qc_status: str = Query(''),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    items, total = data_asset_batch_rows(
+        db,
+        page=page,
+        page_size=page_size,
+        keyword=keyword,
+        task_type_id=task_type_id,
+        batch_decision=batch_decision,
+        qc_status=qc_status,
+    )
+    return {
+        'items': [
+            {
+                'batchId': item.batch_id,
+                'batchName': item.batch_name,
+                'taskTypeId': item.task_type_id,
+                'taskTypeName': item.task_type_name or '未分类',
+                'episodeCount': int(item.episode_count or 0),
+                'totalDurationSec': float(item.total_duration_sec or 0.0),
+                'durationCoveredEpisodeCount': int(item.duration_covered_episode_count or 0),
+                'totalFrameCount': int(item.total_frame_count or 0),
+                'frameCoveredEpisodeCount': int(item.frame_covered_episode_count or 0),
+                'reviewedCount': int(item.reviewed_count or 0),
+                'qualifiedCount': int(item.qualified_count or 0),
+                'unqualifiedCount': int(item.unqualified_count or 0),
+                'manualPassCount': int(item.manual_pass_count or 0),
+                'manualFailCount': int(item.manual_fail_count or 0),
+                'pendingDatasetCount': int(item.pending_dataset_count or 0),
+                'failureRate': item.failure_rate,
+                'rejectThreshold': float(item.reject_threshold or 0.0),
+                'qcStatus': item.qc_status,
+                'batchDecision': item.batch_decision,
+                'batchDecisionReason': item.batch_decision_reason or '',
+                'createdAt': format_time(item.created_at),
+                'adjudicatedAt': format_optional_time(item.adjudicated_at),
+                'updatedAt': format_optional_time(item.last_episode_updated_at),
+                'refreshedAt': format_optional_time(item.refreshed_at),
+            }
+            for item in items
+        ],
+        'page': page,
+        'pageSize': page_size,
+        'total': total,
+    }
+
+
+@router.post('/data-assets/rebuild')
+def data_assets_rebuild_route(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    rebuilt = rebuild_all_active_batch_rollups(db)
+    db.commit()
+    return {
+        'success': True,
+        'rebuiltBatchCount': rebuilt,
+    }
 
 
 def _expire_stale_scan_jobs(db: Session, *, bucket: str, stale_after: timedelta = timedelta(minutes=30)) -> None:
@@ -1368,6 +1473,7 @@ def apply_dispatch_plan(
 
     db.flush()  # 确保 sampled_for_qc 和新任务对 sync 查询可见
     sync_batch_metrics(db, batch)
+    enqueue_batch_asset_recompute(db, batch.id, reason='dispatch_changed')
     db.add(AuditEvent(
         id=f'audit_dispatch_{batch_id}_{next_generation}_{int(datetime.utcnow().timestamp())}',
         operator=current_user.name,
@@ -1432,6 +1538,7 @@ def assign_batch_tasks(
         offset += count
 
     sync_batch_metrics(db, batch)
+    enqueue_batch_asset_recompute(db, batch.id, reason='dispatch_changed')
     db.add(AuditEvent(
         id=f'audit_dispatch_assign_{batch_id}_{int(now.timestamp())}',
         operator=current_user.name,
@@ -1467,6 +1574,7 @@ def assign_task(
 
     batch = db.query(Batch).filter(Batch.id == task.batch_id).one()
     sync_batch_metrics(db, batch)
+    enqueue_batch_asset_recompute(db, batch.id, reason='dispatch_changed')
     db.add(AuditEvent(
         id=f'audit_assign_{task_id}_{int(datetime.utcnow().timestamp())}',
         operator=current_user.name,
@@ -1499,6 +1607,7 @@ def claim_manual_qc(
     _claim_task(task, episode, current_user)
     batch = db.query(Batch).filter(Batch.id == task.batch_id).one()
     sync_batch_metrics(db, batch)
+    enqueue_batch_asset_recompute(db, batch.id, reason='dispatch_changed')
     now = _utcnow()
     db.add(AuditEvent(
         id=f'audit_claim_{episode_id}_{int(now.timestamp())}',
@@ -1547,6 +1656,7 @@ def release_manual_qc(
 
     batch = db.query(Batch).filter(Batch.id == task.batch_id).one()
     sync_batch_metrics(db, batch)
+    enqueue_batch_asset_recompute(db, batch.id, reason='dispatch_changed')
     db.add(AuditEvent(
         id=f'audit_release_{episode_id}_{int(now.timestamp())}',
         operator=current_user.name,
@@ -1614,6 +1724,7 @@ def submit_manual_qc(
     db.flush()  # Ensure rev.id is available and episode changes are visible to sync_batch_metrics
     episode.manual_qc_result_id = str(rev.id) if rev.id else None
     sync_batch_metrics(db, batch)
+    enqueue_batch_asset_recompute(db, batch.id, reason='episode_qc_changed')
     db.add(AuditEvent(
         id=f'audit_submit_{episode_id}_{int(now.timestamp())}',
         operator=current_user.name,

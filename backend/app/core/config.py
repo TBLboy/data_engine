@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     minio_default_bucket: str = Field(default='yaocao', alias='MINIO_DEFAULT_BUCKET')
     scan_cron_hour: int = Field(default=0, alias='SCAN_CRON_HOUR')
     scan_cron_minute: int = Field(default=0, alias='SCAN_CRON_MINUTE')
+    data_assets_recompute_interval_seconds: int = Field(default=60, alias='DATA_ASSETS_RECOMPUTE_INTERVAL_SECONDS')
+    data_assets_recompute_batch_limit: int = Field(default=100, alias='DATA_ASSETS_RECOMPUTE_BATCH_LIMIT')
+    data_assets_reconcile_cron_hour: int = Field(default=3, alias='DATA_ASSETS_RECONCILE_CRON_HOUR')
+    data_assets_reconcile_cron_minute: int = Field(default=30, alias='DATA_ASSETS_RECONCILE_CRON_MINUTE')
     # AI QC Explain
     ai_explain_enabled: bool = Field(default=False, alias='AI_EXPLAIN_ENABLED')
     ai_explain_provider: str = Field(default='ollama', alias='AI_EXPLAIN_PROVIDER')

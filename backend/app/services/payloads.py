@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import get_settings
 from app.models import AuditEvent, Batch, BugReport, Episode, EpisodeInventory, EpisodeObject, ListRecord, QcReviewRevision, QcTask, ScanJob, TaskType, User
+from app.services.data_assets import active_batch_query as _data_assets_active_batch_query
+from app.services.data_assets import active_episode_query as _data_assets_active_episode_query
 from app.services.minio_client import get_minio_service
 
 UNCLASSIFIED_TASK_TYPE_ID = 'task_type:unclassified'
@@ -97,7 +99,7 @@ def _prefetch_batch_storage_locations(db: Session, batch_ids: Iterable[str]) -> 
         EpisodeInventory.episode_prefix,
     ).join(
         ListRecord,
-        Batch.id == ('batch_' + func.substr(ListRecord.id, 6)),
+        Batch.list_id == ListRecord.id,
     ).outerjoin(
         EpisodeInventory,
         EpisodeInventory.list_id == ListRecord.id,
@@ -122,15 +124,15 @@ def _prefetch_batch_storage_locations(db: Session, batch_ids: Iterable[str]) -> 
 
 
 def _active_batch_query(db: Session):
-    return db.query(Batch).join(ListRecord, Batch.id == ('batch_' + func.substr(ListRecord.id, 6))).filter(ListRecord.is_active == True, Batch.is_active == True)
+    return _data_assets_active_batch_query(db)
 
 
 def _active_episode_query(db: Session):
-    return db.query(Episode).join(Batch, Episode.batch_id == Batch.id).join(ListRecord, Batch.id == ('batch_' + func.substr(ListRecord.id, 6))).filter(ListRecord.is_active == True, Batch.is_active == True)
+    return _data_assets_active_episode_query(db)
 
 
 def _batch_query(db: Session):
-    return db.query(Batch).join(ListRecord, Batch.id == ('batch_' + func.substr(ListRecord.id, 6))).filter(ListRecord.is_active == True, Batch.is_active == True)
+    return _active_batch_query(db)
 
 
 def _task_type_batch_query(db: Session, task_type_id: str):

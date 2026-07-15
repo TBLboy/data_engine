@@ -77,6 +77,15 @@
 - Current status: Open
 - Answer: Pending。当前更倾向先做状态同步而非直接物理删除，即优先引入 inactive/missing/soft-delete 一类语义，再在后续明确何时允许彻底清理历史记录
 
+### Q-20260715-020
+
+- Related node: D（数据总库资产画像升级）
+- Related edge: F->D
+- Question: `batches.list_id` 在完成第一阶段回填和一段时间双写观察后，是否应该进一步收紧为 `NOT NULL`，以及是否允许 / 需要一个 `List` 对应多个业务 `Batch`？
+- Why it matters: 这决定显式 Batch–List 关系的最终基数模型，也决定后续是否可以彻底移除旧的 ID 推导兼容逻辑，以及是否能在数据库层施加更强的一致性约束
+- Current status: Open
+- Answer: Pending。当前已确认长期方向是新增显式 `batches.list_id`，但在历史映射质量、异常批次类型和未来是否存在人工拆分/合并 batch 场景未完全验证前，先保持可空与兼容观察
+
 ### Q-20260624-012（Resolved 2026-06-24）
 
 - Related node: D
@@ -178,23 +187,10 @@
 - Question: collect_tactile 是否在实际采集任务中启用？
 - Resolution: 已降级。tactile 相关指标不属于 V1 范围，待后续版本再评估
 
-### Q-20260706-019
+### Q-20260706-019（Resolved 2026-07-15）
 
 - Related node: D (数据展示层)
 - Related edge: D→D (内部增强)
 - Question: 是否应该为平台新增一个"数据画像"展示界面？参考 LeRobot Dataset Visualizer 的 Statistics Panel，但需要结合我们的数据模型和业务需求做定制设计。
 - Why it matters: 当前工作台的指标（候选总量/已抽中样本/抽检通过率/待处理任务）都是业务进度指标，缺少数据集本身的质量画像（episode 长度分布、L3 指标分布、任务类型占比等）。有了数据画像，质检管理员可以一眼看出批次的数据健康度，而不是只看到"有多少条待质检"。
-- Current status: Open — 待讨论
-- Open design questions:
-  1. **展示粒度**：以批次为单位？以任务类型为单位？还是全局？可能需要多层级（全局概览 → 任务类型 → 批次 → episode）
-  2. **展示内容**：
-     - Episode 长度分布直方图（识别异常短/长的 episode）
-     - L3 各指标分布（箱线图或直方图）
-     - 任务类型占比饼图
-     - 通过率随时间趋势线
-     - 摄像头分辨率/配置概览
-     - 关节空间覆盖率（新指标，基于 telemetry.npz 的 26 维 range）
-  3. **数据来源**：PostgreSQL 已有 episode.frame_count、duration_sec、qc_result、l3_config 指标值，大部分指标不需要额外采集
-  4. **与 LeRobot Statistics 的区别**：LeRobot 实时从 Parquet 算统计量，我们从 PostgreSQL 聚合——更快，但维度不同（LeRobot 偏数据格式画像，我们偏业务质量画像）
-  5. **实现优先级**：建议从 Episode 长度分布开始，改动最小（一个 SQL 聚合 + 一个 Chart.js 直方图）
-- Answer: Pending。需要进一步讨论展示粒度、指标选择和 UI 布局后再动手
+- Resolution: 已确定需要为平台新增“数据总库资产画像”能力，但正式实现不走“直接在现有 Episode 明细接口上继续堆实时聚合”的路线，而采用 Route C'：显式 Batch–List 关系 + 批次级派生统计投影 + PostgreSQL 持久化 dirty 重算队列 + 周期性对账。第一版优先落地总体资产卡片和批次级资产画像，不把更高维的 L3 分布、任务趋势、关节覆盖率等可视化一起塞入首期范围
