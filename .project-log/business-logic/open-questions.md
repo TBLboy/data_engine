@@ -2,14 +2,6 @@
 
 ## Active Questions
 
-### Q-20260716-022
-
-- Related node: D（数据总库资产画像升级）
-- Related edge: F->D
-- Question: `task_asset_rollups.calculation_version` 的版本推进策略是否与 batch 层共用同一常量，还是任务层独立维护？若任务口径变更而 batch 口径未变，是否只提升 task version？
-- Why it matters: 这决定全量 rebuild 的触发范围、API freshness 判断，以及任务层与批次层是否可以独立演进
-- Current status: Open
-- Answer: Pending。当前倾向任务层独立 version 常量，但与 batch 层保持同风格字符串版本字段；实现前再确认
 
 ### Q-20260716-023
 
@@ -17,8 +9,8 @@
 - Related edge: F->D
 - Question: 任务资产列表默认排序、默认筛选，以及 inactive task 是否允许继续持有 active-scope batch，是否需要额外业务约束？
 - Why it matters: 影响前端默认体验，以及 `SUM(task rollups) == global summary` 校验是否总能成立
-- Current status: Open
-- Answer: Pending。已确认 `待分类` 必须始终展示，默认优先 active task；inactive task 是否允许持有 active-scope batch 仍待实现前确认
+- Current status: Partially resolved
+- Answer: 默认排序按 `taskTypeName` 升序；默认筛选优先 active task，且 `task_type:unclassified` 始终展示；支持 `include_inactive`。当前实现不额外禁止 inactive task 持有 active-scope batch：task/global 校验仍按 active-scope batch 汇总，不依赖“页面默认可见 task 集合”。若后续产品要求 inactive 不得持有 active batch，再单独收紧写路径约束。
 
 ### Q-20260629-017
 
@@ -127,6 +119,13 @@
 - Resolution: 已确定应引入“活跃派发版本”语义。每次重生成都创建新的当前版本；旧版本中未开始的任务必须退役或标记 superseded，不再参与当前运营视图。历史任务保留用于审计，但不能继续污染当前任务统计与派发状态
 
 ## Resolved Questions
+
+### Q-20260716-022（Resolved 2026-07-16）
+
+- Related node: D（数据总库资产画像升级）
+- Related edge: F->D
+- Question: `task_asset_rollups.calculation_version` 的版本推进策略是否与 batch 层共用同一常量，还是任务层独立维护？若任务口径变更而 batch 口径未变，是否只提升 task version？
+- Resolution: 任务层独立维护字符串常量 `task-asset-rollup-v1`，风格对齐 batch 层 `batch-asset-rollup-v1`，但不共用同一常量。任务口径单独变化时只提升 task version 并全量 rebuild task 投影；batch 口径变化时先 rebuild batch，再 dirty/rebuild 受影响 task。
 
 
 ### Q-20260716-021（Resolved 2026-07-16）

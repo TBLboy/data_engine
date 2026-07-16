@@ -8,7 +8,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
-from app.services.data_assets import process_pending_recompute_jobs, rebuild_all_active_batch_rollups
+from app.services.data_assets import process_pending_recompute_jobs, rebuild_all_active_rollups
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -50,7 +50,8 @@ def _data_assets_recompute_job() -> None:
 def _data_assets_reconcile_job() -> None:
     db = SessionLocal()
     try:
-        rebuilt = rebuild_all_active_batch_rollups(db)
+        result = rebuild_all_active_rollups(db, scope='all')
+        rebuilt = result['rebuiltBatchCount'] + result['rebuiltTaskCount']
         db.commit()
         logger.info('[data_assets_reconcile] rebuilt=%s', rebuilt)
     except Exception:

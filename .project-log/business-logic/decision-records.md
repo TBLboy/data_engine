@@ -61,8 +61,9 @@
   - `task_type:unclassified` / `待分类` 必须始终可展示；默认列表优先 active task，但待分类不得被隐藏
   - `task_types.total_batches` / `total_episodes` 进入废弃流程：停止新增依赖 → 资产接口切换到 task rollup → 兼容观察 → 再删列
   - 实现风格对齐现有 Route C'：优先 `task_type_id` 主键、字符串 calculation_version、job 表承载 dirty/recompute，不另起更重的工作流引擎
+  - 任务层 calculation_version 独立为 `task-asset-rollup-v1`，不与 batch 层共用同一常量
 - Impacted nodes: D, D2
-- Status: confirmed
+- Status: implemented (unit-tested; live migration/rebuild pending)
 
 ### 2026-07-15 — 数据总库长期架构升级路线：Route C'
 

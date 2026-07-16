@@ -158,7 +158,7 @@ state:
   - 数据总库资产画像升级路线已确认：采用 Route C'，后续以显式 Batch–List 关系、批次级派生投影、PostgreSQL 持久化 dirty 队列和周期性对账作为正式实现边界
   - 数据总库长期正式形态不再继续依赖 Episode 实时聚合主路径，也不再把新增画像字段持续堆入 `batches`
   - 数据总库资产 summary 与 batch profile 的统一统计作用域已冻结为 `active_list_active_batch_indexed_episodes`
-  - 任务级资产画像长期路线已确认：采用 Route T2，新增 `task_asset_rollups` + `task_asset_recompute_jobs`；任务投影只从 `batch_asset_rollups` 汇总
+  - 任务级资产画像 Route T2 已全量落地：`task_asset_rollups` + `task_asset_recompute_jobs`；任务投影只从 `batch_asset_rollups` 汇总；单测/导入/前端类型检查已通过，待真实库迁移/重建冒烟
   - 任务级最终可用性主口径固定为 `final_dataset_status`，人工质检进度只作为辅口径；`not_reviewed_count` 与 `pending_dataset_count` 必须拆开
   - `task_types.total_batches` / `total_episodes` 进入废弃流程，不再作为长期资产计数权威源
 inputs:

@@ -9,6 +9,8 @@ import type {
   DatasetTaskSummary,
   DataAssetBatchListPayload,
   DataAssetSummary,
+  DataAssetTaskDetail,
+  DataAssetTaskListPayload,
   DispatchPreview,
   EpisodeRow,
   HistoryExportPayload,
@@ -141,6 +143,17 @@ export interface DataAssetBatchQuery {
   taskTypeId?: string
   batchDecision?: string
   qcStatus?: string
+}
+
+export interface DataAssetTaskQuery {
+  page?: number
+  pageSize?: number
+  keyword?: string
+  taskTypeId?: string
+  includeInactive?: boolean
+  staleOnly?: boolean
+  sortBy?: string
+  sortOrder?: string
 }
 
 export interface IngestScanRequest {
@@ -390,8 +403,26 @@ export async function fetchDataAssetBatches(query: DataAssetBatchQuery = {}) {
   return request<DataAssetBatchListPayload>(`/data-assets/batches${suffix}`)
 }
 
-export async function rebuildDataAssets() {
-  return request<{ success: boolean; rebuiltBatchCount: number }>('/data-assets/rebuild', {
+export async function fetchDataAssetTasks(query: DataAssetTaskQuery = {}) {
+  const params = new URLSearchParams()
+  if (query.page) params.set('page', String(query.page))
+  if (query.pageSize) params.set('page_size', String(query.pageSize))
+  if (query.keyword) params.set('keyword', query.keyword)
+  if (query.taskTypeId) params.set('task_type_id', query.taskTypeId)
+  if (query.includeInactive) params.set('include_inactive', 'true')
+  if (query.staleOnly) params.set('stale_only', 'true')
+  if (query.sortBy) params.set('sort_by', query.sortBy)
+  if (query.sortOrder) params.set('sort_order', query.sortOrder)
+  const suffix = params.size ? `?${params.toString()}` : ''
+  return request<DataAssetTaskListPayload>(`/data-assets/tasks${suffix}`)
+}
+
+export async function fetchDataAssetTaskDetail(taskTypeId: string) {
+  return request<DataAssetTaskDetail>(`/data-assets/tasks/${encodeURIComponent(taskTypeId)}`)
+}
+
+export async function rebuildDataAssets(scope: 'batch' | 'task' | 'all' = 'all') {
+  return request<{ success: boolean; scope: string; rebuiltBatchCount: number; rebuiltTaskCount: number }>(`/data-assets/rebuild?scope=${scope}`, {
     method: 'POST'
   })
 }

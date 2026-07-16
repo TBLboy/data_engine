@@ -3441,3 +3441,91 @@ PY'`
 - Next steps:
   - 用户确认后，按 Route T2 实施顺序推进：Alembic 建表 → task recompute 服务 → 接入 batch 成功链路 → 全量初始化 → API → 前端三视角
   - 实现前不要再回退到“请求时扫 episodes / 前端按批次求和 / 把统计堆进 task_types”的旧路线
+
+## 2026-07-16 12:12 CST
+
+- Type: business-logic + implementation
+- Status: confirmed + unit-tested
+- Importance: high
+- Reusable: yes
+- Objective: 确认 Route T2 业务逻辑已固化，并完成任务资产画像代码落地与单测修复
+
+- Work completed:
+  1. 复核 `.project-log/business-logic/*`：decision / main / constraints / graph / nodes / edges / open-questions 中 Route T2 口径已完整固化，无需回退重写。
+  2. 确认正式业务边界保持：
+     - `episodes -> batch_asset_rollups -> task_asset_rollups -> GET /api/data-assets/tasks`
+     - 全局 summary 继续从 `batch_asset_rollups` 汇总
+     - 最终可用性主口径 `final_dataset_status`；人工质检辅口径 `manual_qc_status`
+     - `not_reviewed_count` 与 `pending_dataset_count` 拆开；比率分母 0 返回 `null`
+  3. 实现侧已具备完整链路：模型、Alembic 迁移、服务层、API、worker、前端 Task 视角、单测。
+  4. 修复 SQLite 会话可见性/唯一性：enqueue 与 rollup 查找改为 pending identity + flush 安全路径；batch rollup 写后 flush，避免 task 汇总读到空投影。
+  5. 调整 worker 相关单测期望，覆盖 batch 成功后联动处理父 task job 的行为。
+  6. 跑通 `tests/test_data_assets.py`：10/10 OK。
+
+- Business logic impact:
+  - 业务逻辑本身无新增分叉，仍以 2026-07-16 的 Route T2 决策为准。
+  - 实现细节收敛确认：任务层 `calculation_version` 独立字符串常量 `task-asset-rollup-v1`，不与 batch 层共用同一常量。
+  - 默认任务列表优先 active task，并始终保留 `task_type:unclassified` 可见性。
+
+- Problems encountered:
+  - `autoflush=False` 下未 flush 的 pending job 导致 UNIQUE 冲突与 task 汇总为 0。
+  - worker 合并处理 batch+task 后，旧测试硬编码 processed==1 失真。
+
+- Resolution:
+  - 服务层统一 session-safe 查找与必要 flush。
+  - 单测改为断言业务结果，而非错误的计数假设。
+
+- Verification:
+  - `/home/tbl/Project/data_collect/software/backend/.conda-env/bin/python -m unittest tests.test_data_assets -v` → 10 tests OK
+
+- Files changed:
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+  - `.project-log/business-logic/open-questions.md`
+  - `backend/app/services/data_assets.py`
+  - `tests/test_data_assets.py`
+  - （既有未提交实现）models / migration / API / frontend / worker
+
+- Next steps:
+  - 可选真实库迁移 + rebuild 冒烟
+  - 用户要求时再 commit 实现
+
+
+
+## 2026-07-16 12:45 CST
+
+- Type: implementation + verification
+- Status: completed
+- Importance: high
+- Reusable: yes
+- Objective: Route T2 任务资产画像全量落地后完成完整性检查，并提交实现
+
+- Completeness audit:
+  1. 模型/迁移字段与冻结口径一致：`task_asset_rollups` + `task_asset_recompute_jobs`
+  2. 聚合链路正确：`episodes -> batch_asset_rollups -> task_asset_rollups`
+  3. 最终可用性 / 人工质检两组指标分离；比率读时计算，分母 0 为 null
+  4. batch 重算成功后 enqueue 父 task；task 若存在 pending/running/failed 子 batch job 则等待
+  5. attach/detach/delete 任务关系变化双 dirty old/new task
+  6. API 边界正确：`/api/data-assets/tasks*`，未侵入 `/api/dataset/tasks/*`
+  7. 前端三视角 + Task→Batch 钻取 + rebuild(scope=all) 已接入
+  8. worker / scheduler / rebuild scope=batch|task|all 已接入
+
+- Verification:
+  - `backend/.conda-env/bin/python -m unittest tests.test_data_assets -v` → 10/10 OK
+  - `PYTHONPATH=backend ... import app.services.data_assets / models / routes / schemas` → OK
+  - `frontend/node_modules/.bin/vue-tsc --noEmit` → OK
+
+- Residual / non-blocking:
+  - 真实库迁移与 rebuild 冒烟尚未执行（环境相关）
+  - `task_types.total_*` 仍保留兼容，待确认无调用后删除
+  - inactive task 持有 active-scope batch 的写路径禁令仍未额外收紧（Q-20260716-023 部分保留）
+
+- Files changed:
+  - backend models / migration / services / API / schemas
+  - frontend database-view / client / types
+  - tests/test_data_assets.py
+  - .project-log status docs
+
+- Next steps:
+  - commit 实现
+  - 可选真实库迁移 + rebuild 冒烟

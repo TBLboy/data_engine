@@ -538,6 +538,63 @@ class DataAssetBatchListSchema(BaseModel):
     total: int
 
 
+class DataAssetTaskRowSchema(BaseModel):
+    taskTypeId: str
+    taskTypeName: str
+    isActive: bool
+    batchCount: int
+    episodeCount: int
+    reviewedCount: int
+    notReviewedCount: int
+    manualPassCount: int
+    manualFailCount: int
+    manualPassRate: float | None
+    manualReviewProgress: float | None
+    qualifiedCount: int
+    unqualifiedCount: int
+    pendingDatasetCount: int
+    finalQualifiedRate: float | None
+    finalAdjudicationProgress: float | None
+    totalDurationSec: float
+    durationCoveredEpisodeCount: int
+    durationMissingEpisodeCount: int
+    durationCoverageRate: float | None
+    totalFrameCount: int
+    frameCoveredEpisodeCount: int
+    frameMissingEpisodeCount: int
+    frameCoverageRate: float | None
+    sampledEpisodeCount: int
+    acceptedBatchCount: int
+    rejectedBatchCount: int
+    pendingBatchCount: int
+    sourceBatchCount: int
+    sourceWatermark: str
+    calculationVersion: str
+    refreshedAt: str | None
+    stale: bool
+    jobStatus: str
+
+
+class DataAssetTaskListSchema(BaseModel):
+    items: list[DataAssetTaskRowSchema]
+    page: int
+    pageSize: int
+    total: int
+
+
+class DataAssetTaskDetailSchema(DataAssetTaskRowSchema):
+    taskDescription: str
+    armMode: str
+    topBatches: list[DataAssetBatchRowSchema]
+    topBatchTotal: int
+
+
+class DataAssetRebuildRequest(BaseModel):
+    scope: str = 'all'
+    taskTypeIds: list[str] | None = None
+    force: bool = False
+
+
 class DatabasePayloadSchema(BaseModel):
     episodes: list[EpisodeRowSchema]
     batches: list[BatchSummarySchema]

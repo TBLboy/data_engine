@@ -13,8 +13,29 @@ from sqlalchemy.orm import sessionmaker
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
 
 from app.core.db import Base
-from app.models import Batch, BatchAssetRecomputeJob, BatchAssetRollup, Episode, ListRecord, ScanJob, TaskType
-from app.services.data_assets import ROLLUP_VERSION, data_asset_batch_rows, data_assets_summary, process_pending_recompute_jobs, recompute_batch_asset_rollup
+from app.models import (
+    Batch,
+    BatchAssetRecomputeJob,
+    BatchAssetRollup,
+    Episode,
+    ListRecord,
+    ScanJob,
+    TaskAssetRecomputeJob,
+    TaskAssetRollup,
+    TaskType,
+)
+from app.services.data_assets import (
+    ROLLUP_VERSION,
+    TASK_ROLLUP_VERSION,
+    data_asset_batch_rows,
+    data_asset_task_rows,
+    data_assets_summary,
+    enqueue_task_asset_recompute,
+    process_pending_recompute_jobs,
+    recompute_batch_asset_rollup,
+    recompute_task_asset_rollup,
+    rebuild_all_active_rollups,
+)
 
 
 class DataAssetsServiceTests(unittest.TestCase):
@@ -32,6 +53,8 @@ class DataAssetsServiceTests(unittest.TestCase):
                 Episode.__table__,
                 BatchAssetRollup.__table__,
                 BatchAssetRecomputeJob.__table__,
+                TaskAssetRollup.__table__,
+                TaskAssetRecomputeJob.__table__,
             ],
         )
         self.SessionLocal = sessionmaker(bind=self.engine, autoflush=False, autocommit=False, expire_on_commit=False)
@@ -456,16 +479,145 @@ class DataAssetsServiceTests(unittest.TestCase):
             db.commit()
 
             processed = process_pending_recompute_jobs(db, limit=10)
-            self.assertEqual(processed, 1)
+            # Batch job success also enqueues/processes the parent task job in the same worker loop.
+            self.assertGreaterEqual(processed, 1)
 
             job = db.query(BatchAssetRecomputeJob).filter(BatchAssetRecomputeJob.batch_id == 'batch_active_ready').one()
             rollup = db.query(BatchAssetRollup).filter(BatchAssetRollup.batch_id == 'batch_active_ready').one()
+            task_job = db.query(TaskAssetRecomputeJob).filter(TaskAssetRecomputeJob.task_type_id == 'task_type_1').one()
             self.assertEqual(job.status, 'done')
             self.assertEqual(job.attempts, 1)
             self.assertEqual(job.last_error, '')
             self.assertIsNotNone(job.last_started_at)
             self.assertIsNotNone(job.last_finished_at)
             self.assertEqual(rollup.episode_count, 3)
+            self.assertEqual(task_job.status, 'done')
+
+
+
+
+    def test_recompute_task_asset_rollup_aggregates_from_batch_rollups(self) -> None:
+        with self.SessionLocal() as db:
+            recompute_batch_asset_rollup(db, 'batch_active_ready')
+            recompute_batch_asset_rollup(db, 'batch_active_stale')
+            db.commit()
+
+            task1 = recompute_task_asset_rollup(db, 'task_type_1')
+            task2 = recompute_task_asset_rollup(db, 'task_type_2')
+            db.commit()
+
+            self.assertIsNotNone(task1)
+            self.assertIsNotNone(task2)
+            assert task1 is not None
+            assert task2 is not None
+
+            self.assertEqual(task1.batch_count, 1)
+            self.assertEqual(task1.episode_count, 3)
+            self.assertEqual(task1.reviewed_count, 2)
+            self.assertEqual(task1.not_reviewed_count, 1)
+            self.assertEqual(task1.manual_pass_count, 1)
+            self.assertEqual(task1.manual_fail_count, 1)
+            self.assertEqual(task1.qualified_count, 1)
+            self.assertEqual(task1.unqualified_count, 1)
+            self.assertEqual(task1.pending_dataset_count, 1)
+            self.assertAlmostEqual(task1.total_duration_sec, 10.5)
+            self.assertEqual(task1.total_frame_count, 633)
+            self.assertEqual(task1.rejected_batch_count, 1)
+            self.assertEqual(task1.pending_batch_count, 0)
+            self.assertEqual(task1.calculation_version, TASK_ROLLUP_VERSION)
+
+            self.assertEqual(task2.batch_count, 1)
+            self.assertEqual(task2.episode_count, 1)
+            self.assertEqual(task2.pending_dataset_count, 1)
+            self.assertEqual(task2.pending_batch_count, 1)
+            self.assertAlmostEqual(task2.total_duration_sec, 4.0)
+
+    def test_task_asset_rows_rate_null_when_denominator_zero(self) -> None:
+        with self.SessionLocal() as db:
+            recompute_batch_asset_rollup(db, 'batch_active_stale')
+            recompute_task_asset_rollup(db, 'task_type_2')
+            db.commit()
+
+            items, total = data_asset_task_rows(
+                db,
+                page=1,
+                page_size=20,
+                task_type_id='task_type_2',
+                include_inactive=True,
+            )
+            self.assertEqual(total, 1)
+            row = items[0]
+            self.assertIsNone(row['manual_pass_rate'])
+            self.assertIsNone(row['final_qualified_rate'])
+            self.assertEqual(row['episode_count'], 1)
+            self.assertEqual(row['pending_dataset_count'], 1)
+
+    def test_task_recompute_waits_for_pending_child_batch_jobs(self) -> None:
+        with self.SessionLocal() as db:
+            recompute_batch_asset_rollup(db, 'batch_active_ready')
+            db.add(
+                BatchAssetRecomputeJob(
+                    batch_id='batch_active_ready',
+                    reason='manual_rebuild',
+                    requested_at=datetime(2026, 7, 16, 10, 0, 0),
+                    status='pending',
+                    attempts=0,
+                    last_error='',
+                    last_started_at=None,
+                    last_finished_at=None,
+                )
+            )
+            enqueue_task_asset_recompute(db, 'task_type_1', reason='child_batch_refreshed')
+            db.commit()
+
+            result = recompute_task_asset_rollup(db, 'task_type_1')
+            db.commit()
+            self.assertIsNone(result)
+            job = db.query(TaskAssetRecomputeJob).filter(TaskAssetRecomputeJob.task_type_id == 'task_type_1').one()
+            self.assertEqual(job.status, 'pending')
+            self.assertEqual(job.last_error, 'waiting_for_child_batch_jobs')
+
+    def test_batch_recompute_enqueues_parent_task_job(self) -> None:
+        with self.SessionLocal() as db:
+            recompute_batch_asset_rollup(db, 'batch_active_ready')
+            db.commit()
+            job = db.query(TaskAssetRecomputeJob).filter(TaskAssetRecomputeJob.task_type_id == 'task_type_1').one()
+            self.assertEqual(job.status, 'pending')
+            self.assertEqual(job.reason, 'child_batch_refreshed')
+
+    def test_rebuild_all_scope_task_and_all(self) -> None:
+        with self.SessionLocal() as db:
+            batch_only = rebuild_all_active_rollups(db, scope='batch')
+            self.assertEqual(batch_only['rebuiltBatchCount'], 2)
+            self.assertEqual(batch_only['rebuiltTaskCount'], 0)
+
+            task_only = rebuild_all_active_rollups(db, scope='task')
+            self.assertGreaterEqual(task_only['rebuiltTaskCount'], 2)
+
+            all_result = rebuild_all_active_rollups(db, scope='all')
+            self.assertEqual(all_result['rebuiltBatchCount'], 2)
+            self.assertGreaterEqual(all_result['rebuiltTaskCount'], 2)
+
+            task1 = db.query(TaskAssetRollup).filter(TaskAssetRollup.task_type_id == 'task_type_1').one()
+            task2 = db.query(TaskAssetRollup).filter(TaskAssetRollup.task_type_id == 'task_type_2').one()
+            self.assertEqual(task1.episode_count, 3)
+            self.assertEqual(task2.episode_count, 1)
+
+    def test_process_pending_recompute_jobs_handles_task_jobs(self) -> None:
+        with self.SessionLocal() as db:
+            recompute_batch_asset_rollup(db, 'batch_active_ready')
+            recompute_batch_asset_rollup(db, 'batch_active_stale')
+            enqueue_task_asset_recompute(db, 'task_type_1', reason='manual_rebuild')
+            enqueue_task_asset_recompute(db, 'task_type_2', reason='manual_rebuild')
+            db.commit()
+
+            processed = process_pending_recompute_jobs(db, limit=20)
+            self.assertGreaterEqual(processed, 2)
+
+            task1 = db.query(TaskAssetRollup).filter(TaskAssetRollup.task_type_id == 'task_type_1').one()
+            job1 = db.query(TaskAssetRecomputeJob).filter(TaskAssetRecomputeJob.task_type_id == 'task_type_1').one()
+            self.assertEqual(task1.episode_count, 3)
+            self.assertEqual(job1.status, 'done')
 
 
 if __name__ == '__main__':

@@ -298,6 +298,58 @@ export interface DataAssetBatchListPayload {
   total: number
 }
 
+
+export interface DataAssetTaskRow {
+  taskTypeId: string
+  taskTypeName: string
+  isActive: boolean
+  batchCount: number
+  episodeCount: number
+  reviewedCount: number
+  notReviewedCount: number
+  manualPassCount: number
+  manualFailCount: number
+  manualPassRate: number | null
+  manualReviewProgress: number | null
+  qualifiedCount: number
+  unqualifiedCount: number
+  pendingDatasetCount: number
+  finalQualifiedRate: number | null
+  finalAdjudicationProgress: number | null
+  totalDurationSec: number
+  durationCoveredEpisodeCount: number
+  durationMissingEpisodeCount: number
+  durationCoverageRate: number | null
+  totalFrameCount: number
+  frameCoveredEpisodeCount: number
+  frameMissingEpisodeCount: number
+  frameCoverageRate: number | null
+  sampledEpisodeCount: number
+  acceptedBatchCount: number
+  rejectedBatchCount: number
+  pendingBatchCount: number
+  sourceBatchCount: number
+  sourceWatermark: string
+  calculationVersion: string
+  refreshedAt: string | null
+  stale: boolean
+  jobStatus: string
+}
+
+export interface DataAssetTaskListPayload {
+  items: DataAssetTaskRow[]
+  page: number
+  pageSize: number
+  total: number
+}
+
+export interface DataAssetTaskDetail extends DataAssetTaskRow {
+  taskDescription: string
+  armMode: string
+  topBatches: DataAssetBatchRow[]
+  topBatchTotal: number
+}
+
 export interface ReviewerWorkload {
   name: string
   assigned: number

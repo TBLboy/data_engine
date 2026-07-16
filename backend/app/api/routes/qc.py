@@ -29,7 +29,10 @@ from app.schemas.qc import (
     CreateAccountRequest,
     DashboardPayloadSchema,
     DataAssetBatchListSchema,
+    DataAssetRebuildRequest,
     DataAssetSummarySchema,
+    DataAssetTaskDetailSchema,
+    DataAssetTaskListSchema,
     DatabasePayloadSchema,
     DispatchPlanRequest,
     DispatchPreviewSchema,
@@ -63,7 +66,15 @@ from app.schemas.qc import (
     UpdateAccountStatusRequest,
 )
 from app.services.authz import require_roles
-from app.services.data_assets import data_asset_batch_rows, data_assets_summary, enqueue_batch_asset_recompute, rebuild_all_active_batch_rollups
+from app.services.data_assets import (
+    data_asset_batch_rows,
+    data_asset_task_detail,
+    data_asset_task_rows,
+    data_assets_summary,
+    enqueue_batch_asset_recompute,
+    enqueue_task_asset_recompute,
+    rebuild_all_active_rollups,
+)
 from app.services.minio_client import get_minio_service
 from app.services.payloads import (
     _superseded_task_counts_by_batch,
@@ -407,6 +418,7 @@ def create_task_type(
     if db.query(TaskType).filter(TaskType.id == task_type.id).first():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='任务类型标识已存在，请更换名称')
     db.add(task_type)
+    enqueue_task_asset_recompute(db, task_type.id, reason='manual_rebuild')
     now = _utcnow()
     db.add(AuditEvent(
         id=_audit_event_id('task_type_create', task_type.id),
@@ -473,6 +485,9 @@ def delete_task_type(
     affected_batches = db.query(Batch).filter(Batch.task_type_id == task_type.id, Batch.is_active == True).all()
     for batch in affected_batches:
         _reassign_batch_task_type(db, batch=batch, task_type=unclassified)
+    if affected_batches:
+        enqueue_task_asset_recompute(db, task_type.id, reason='task_relation_changed')
+        enqueue_task_asset_recompute(db, unclassified.id, reason='task_relation_changed')
     task_type.is_active = False
     now = _utcnow()
     db.add(AuditEvent(
@@ -536,6 +551,9 @@ def attach_batches_to_task_type(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f'批次 {batch.name} 不在待分类池中')
     for batch in batches:
         _reassign_batch_task_type(db, batch=batch, task_type=task_type)
+    if batches:
+        enqueue_task_asset_recompute(db, task_type.id, reason='task_relation_changed')
+        enqueue_task_asset_recompute(db, unclassified.id, reason='task_relation_changed')
     now = _utcnow()
     db.add(AuditEvent(
         id=_audit_event_id('task_type_attach', task_type.id),
@@ -569,6 +587,8 @@ def detach_batch_from_task_type(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='该批次不属于当前任务类型')
     unclassified = _get_task_type_or_404(db, UNCLASSIFIED_TASK_TYPE_ID)
     _reassign_batch_task_type(db, batch=batch, task_type=unclassified)
+    enqueue_task_asset_recompute(db, task_type.id, reason='task_relation_changed')
+    enqueue_task_asset_recompute(db, unclassified.id, reason='task_relation_changed')
     now = _utcnow()
     db.add(AuditEvent(
         id=_audit_event_id('task_type_detach', batch.id),
@@ -805,6 +825,47 @@ def database(
     )
 
 
+
+
+def _serialize_data_asset_task_row(item: dict) -> dict:
+    return {
+        'taskTypeId': item['task_type_id'],
+        'taskTypeName': item['task_type_name'] or '未分类',
+        'isActive': bool(item['is_active']),
+        'batchCount': int(item['batch_count'] or 0),
+        'episodeCount': int(item['episode_count'] or 0),
+        'reviewedCount': int(item['reviewed_count'] or 0),
+        'notReviewedCount': int(item['not_reviewed_count'] or 0),
+        'manualPassCount': int(item['manual_pass_count'] or 0),
+        'manualFailCount': int(item['manual_fail_count'] or 0),
+        'manualPassRate': item['manual_pass_rate'],
+        'manualReviewProgress': item['manual_review_progress'],
+        'qualifiedCount': int(item['qualified_count'] or 0),
+        'unqualifiedCount': int(item['unqualified_count'] or 0),
+        'pendingDatasetCount': int(item['pending_dataset_count'] or 0),
+        'finalQualifiedRate': item['final_qualified_rate'],
+        'finalAdjudicationProgress': item['final_adjudication_progress'],
+        'totalDurationSec': float(item['total_duration_sec'] or 0.0),
+        'durationCoveredEpisodeCount': int(item['duration_covered_episode_count'] or 0),
+        'durationMissingEpisodeCount': int(item['duration_missing_episode_count'] or 0),
+        'durationCoverageRate': item['duration_coverage_rate'],
+        'totalFrameCount': int(item['total_frame_count'] or 0),
+        'frameCoveredEpisodeCount': int(item['frame_covered_episode_count'] or 0),
+        'frameMissingEpisodeCount': int(item['frame_missing_episode_count'] or 0),
+        'frameCoverageRate': item['frame_coverage_rate'],
+        'sampledEpisodeCount': int(item['sampled_episode_count'] or 0),
+        'acceptedBatchCount': int(item['accepted_batch_count'] or 0),
+        'rejectedBatchCount': int(item['rejected_batch_count'] or 0),
+        'pendingBatchCount': int(item['pending_batch_count'] or 0),
+        'sourceBatchCount': int(item['source_batch_count'] or 0),
+        'sourceWatermark': item.get('source_watermark') or '',
+        'calculationVersion': item.get('calculation_version') or '',
+        'refreshedAt': format_optional_time(item.get('refreshed_at')),
+        'stale': bool(item.get('stale')),
+        'jobStatus': item.get('job_status') or '',
+    }
+
+
 @router.get('/data-assets/summary', response_model=DataAssetSummarySchema)
 def data_assets_summary_route(
     db: Session = Depends(get_db),
@@ -888,17 +949,104 @@ def data_assets_batches_route(
     }
 
 
+@router.get('/data-assets/tasks', response_model=DataAssetTaskListSchema)
+def data_assets_tasks_route(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    keyword: str = Query(''),
+    task_type_id: str = Query(''),
+    include_inactive: bool = Query(False),
+    stale_only: bool = Query(False),
+    sort_by: str = Query('taskTypeName'),
+    sort_order: str = Query('asc'),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    items, total = data_asset_task_rows(
+        db,
+        page=page,
+        page_size=page_size,
+        keyword=keyword,
+        task_type_id=task_type_id,
+        include_inactive=include_inactive,
+        stale_only=stale_only,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+    return {
+        'items': [_serialize_data_asset_task_row(item) for item in items],
+        'page': page,
+        'pageSize': page_size,
+        'total': total,
+    }
+
+
+@router.get('/data-assets/tasks/{task_type_id}', response_model=DataAssetTaskDetailSchema)
+def data_assets_task_detail_route(
+    task_type_id: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    detail = data_asset_task_detail(db, task_type_id)
+    if not detail:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='任务资产不存在')
+    payload = _serialize_data_asset_task_row(detail)
+    payload.update({
+        'taskDescription': detail.get('task_description') or '',
+        'armMode': detail.get('arm_mode') or 'both_arms',
+        'topBatches': [
+            {
+                'batchId': item.batch_id,
+                'batchName': item.batch_name,
+                'taskTypeId': item.task_type_id,
+                'taskTypeName': item.task_type_name or '未分类',
+                'episodeCount': int(item.episode_count or 0),
+                'totalDurationSec': float(item.total_duration_sec or 0.0),
+                'durationCoveredEpisodeCount': int(item.duration_covered_episode_count or 0),
+                'totalFrameCount': int(item.total_frame_count or 0),
+                'frameCoveredEpisodeCount': int(item.frame_covered_episode_count or 0),
+                'reviewedCount': int(item.reviewed_count or 0),
+                'qualifiedCount': int(item.qualified_count or 0),
+                'unqualifiedCount': int(item.unqualified_count or 0),
+                'manualPassCount': int(item.manual_pass_count or 0),
+                'manualFailCount': int(item.manual_fail_count or 0),
+                'pendingDatasetCount': int(item.pending_dataset_count or 0),
+                'failureRate': item.failure_rate,
+                'rejectThreshold': float(item.reject_threshold or 0.0),
+                'qcStatus': item.qc_status,
+                'batchDecision': item.batch_decision,
+                'batchDecisionReason': item.batch_decision_reason or '',
+                'createdAt': format_time(item.created_at),
+                'adjudicatedAt': format_optional_time(item.adjudicated_at),
+                'updatedAt': format_optional_time(item.last_episode_updated_at),
+                'refreshedAt': format_optional_time(item.refreshed_at),
+            }
+            for item in detail.get('top_batches') or []
+        ],
+        'topBatchTotal': int(detail.get('top_batch_total') or 0),
+    })
+    return payload
+
+
 @router.post('/data-assets/rebuild')
 def data_assets_rebuild_route(
+    payload: DataAssetRebuildRequest | None = Body(default=None),
+    scope: str = Query('all'),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     require_roles(current_user, 'admin', 'qc_manager')
-    rebuilt = rebuild_all_active_batch_rollups(db)
+    request_scope = (payload.scope if payload and payload.scope else scope) or 'all'
+    result = rebuild_all_active_rollups(db, scope=request_scope)
+    if payload and payload.taskTypeIds:
+        for task_type_id in payload.taskTypeIds:
+            enqueue_task_asset_recompute(db, task_type_id, reason='manual_rebuild')
     db.commit()
     return {
         'success': True,
-        'rebuiltBatchCount': rebuilt,
+        'scope': result['scope'],
+        'rebuiltBatchCount': result['rebuiltBatchCount'],
+        'rebuiltTaskCount': result['rebuiltTaskCount'],
     }
 
 

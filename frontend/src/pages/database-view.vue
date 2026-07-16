@@ -2,9 +2,9 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
-import { fetchDataAssetBatches, fetchDataAssetSummary, fetchDatabase, rebuildDataAssets, scanDatabase, type DatabasePayload } from '../api/client'
+import { fetchDataAssetBatches, fetchDataAssetSummary, fetchDataAssetTasks, fetchDatabase, rebuildDataAssets, scanDatabase, type DatabasePayload } from '../api/client'
 import { useSessionStore } from '../stores/session'
-import type { BatchSummary, DataAssetBatchRow, DataAssetSummary } from '../types/qc'
+import type { BatchSummary, DataAssetBatchRow, DataAssetSummary, DataAssetTaskRow } from '../types/qc'
 import { reasonLabel } from '../utils/reasonLabels'
 
 const session = useSessionStore()
@@ -14,18 +14,24 @@ const summary = ref<DataAssetSummary | null>(null)
 const batchAssetItems = ref<DataAssetBatchRow[]>([])
 const batchAssetTotal = ref(0)
 const activeBatchAsset = ref<DataAssetBatchRow | null>(null)
+const taskAssetItems = ref<DataAssetTaskRow[]>([])
+const taskAssetTotal = ref(0)
+const activeTaskAsset = ref<DataAssetTaskRow | null>(null)
 
 const databaseLoading = ref(true)
 const assetLoading = ref(true)
 const databaseError = ref('')
 const summaryError = ref('')
 const batchAssetError = ref('')
+const taskAssetError = ref('')
 const scanning = ref(false)
 const rebuilding = ref(false)
 const batchAssetDrawerVisible = ref(false)
+const taskAssetDrawerVisible = ref(false)
 
 const episodeKeyword = ref('')
 const batchAssetKeyword = ref('')
+const taskAssetKeyword = ref('')
 const status = ref('')
 const result = ref('')
 const batch = ref('')
@@ -38,8 +44,14 @@ const batchAssetTaskTypeId = ref('')
 const batchAssetDecision = ref('')
 const batchAssetQcStatus = ref('')
 
+const taskAssetPage = ref(1)
+const taskAssetPageSize = ref(20)
+const taskAssetIncludeInactive = ref(false)
+const taskAssetStaleOnly = ref(false)
+
 let episodeKeywordTimer: ReturnType<typeof setTimeout> | null = null
 let batchAssetKeywordTimer: ReturnType<typeof setTimeout> | null = null
+let taskAssetKeywordTimer: ReturnType<typeof setTimeout> | null = null
 
 const scanForm = reactive({
   bucket: 'yaocao',
@@ -81,8 +93,9 @@ const loadDataAssets = async () => {
   assetLoading.value = true
   summaryError.value = ''
   batchAssetError.value = ''
+  taskAssetError.value = ''
 
-  const [summaryResult, batchesResult] = await Promise.allSettled([
+  const [summaryResult, batchesResult, tasksResult] = await Promise.allSettled([
     fetchDataAssetSummary(),
     fetchDataAssetBatches({
       page: batchAssetPage.value,
@@ -91,6 +104,15 @@ const loadDataAssets = async () => {
       taskTypeId: batchAssetTaskTypeId.value,
       batchDecision: batchAssetDecision.value,
       qcStatus: batchAssetQcStatus.value,
+    }),
+    fetchDataAssetTasks({
+      page: taskAssetPage.value,
+      pageSize: taskAssetPageSize.value,
+      keyword: taskAssetKeyword.value.trim(),
+      includeInactive: taskAssetIncludeInactive.value,
+      staleOnly: taskAssetStaleOnly.value,
+      sortBy: 'taskTypeName',
+      sortOrder: 'asc',
     }),
   ])
 
@@ -108,6 +130,15 @@ const loadDataAssets = async () => {
     batchAssetItems.value = []
     batchAssetTotal.value = 0
     batchAssetError.value = formatError(batchesResult.reason, '加载批次数据资产失败')
+  }
+
+  if (tasksResult.status === 'fulfilled') {
+    taskAssetItems.value = tasksResult.value.items
+    taskAssetTotal.value = tasksResult.value.total
+  } else {
+    taskAssetItems.value = []
+    taskAssetTotal.value = 0
+    taskAssetError.value = formatError(tasksResult.reason, '加载任务数据资产失败')
   }
 
   assetLoading.value = false
@@ -136,11 +167,11 @@ const submitScan = async () => {
 const rebuildAssets = async () => {
   rebuilding.value = true
   try {
-    const rebuildResult = await rebuildDataAssets()
-    ElMessage.success(`批次画像已重建：${rebuildResult.rebuiltBatchCount} 个批次`)
+    const rebuildResult = await rebuildDataAssets('all')
+    ElMessage.success(`资产画像已重建：批次 ${rebuildResult.rebuiltBatchCount}，任务 ${rebuildResult.rebuiltTaskCount}`)
     await loadDataAssets()
   } catch (err) {
-    ElMessage.error(formatError(err, '重建批次画像失败'))
+    ElMessage.error(formatError(err, '重建资产画像失败'))
   } finally {
     rebuilding.value = false
   }
@@ -166,6 +197,39 @@ const openBatchAssetDrawer = (row: DataAssetBatchRow) => {
   batchAssetDrawerVisible.value = true
 }
 
+const openTaskAssetDrawer = (row: DataAssetTaskRow) => {
+  activeTaskAsset.value = row
+  taskAssetDrawerVisible.value = true
+}
+
+const applyTaskToBatchFilter = (taskTypeId: string) => {
+  batchAssetTaskTypeId.value = taskTypeId
+  if (batchAssetPage.value !== 1) {
+    batchAssetPage.value = 1
+  }
+}
+
+const clearTaskBatchFilter = () => {
+  if (!batchAssetTaskTypeId.value) return
+  batchAssetTaskTypeId.value = ''
+  if (batchAssetPage.value !== 1) {
+    batchAssetPage.value = 1
+  }
+}
+
+const drillTaskToBatches = (row: DataAssetTaskRow) => {
+  applyTaskToBatchFilter(row.taskTypeId)
+}
+
+const drillTaskToEpisodes = (row: DataAssetTaskRow) => {
+  applyTaskToBatchFilter(row.taskTypeId)
+  // Episode list still filters by batch; clear batch and keep task context on batch panel.
+  if (batch.value) {
+    batch.value = ''
+    if (page.value !== 1) page.value = 1
+  }
+}
+
 onMounted(() => {
   void loadPage()
 })
@@ -173,6 +237,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (episodeKeywordTimer) clearTimeout(episodeKeywordTimer)
   if (batchAssetKeywordTimer) clearTimeout(batchAssetKeywordTimer)
+  if (taskAssetKeywordTimer) clearTimeout(taskAssetKeywordTimer)
 })
 
 watch([batch, status, result, pageSize], () => {
@@ -215,6 +280,29 @@ watch(batchAssetKeyword, () => {
   batchAssetKeywordTimer = setTimeout(() => {
     if (batchAssetPage.value !== 1) {
       batchAssetPage.value = 1
+      return
+    }
+    void loadDataAssets()
+  }, 250)
+})
+
+watch([taskAssetIncludeInactive, taskAssetStaleOnly, taskAssetPageSize], () => {
+  if (taskAssetPage.value !== 1) {
+    taskAssetPage.value = 1
+    return
+  }
+  void loadDataAssets()
+})
+
+watch(taskAssetPage, () => {
+  void loadDataAssets()
+})
+
+watch(taskAssetKeyword, () => {
+  if (taskAssetKeywordTimer) clearTimeout(taskAssetKeywordTimer)
+  taskAssetKeywordTimer = setTimeout(() => {
+    if (taskAssetPage.value !== 1) {
+      taskAssetPage.value = 1
       return
     }
     void loadDataAssets()
@@ -310,6 +398,17 @@ const qcStatusTagType = (value: string) => {
 }
 
 const reviewedText = (row: DataAssetBatchRow) => `${row.reviewedCount} / ${row.episodeCount}`
+const rateText = (value: number | null | undefined) => {
+  if (value === null || value === undefined) return '—'
+  return `${(value * 100).toFixed(1)}%`
+}
+const selectedTaskName = computed(() => {
+  if (!batchAssetTaskTypeId.value) return ''
+  const fromTasks = taskAssetItems.value.find((item) => item.taskTypeId === batchAssetTaskTypeId.value)
+  if (fromTasks) return fromTasks.taskTypeName
+  const fromTypes = taskTypes.value.find((item) => item.id === batchAssetTaskTypeId.value)
+  return fromTypes?.name ?? batchAssetTaskTypeId.value
+})
 const ingestStatusType = (statusValue: string) => {
   if (statusValue === 'done') return 'success'
   if (statusValue === 'failed') return 'danger'
@@ -335,10 +434,10 @@ const frameCoverageText = computed(() => {
         <div>
           <el-tag type="success" effect="light">Indexed Data Catalog</el-tag>
           <h1>数据总库</h1>
-          <p>按任务、批次、QC 状态、审核员和原因码检索全部采集数据，并基于批次级投影查看资产规模、覆盖率和批次可用性。</p>
+          <p>按 Episode、批次、任务三级资产视角查看采集数据规模、覆盖率、质检进度与最终可用性。</p>
         </div>
         <div class="toolbar-actions">
-          <el-button v-if="canScanDatabase" plain :loading="rebuilding" @click="rebuildAssets">重建批次画像</el-button>
+          <el-button v-if="canScanDatabase" plain :loading="rebuilding" @click="rebuildAssets">重建资产画像</el-button>
           <el-tag type="info" effect="light">{{ statisticsScopeLabel }}</el-tag>
         </div>
       </section>
@@ -346,6 +445,7 @@ const frameCoverageText = computed(() => {
       <el-alert v-if="databaseError" type="error" :closable="false" :title="databaseError" />
       <el-alert v-if="summaryError" type="warning" :closable="false" :title="summaryError" />
       <el-alert v-if="batchAssetError" type="warning" :closable="false" :title="batchAssetError" />
+      <el-alert v-if="taskAssetError" type="warning" :closable="false" :title="taskAssetError" />
 
       <section class="stats-grid" v-loading="assetLoading">
         <el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-blue">
@@ -509,12 +609,108 @@ const frameCoverageText = computed(() => {
         </div>
       </el-card>
 
+
+      <el-card shadow="never" class="qc-card episode-table-card" v-loading="assetLoading">
+        <template #header>
+          <div class="card-header-with-meta">
+            <div>
+              <strong>任务数据资产</strong>
+              <div class="table-subtitle">按任务汇总批次数、Episode 数、最终可用性与人工质检进度</div>
+            </div>
+            <div v-if="batchAssetTaskTypeId" class="active-filter-bar">
+              <span>当前任务筛选：{{ selectedTaskName }}</span>
+              <el-button link type="primary" @click="clearTaskBatchFilter">清除任务筛选</el-button>
+            </div>
+          </div>
+        </template>
+        <div class="filter-grid batch-filter-grid">
+          <el-input v-model="taskAssetKeyword" placeholder="搜索任务名称 / task type id" class="qc-input" clearable />
+          <el-select v-model="taskAssetIncludeInactive" placeholder="是否包含停用任务" class="qc-select">
+            <el-option label="仅活跃任务（含待分类）" :value="false" />
+            <el-option label="包含停用任务" :value="true" />
+          </el-select>
+          <el-select v-model="taskAssetStaleOnly" placeholder="刷新状态" class="qc-select">
+            <el-option label="全部任务" :value="false" />
+            <el-option label="仅 stale" :value="true" />
+          </el-select>
+        </div>
+        <el-table :data="taskAssetItems" stripe class="qc-table" height="420" scrollbar-always-on>
+          <el-table-column label="任务名称" min-width="180">
+            <template #default="{ row }">
+              <el-button link type="primary" class="batch-name-button" @click="drillTaskToBatches(row)">{{ row.taskTypeName }}</el-button>
+            </template>
+          </el-table-column>
+          <el-table-column prop="batchCount" label="批次数" width="90" />
+          <el-table-column prop="episodeCount" label="Episode 数" width="110" />
+          <el-table-column label="最终可用" width="100">
+            <template #default="{ row }">{{ row.qualifiedCount }}</template>
+          </el-table-column>
+          <el-table-column label="最终不可用" width="110">
+            <template #default="{ row }">{{ row.unqualifiedCount }}</template>
+          </el-table-column>
+          <el-table-column label="待裁定" width="90">
+            <template #default="{ row }">{{ row.pendingDatasetCount }}</template>
+          </el-table-column>
+          <el-table-column label="最终可用率" width="110">
+            <template #default="{ row }">{{ rateText(row.finalQualifiedRate) }}</template>
+          </el-table-column>
+          <el-table-column label="人工已质检" width="110">
+            <template #default="{ row }">{{ row.reviewedCount }} / {{ row.episodeCount }}</template>
+          </el-table-column>
+          <el-table-column label="人工通过率" width="110">
+            <template #default="{ row }">{{ rateText(row.manualPassRate) }}</template>
+          </el-table-column>
+          <el-table-column label="总时长" min-width="140">
+            <template #default="{ row }">
+              <div>{{ formatInteger(Math.round(row.totalDurationSec)) }} 秒</div>
+              <small class="table-meta">覆盖 {{ row.durationCoveredEpisodeCount }} / {{ row.episodeCount }}</small>
+            </template>
+          </el-table-column>
+          <el-table-column label="总帧数" min-width="140">
+            <template #default="{ row }">
+              <div>{{ formatInteger(row.totalFrameCount) }}</div>
+              <small class="table-meta">覆盖 {{ row.frameCoveredEpisodeCount }} / {{ row.episodeCount }}</small>
+            </template>
+          </el-table-column>
+          <el-table-column label="刷新状态" width="110">
+            <template #default="{ row }">
+              <el-tag :type="row.stale ? 'warning' : 'success'">{{ row.stale ? 'stale' : 'fresh' }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="refreshedAt" label="更新时间" min-width="160">
+            <template #default="{ row }">{{ row.refreshedAt || '尚未刷新' }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="180" fixed="right">
+            <template #default="{ row }">
+              <div class="batch-row-actions">
+                <el-button link type="primary" @click="drillTaskToBatches(row)">查看批次</el-button>
+                <el-button link @click="openTaskAssetDrawer(row)">查看画像</el-button>
+              </div>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div class="database-pagination-row">
+          <el-pagination
+            v-model:current-page="taskAssetPage"
+            v-model:page-size="taskAssetPageSize"
+            background
+            layout="total, sizes, prev, pager, next"
+            :total="taskAssetTotal"
+            :page-sizes="[10, 20, 50]"
+          />
+        </div>
+      </el-card>
+
       <el-card shadow="never" class="qc-card episode-table-card" v-loading="assetLoading">
         <template #header>
           <div class="card-header-with-meta">
             <div>
               <strong>批次数据资产</strong>
               <div class="table-subtitle">按批次查看数据规模、质检进度和最终可用状态</div>
+            </div>
+            <div v-if="batchAssetTaskTypeId" class="active-filter-bar">
+              <span>当前任务：{{ selectedTaskName }}</span>
+              <el-button link type="primary" @click="clearTaskBatchFilter">清除任务筛选</el-button>
             </div>
           </div>
         </template>
@@ -687,6 +883,50 @@ const frameCoverageText = computed(() => {
           <div class="drawer-section-title">判定说明</div>
           <div class="drawer-notes">
             {{ activeBatchAsset.batchDecisionReason || '当前批次尚无判定说明。' }}
+          </div>
+        </div>
+      </div>
+    </el-drawer>
+
+    <el-drawer v-model="taskAssetDrawerVisible" :with-header="false" size="540px">
+      <div v-if="activeTaskAsset" class="batch-drawer">
+        <div class="batch-drawer-header">
+          <div>
+            <el-tag type="info" effect="light">任务画像</el-tag>
+            <h2>{{ activeTaskAsset.taskTypeName }}</h2>
+            <p>任务级资产规模、最终可用性与人工质检进度在这里闭环查看。</p>
+          </div>
+          <div class="toolbar-actions">
+            <el-button plain @click="drillTaskToBatches(activeTaskAsset)">筛选批次</el-button>
+          </div>
+        </div>
+
+        <div class="batch-drawer-grid">
+          <div class="drawer-metric"><span>批次数</span><strong>{{ formatInteger(activeTaskAsset.batchCount) }}</strong></div>
+          <div class="drawer-metric"><span>Episode 数</span><strong>{{ formatInteger(activeTaskAsset.episodeCount) }}</strong></div>
+          <div class="drawer-metric"><span>最终可用</span><strong>{{ formatInteger(activeTaskAsset.qualifiedCount) }}</strong></div>
+          <div class="drawer-metric"><span>最终不可用</span><strong>{{ formatInteger(activeTaskAsset.unqualifiedCount) }}</strong></div>
+          <div class="drawer-metric"><span>待裁定</span><strong>{{ formatInteger(activeTaskAsset.pendingDatasetCount) }}</strong></div>
+          <div class="drawer-metric"><span>最终可用率</span><strong>{{ rateText(activeTaskAsset.finalQualifiedRate) }}</strong></div>
+          <div class="drawer-metric"><span>人工已质检</span><strong>{{ activeTaskAsset.reviewedCount }} / {{ activeTaskAsset.episodeCount }}</strong></div>
+          <div class="drawer-metric"><span>人工通过率</span><strong>{{ rateText(activeTaskAsset.manualPassRate) }}</strong></div>
+          <div class="drawer-metric"><span>总时长</span><strong>{{ formatInteger(Math.round(activeTaskAsset.totalDurationSec)) }} 秒</strong></div>
+          <div class="drawer-metric"><span>总帧数</span><strong>{{ formatInteger(activeTaskAsset.totalFrameCount) }}</strong></div>
+          <div class="drawer-metric"><span>时长覆盖率</span><strong>{{ rateText(activeTaskAsset.durationCoverageRate) }}</strong></div>
+          <div class="drawer-metric"><span>帧数覆盖率</span><strong>{{ rateText(activeTaskAsset.frameCoverageRate) }}</strong></div>
+          <div class="drawer-metric"><span>已接受批次</span><strong>{{ activeTaskAsset.acceptedBatchCount }}</strong></div>
+          <div class="drawer-metric"><span>已驳回批次</span><strong>{{ activeTaskAsset.rejectedBatchCount }}</strong></div>
+          <div class="drawer-metric"><span>待判定批次</span><strong>{{ activeTaskAsset.pendingBatchCount }}</strong></div>
+          <div class="drawer-metric"><span>刷新状态</span><strong>{{ activeTaskAsset.stale ? 'stale' : 'fresh' }}</strong></div>
+        </div>
+
+        <div class="drawer-section">
+          <div class="drawer-section-title">时间与版本</div>
+          <div class="drawer-kv-list">
+            <div class="drawer-kv-item"><span>投影刷新时间</span><strong>{{ activeTaskAsset.refreshedAt || '尚未刷新' }}</strong></div>
+            <div class="drawer-kv-item"><span>计算版本</span><strong>{{ activeTaskAsset.calculationVersion }}</strong></div>
+            <div class="drawer-kv-item"><span>source watermark</span><strong>{{ activeTaskAsset.sourceWatermark || '-' }}</strong></div>
+            <div class="drawer-kv-item"><span>job 状态</span><strong>{{ activeTaskAsset.jobStatus || '-' }}</strong></div>
           </div>
         </div>
       </div>

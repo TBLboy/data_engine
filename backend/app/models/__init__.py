@@ -9,6 +9,8 @@ from app.models.control_plane import (
     EpisodeObject,
     ListRecord,
     ScanJob,
+    TaskAssetRecomputeJob,
+    TaskAssetRollup,
 )
 from app.models.general_config import GeneralConfig
 from app.models.l3_v2_config import L3V2Config
@@ -29,6 +31,8 @@ __all__ = [
     'Batch',
     'BatchAssetRecomputeJob',
     'BatchAssetRollup',
+    'TaskAssetRecomputeJob',
+    'TaskAssetRollup',
     'ClassificationRule',
     'DiscoveredPrefix',
     'Episode',

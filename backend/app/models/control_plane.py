@@ -149,6 +149,52 @@ class BatchAssetRecomputeJob(Base):
     batch = relationship('Batch')
 
 
+class TaskAssetRollup(Base):
+    __tablename__ = 'task_asset_rollups'
+
+    task_type_id: Mapped[str] = mapped_column(ForeignKey('task_types.id'), primary_key=True)
+    batch_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    episode_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    reviewed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    not_reviewed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    manual_pass_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    manual_fail_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    qualified_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    unqualified_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pending_dataset_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_duration_sec: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    duration_covered_episode_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    duration_missing_episode_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_frame_count: Mapped[int] = mapped_column(BIGINT, default=0, nullable=False)
+    frame_covered_episode_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    frame_missing_episode_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    sampled_episode_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    accepted_batch_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    rejected_batch_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pending_batch_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    source_batch_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    source_watermark: Mapped[str] = mapped_column(String(128), default='', nullable=False)
+    calculation_version: Mapped[str] = mapped_column(String(64), default='task-asset-rollup-v1', nullable=False)
+    refreshed_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), nullable=False)
+
+    task_type = relationship('TaskType')
+
+
+class TaskAssetRecomputeJob(Base):
+    __tablename__ = 'task_asset_recompute_jobs'
+
+    task_type_id: Mapped[str] = mapped_column(ForeignKey('task_types.id'), primary_key=True)
+    reason: Mapped[str] = mapped_column(String(64), default='unknown', nullable=False)
+    requested_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default='pending', nullable=False, index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_error: Mapped[str] = mapped_column(String(500), default='', nullable=False)
+    last_started_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    last_finished_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+
+    task_type = relationship('TaskType')
+
+
 class ClassificationRule(Base):
     __tablename__ = 'classification_rules'
 

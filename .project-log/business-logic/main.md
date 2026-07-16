@@ -3,7 +3,7 @@
 ## Status
 
 - Research phase: Complete（公开数据集调研 + TeleDex 格式分析 + MinIO 数据湖实查均已完成）
-- Current phase: RDDQF v1.2 平台增强 — 数据总库 Batch 资产画像（Route C'）已落地；任务级资产画像路线已确认，后续按 Route T2 推进实现
+- Current phase: RDDQF v1.2 平台增强 — 数据总库 Batch 资产画像（Route C'）已落地；任务级资产画像 Route T2 已全量落地并通过单测/类型检查，待真实库迁移/重建冒烟
 
 ## Main Path
 
