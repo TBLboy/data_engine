@@ -1,3 +1,69 @@
+### 2026-07-16 — 任务级数据资产画像长期路线：Route T2（收敛实现）
+
+- Decision: 在已落地的 Route C' 之上，数据总库正式新增 **任务级资产画像**。长期路线采用 **Route T2：新增 `task_asset_rollups` 任务级派生投影 + `task_asset_recompute_jobs` 持久化 dirty/recompute 队列**；任务投影只从 `batch_asset_rollups` 汇总，不回扫 `episodes`，也不让前端按批次临时求和。
+- Context: 数据总库当前已有 Episode 明细视角与 Batch 资产画像视角；产品需要第三个 Task 视角，直接回答“某个任务下有多少 batch/episode、多少可用/不可用、多少未完成、合格率多少、总时长/总帧数多少”。现有 `task_types.total_batches/total_episodes` 与 `/api/dataset/tasks/*` 的 task summary 都不足以承担长期资产画像职责：前者只是粗计数且刷新不可靠，后者偏训练消费语义且走 Python 实时聚合。
+- Alternatives considered:
+  - 方案 T0：请求时对 `episodes` 做 `GROUP BY task_type`
+  - 方案 T1：请求时对 `batch_asset_rollups` 实时聚合，不建任务投影表
+  - 方案 T2：新增 `task_asset_rollups` + 任务级 dirty/recompute
+  - 方案 T3：把更多统计字段继续堆进 `task_types`
+  - 方案 T4：直接上 Kafka / ClickHouse / 外部 OLAP
+- Reason:
+  - T0 会重复 Route C' 已否决的实时扫明细主路径，后续规模增长后必然退化
+  - T1 短期可用，但 task 视图后续必然需要按可用率/时长/帧数排序筛选，并独立表达 freshness；继续只靠读时 group by 会重新把压力推回查询层
+  - T3 会把业务主数据与分析状态混在 `task_types`，与 Route C' 已拒绝“把统计堆进业务表”的原则冲突
+  - T4 对当前规模过重
+  - T2 最符合现有 Route C' 结构：batch 投影继续做权威聚合基座，task 投影只做其上的二级读模型
+- Implementation detail:
+  - 正式数据对象：
+    - `task_asset_rollups`：任务级可重建统计投影，`task_type_id` 作为主键/唯一键
+    - `task_asset_recompute_jobs`：按 `task_type_id` 粒度持久化 dirty/recompute 请求；同一 task 的 pending/running 请求合并，不无限堆积
+  - 正式聚合链路固定为：
+    ```text
+    episodes
+      -> batch_asset_rollups
+      -> task_asset_rollups
+      -> GET /api/data-assets/tasks
+    ```
+  - 全局 summary 继续由 `batch_asset_rollups` 求和生成，不改成从 task rollup 汇总，避免多一层 stale 传播
+  - 统一统计作用域继续固定为 `active_list_active_batch_indexed_episodes`；task / batch / global 三层不得使用不同 active scope
+  - 最终可用性主口径固定为 `final_dataset_status`：
+    - available = `QUALIFIED`
+    - unavailable = `UNQUALIFIED`
+    - pending = `PENDING`
+  - 人工质检辅口径固定为 `manual_qc_status`：
+    - reviewed = `MANUAL_PASS + MANUAL_FAIL`
+    - not_reviewed = `NOT_REVIEWED`
+    - manual_pass / manual_fail 分开计数
+  - 比率口径：
+    - `final_qualified_rate = QUALIFIED / (QUALIFIED + UNQUALIFIED)`；分母为 0 时返回 `null`
+    - `manual_pass_rate = MANUAL_PASS / (MANUAL_PASS + MANUAL_FAIL)`；分母为 0 时返回 `null`
+    - 比率不物理存储，由 API 读取计数字段后计算
+  - `not_reviewed_count` 与 `pending_dataset_count` 必须拆开，不得合并成模糊字段
+  - 时长/帧数严格从子 batch rollup 求和，并继续暴露 covered/missing episode count；纯 raw 无 processed manifest 的 0 值是合法缺失，不得伪造
+  - 投影层可存：batch_count、episode_count、reviewed/not_reviewed、manual pass/fail、qualified/unqualified/pending、duration/frame 及其 covered/missing、sampled_episode_count、accepted/rejected/pending batch count、source watermark、calculation_version、refreshed_at
+  - 投影层不存：task name/description/arm_mode/is_active 等主数据；这些仍从 `task_types` join
+  - dirty 触发：
+    - episode/batch 事实变化先走既有 batch recompute
+    - batch rollup 成功后 mark 父 task dirty
+    - batch 改挂 task 时，必须同时 dirty 旧 task 与新 task
+    - list active/inactive、batch active 变化、手动 rebuild 也触发相关 task dirty
+  - 任务重算以“整任务重算”为默认策略；若目标 task 下仍有 pending/running 的 batch job，应延迟/重试，避免汇总半更新状态
+  - 正式 API 边界：
+    - `GET /api/data-assets/tasks`
+    - `GET /api/data-assets/tasks/{task_type_id}`
+    - 扩展既有 `POST /api/data-assets/rebuild` 支持 batch/task/all 范围
+  - 前端 `数据总库` 正式三视角：
+    1. Episode 明细
+    2. Batch 资产
+    3. Task 资产
+  - 钻取链路固定为：Task → Batch（带 taskTypeId 过滤）→ Episode
+  - `task_type:unclassified` / `待分类` 必须始终可展示；默认列表优先 active task，但待分类不得被隐藏
+  - `task_types.total_batches` / `total_episodes` 进入废弃流程：停止新增依赖 → 资产接口切换到 task rollup → 兼容观察 → 再删列
+  - 实现风格对齐现有 Route C'：优先 `task_type_id` 主键、字符串 calculation_version、job 表承载 dirty/recompute，不另起更重的工作流引擎
+- Impacted nodes: D, D2
+- Status: confirmed
+
 ### 2026-07-15 — 数据总库长期架构升级路线：Route C'
 
 - Decision: 数据总库的“总体资产统计 + 批次级资产画像”正式采用 **Route C'：显式 Batch–List 关系 + 批次级派生投影 + PostgreSQL 持久化重算队列 + 周期性对账**。这条路线作为后续代码改造的正式业务逻辑边界，不再继续把资产画像能力塞进现有 Episode 明细接口，也不把越来越多的统计字段直接堆进 `batches`。

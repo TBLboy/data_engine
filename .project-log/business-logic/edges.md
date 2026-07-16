@@ -113,6 +113,7 @@ execution_chain:
   - 改造 manual QC 上下文加载为 MinIO 对象访问
   - 实现 media presign refresh 与受控下载接口
   - 为 `database` 页面建立长期正式的数据资产读模型：`batches.list_id`、`batch_asset_rollups`、`batch_asset_recompute_jobs`、独立数据资产 API 与周期性对账
+  - 在 Route C' 之上扩展任务级资产画像 Route T2：`task_asset_rollups`、`task_asset_recompute_jobs`、`GET /api/data-assets/tasks*`，并保持 batch rollup 为唯一聚合基座
 inputs:
   - MinIO 控制面方案（Node F 已产出）
   - 现有 QC 代码（local file 基线）
@@ -121,12 +122,14 @@ outputs:
   - MinIO 兼容的 ingestion 链路（待实现）
   - Object 访问协议实现（待实现）
   - `ManualQcContext.media[]` 合同落地（待实现）
+  - 任务级资产投影与 API（业务逻辑已确认，代码待实现）
 verification:
   - 业务规则已齐备；实现前仅剩 `yaocao` 全量 list census 可作为规模校验补充，不阻塞编码
 notes:
   - 现有 manual QC（telemetry 指标、timeline、review lock）保持不动
 - 主要改造点在"对象从哪里读"和"对象映射怎么查"
 - 自 2026-07-15 起，`数据总库` 的长期正式方案已从“Episode 实时聚合增强”收敛为 Route C' 读模型升级路线；`/api/database` 保持 Episode 明细路径，资产聚合走独立 `/api/data-assets/*`
+- 自 2026-07-16 起，数据总库正式三视角固定为 Episode / Batch / Task；任务层采用 Route T2，只从 `batch_asset_rollups` 汇总
 ```
 
 ## Edge D->E: 整合交付

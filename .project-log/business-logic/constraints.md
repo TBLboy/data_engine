@@ -49,7 +49,7 @@
 - 数据总库的总体资产统计与批次资产画像，长期必须以 PostgreSQL 中已持久化的事实字段为准，不在前端直接读 MinIO 或重新扫描对象计算
 - `duration_sec` 与 `frame_count` 的权威来源固定为扫描阶段持久化进 PostgreSQL 的 manifest 派生字段
 - `frame_count` 的定义固定为 manifest 声明的 episode 级帧数，不做多相机视频帧总和
-- 数据总库 summary 与 batch 画像必须共享完全相同的 active scope：active list + active batch + 位于该作用域内的业务 Episode
+- 数据总库 summary、batch 画像、task 画像必须共享完全相同的 active scope：active list + active batch + 位于该作用域内的业务 Episode
 - 上述统一作用域的内部标识固定为 `active_list_active_batch_indexed_episodes`
 - 长期正式形态中，数据总库的批次画像不继续依赖按请求实时扫描 `episodes` 主路径，而采用可重建的批次级统计投影层
 - 批次级统计投影层只保存可重建的聚合结果，不复制 `qc_status`、`batch_decision`、`task_type_id`、`reject_threshold`、`batch_name`、`failure_rate` 等业务状态作为新的权威事实
@@ -66,6 +66,22 @@
 - 统计投影层失效只允许影响展示新鲜度，不允许反向写坏业务事实或替代业务事实源
 - dirty 重算机制以“整批重算”作为默认策略，不做分散的 `+1/-1` 增量修补主路径
 - 若数据资产页面展示 `failure_rate`，沿用现有批次判定口径，不在投影层重新定义第二套分母语义
+- 任务级资产画像正式采用 Route T2：`task_asset_rollups` + `task_asset_recompute_jobs`
+- 任务级投影必须以 `batch_asset_rollups` 为唯一聚合基座；禁止任务接口在请求时直接扫描 `episodes`，也禁止前端拉取全部批次后自行求和
+- 全局 summary 继续从 `batch_asset_rollups` 汇总，不改成从 `task_asset_rollups` 汇总，避免多一层 stale 传播
+- 任务级 dirty/recompute 必须以 PostgreSQL 持久化 job 表承载；同一 `task_type_id` 的 pending/running 请求必须合并，禁止每个子批次更新后都同步重算同一任务
+- 任务重算默认采用“整任务重算”；若目标 task 下仍有 pending/running 的 batch job，必须延迟/重试，禁止汇总半更新状态
+- batch 改挂 task 时，必须同时 dirty 旧 task 与新 task；只刷新新任务会导致旧任务残留与资产重复
+- 任务级最终可用性主口径固定为 `final_dataset_status`：available=`QUALIFIED`，unavailable=`UNQUALIFIED`，pending=`PENDING`
+- 人工质检进度主口径固定为 `manual_qc_status`；`manual_qc_status` 只能反映质检流程结果，不得直接定义最终可用资产
+- `not_reviewed_count` 与 `pending_dataset_count` 必须拆成两个独立字段，不得合并为模糊字段
+- 比率字段不物理存储：`final_qualified_rate = QUALIFIED / (QUALIFIED + UNQUALIFIED)`，`manual_pass_rate = MANUAL_PASS / (MANUAL_PASS + MANUAL_FAIL)`；分母为 0 时返回 `null`，禁止返回误导性 0
+- 任务投影可存可重建计数与 freshness 字段，但不得复制 task name / description / arm_mode / is_active 等主数据；主数据仍从 `task_types` join
+- 任务资产正式 API 边界固定为 `GET /api/data-assets/tasks` 与 `GET /api/data-assets/tasks/{task_type_id}`；不得把任务资产画像塞进 `/api/dataset/tasks/*`
+- `POST /api/data-assets/rebuild` 必须支持 `batch` / `task` / `all` 范围
+- `task_types.total_batches` / `total_episodes` 不再作为长期资产计数权威源，进入废弃流程：停止新增依赖 → 资产接口切到 task rollup → 兼容观察 → 再删列
+- 纯 raw、无 processed manifest 的 Episode 允许 `duration_sec=0` / `frame_count=0` 作为合法缺失，不得用估算值或假数据补齐
+- 投影更新失败时必须保留上次成功快照并标记 stale/error，禁止先清零再重建后把假零值暴露给前端
 
 ## Task Type Management Constraints
 
@@ -77,6 +93,8 @@
 - 从任务类型中移除 batch，本质上等价于把该 batch 重新归入 `待分类`
 - 批次改错分的标准操作流应保持可追溯：先从原任务类型移出回到 `待分类`，再从 `待分类` 加入正确任务类型
 - 数据总库中的批次、QC 状态、QC 结果筛选必须支持键盘输入检索，以适应大规模 batch 数量下的快速定位需求
+- 数据总库任务资产视图中，`task_type:unclassified` / `待分类` 必须始终可展示；默认列表可优先 active task，但不得隐藏待分类
+- 任务资产默认钻取链路固定为：Task → Batch（带 `taskTypeId` 过滤）→ Episode
 
 ## Documentation Constraints
 

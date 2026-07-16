@@ -3391,3 +3391,53 @@ PY'`
 - Next steps:
   - 后续若触发全量扫描，可验证新增 Episode 的 manifest 指标能正常入库
   - 692 条纯 raw Episode 待后处理流程完成后，重新扫描即可自动补全指标
+
+
+## 2026-07-16 11:55 CST
+
+- Type: business-logic
+- Status: confirmed, not implemented
+- Importance: high
+- Reusable: yes
+- Objective: 将“任务级数据资产画像”正式业务逻辑固化到 `.project-log`，暂不改代码
+
+- Work completed:
+  1. 审阅 GPT 给出的任务级资产画像长期架构方案，确认长期方向采用 Route T2，但实现风格需按现有 Route C' 收敛：`task_type_id` 主键、字符串 `calculation_version`、job 表承载 dirty/recompute。
+  2. 在 `decision-records.md` 写入正式决策：`2026-07-16 — 任务级数据资产画像长期路线：Route T2（收敛实现）`。
+  3. 更新 `main.md`：补充任务级资产画像目标、正式对象、聚合链路、作用域、投影边界、刷新规则、最终可用性/人工质检口径与 API 边界。
+  4. 更新 `constraints.md`：固化任务投影只从 batch rollup 汇总、最终可用性主口径、比率 null 规则、job 合并、禁止假零、禁止复用 `/api/dataset/tasks/*` 等硬约束。
+  5. 更新 `graph.md` / `nodes.md` / `edges.md`：Node D 数据总库资产画像子路线扩展为 Episode / Batch / Task 三视角，任务层正式对象与 API 写入图谱。
+  6. 更新 `open-questions.md`：将“是否做任务级画像/是否建表/指标口径”收成 `Q-20260716-021` resolved；保留实现细节 open items（version 策略、inactive task 约束）。
+  7. 更新 `current-session.md`：当前目标切换为任务级资产画像业务逻辑已固化，等待用户确认后进入实现。
+
+- Business logic impact:
+  - 数据总库正式三视角固定为：Episode 明细、Batch 资产、Task 资产。
+  - 正式聚合链路固定为：`episodes -> batch_asset_rollups -> task_asset_rollups -> GET /api/data-assets/tasks`。
+  - 全局 summary 继续：`batch_asset_rollups -> /api/data-assets/summary`。
+  - 最终可用性主口径：`final_dataset_status`；人工质检辅口径：`manual_qc_status`。
+  - `not_reviewed_count` 与 `pending_dataset_count` 必须拆开。
+  - 比率分母为 0 时返回 `null`。
+  - `task_types.total_batches/total_episodes` 进入废弃流程。
+  - 任务资产不得塞进 `/api/dataset/tasks/*`。
+
+- Problems encountered: None
+- Resolution: Not applicable
+- Verification:
+  - 决策、主逻辑、约束、图谱、开放问题、进度、会话七处口径已对齐 Route T2 收敛实现。
+  - 本轮仅固化业务逻辑，未改业务代码。
+- Unverified items:
+  - `task_asset_rollups` / `task_asset_recompute_jobs` 代码尚未实现
+  - 任务层 calculation_version 推进策略、inactive task 是否允许持有 active-scope batch 仍待实现前确认
+- Files changed:
+  - `.project-log/business-logic/decision-records.md`
+  - `.project-log/business-logic/main.md`
+  - `.project-log/business-logic/constraints.md`
+  - `.project-log/business-logic/graph.md`
+  - `.project-log/business-logic/nodes.md`
+  - `.project-log/business-logic/edges.md`
+  - `.project-log/business-logic/open-questions.md`
+  - `.project-log/progress.md`
+  - `.project-log/current-session.md`
+- Next steps:
+  - 用户确认后，按 Route T2 实施顺序推进：Alembic 建表 → task recompute 服务 → 接入 batch 成功链路 → 全量初始化 → API → 前端三视角
+  - 实现前不要再回退到“请求时扫 episodes / 前端按批次求和 / 把统计堆进 task_types”的旧路线

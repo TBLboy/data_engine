@@ -31,4 +31,5 @@ None yet.
 - Node F 当前新增一条关键约束：任务类型从”扫描器自动正式归类”收敛为”人工维护主数据”，扫描器只负责同步数据并把未确认 batch 放入 `待分类`
 - Node D 后续实现除了 MinIO 控制面和 manual QC，还必须新增任务类型管理系统：任务类型主数据管理、批次从 `待分类` 加入/移出、删除任务类型后的回收语义、数据总库批次检索增强
 - **2026-07-15 结构增强**：Node D 正式新增“数据总库资产画像升级”子路线。长期实现不再继续依赖 Episode 实时聚合主路径，而是采用 Route C'：`batches.list_id` + `batch_asset_rollups` + `batch_asset_recompute_jobs` + 周期性对账
+- **2026-07-16 结构增强**：在 Route C' 之上，Node D 数据总库资产画像子路线正式扩展为三视角：Episode 明细 + Batch 资产 + Task 资产。任务层采用 Route T2：`task_asset_rollups` + `task_asset_recompute_jobs`，只从 `batch_asset_rollups` 汇总，不回扫 episodes
 - **2026-06-25** Node D 正在实施角色视图分离：reviewer 个人看板 + task-pool reviewer 版 + manual QC 流水线模式 + 完成庆祝动画；这些均属于 D 节点前端体验子任务

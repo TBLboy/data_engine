@@ -3,7 +3,7 @@
 ## Status
 
 - Research phase: Complete（公开数据集调研 + TeleDex 格式分析 + MinIO 数据湖实查均已完成）
-- Current phase: RDDQF v1.2 平台增强 — 数据总库资产画像升级路线已确认，后续按 Route C' 推进实现
+- Current phase: RDDQF v1.2 平台增强 — 数据总库 Batch 资产画像（Route C'）已落地；任务级资产画像路线已确认，后续按 Route T2 推进实现
 
 ## Main Path
 
@@ -67,6 +67,9 @@ A → B1 + B2 + B3 → C → F → D → E
 - 顶部 summary 与批次画像必须使用完全相同的 active scope，内部统一标识为 `active_list_active_batch_indexed_episodes`
 - 时长/帧数统计口径固定为扫描阶段持久化到 PostgreSQL 的 manifest 派生字段，其中 `frame_count` 是 manifest 声明的 episode 级帧数，不是多相机视频帧总和
 - 统计刷新采用 PostgreSQL 持久化 dirty 队列 `batch_asset_recompute_jobs` + worker 整批重算，并由周期性对账做低频兜底，不依赖 FastAPI 内存后台任务作为唯一可靠机制
+- 任务级资产画像正式采用 `task_asset_rollups` + `task_asset_recompute_jobs`，只从 `batch_asset_rollups` 汇总，不回扫 episodes
+- 任务级最终可用性主口径固定为 `final_dataset_status`；人工质检进度只作为辅口径
+- `task_types.total_batches` / `total_episodes` 不再作为长期资产计数权威源，进入废弃流程
 
 ## 数据总库资产画像升级 — 已确认业务逻辑
 
@@ -76,21 +79,39 @@ A → B1 + B2 + B3 → C → F → D → E
 
 - 总体资产规模卡片；
 - 批次级资产画像；
-- 与 Episode 明细联动的服务端分页/筛选；
+- 任务级资产画像；
+- 与 Episode / Batch 明细联动的服务端分页/筛选；
 - 面向后续大规模数据增长的稳定统计架构。
 
 ### 正式路线
 
-正式采用 **Route C'**：
+批次/全局层正式采用 **Route C'**；任务层正式采用 **Route T2**：
 
 ```text
 显式 Batch–List 关系（`batches.list_id`）
   +
 批次级派生统计投影（`batch_asset_rollups`）
   +
-PostgreSQL 持久化 dirty 重算队列（`batch_asset_recompute_jobs`）
+PostgreSQL 持久化 batch dirty 队列（`batch_asset_recompute_jobs`）
+  +
+任务级派生统计投影（`task_asset_rollups`）
+  +
+PostgreSQL 持久化 task dirty 队列（`task_asset_recompute_jobs`）
   +
 周期性对账修复
+```
+
+正式聚合链路：
+
+```text
+episodes
+  -> batch_asset_rollups
+  -> task_asset_rollups
+  -> GET /api/data-assets/tasks
+
+batch_asset_rollups
+  -> GET /api/data-assets/summary
+  -> GET /api/data-assets/batches
 ```
 
 ### 正式数据对象
@@ -98,13 +119,15 @@ PostgreSQL 持久化 dirty 重算队列（`batch_asset_recompute_jobs`）
 - `batches.list_id`：Batch 与 List 的显式关联，作为长期正式关系字段
 - `batch_asset_rollups`：批次级可重建统计投影，承接 summary 与 batch profile 的聚合来源
 - `batch_asset_recompute_jobs`：按 batch 粒度持久化 dirty/recompute 请求的数据库队列
+- `task_asset_rollups`：任务级可重建统计投影，承接 task profile 的聚合来源；只从子 batch rollup 汇总，不回扫 episodes
+- `task_asset_recompute_jobs`：按 task_type 粒度持久化 dirty/recompute 请求；同一 task 的 pending/running 请求合并
 - `/api/data-assets/*`：数据资产专用读接口；`/api/database` 保持 Episode 明细浏览语义
 
 ### 作用域规则
 
-- 总体统计与批次画像统一只统计：active list + active batch + 位于该 active 作用域中的业务 Episode
+- 总体统计、批次画像、任务画像统一只统计：active list + active batch + 位于该 active 作用域中的业务 Episode
 - 内部统计作用域名称固定为 `active_list_active_batch_indexed_episodes`
-- 不允许顶部 summary 与 batch 列表使用不同过滤口径
+- 不允许顶部 summary、batch 列表、task 列表使用不同过滤口径
 - 不把 inactive list 外的历史残留 batch 混入当前数据资产画像
 
 ### 时长与帧数规则
@@ -118,17 +141,46 @@ PostgreSQL 持久化 dirty 重算队列（`batch_asset_recompute_jobs`）
 ### 投影层边界规则
 
 - 新增批次级统计投影层，保存可确定性重建的统计值
-- 第一版不在投影层复制 `qc_status`、`batch_decision`、`task_type_id`、`batch_name`、`reject_threshold`、`failure_rate` 等业务状态
-- 全局 summary 第一版不单独建全局表，直接由批次投影求和生成
+- 新增任务级统计投影层，保存可确定性重建的任务聚合值；任务投影以 `batch_asset_rollups` 为唯一聚合基座
+- 第一版不在 batch 投影层复制 `qc_status`、`batch_decision`、`task_type_id`、`batch_name`、`reject_threshold`、`failure_rate` 等业务状态作为权威事实
+- 任务投影可存 accepted/rejected/pending batch count 等可重建辅助计数，但它们不是最终数据可用性主口径
+- 任务投影不存 task name / description / arm_mode / is_active 等主数据；这些仍从 `task_types` join
+- 比率字段（final_qualified_rate / manual_pass_rate 等）不物理存储，API 读取时现算；分母为 0 返回 `null`
+- 全局 summary 不单独建全局表，继续直接由批次投影求和生成，不改成从 task 投影汇总
 - 若页面需要展示 `failure_rate`，沿用既有批次判定口径，不在资产投影层另起一套新语义
 
 ### 刷新与一致性规则
 
 - 事实更新后通过 PostgreSQL 持久化 job 表 `batch_asset_recompute_jobs` 标记 batch dirty
 - worker 按 batch 粒度整批重算，不做分散的 `+1/-1` 增量修补
+- batch rollup 成功后，标记父 task dirty，并 upsert `task_asset_recompute_jobs`
+- batch 改挂 task 时，必须同时 dirty 旧 task 与新 task；global summary 保持不变
+- task 重算默认整任务重算；若目标 task 下仍有 pending/running 的 batch job，应延迟/重试，避免半更新汇总
 - 周期性对账任务用于发现漏标记、漏重算和统计漂移
 - 投影层失效只影响展示新鲜度，不改变业务事实源
 - 数据资产聚合正式走独立 `/api/data-assets/*` 路径；`/api/database` 不再承接长期聚合职责
+
+### 任务级资产画像规则
+
+- `数据总库` 正式三视角：Episode 明细、Batch 资产、Task 资产
+- 最终可用性主口径固定为 `final_dataset_status`：
+  - available = `QUALIFIED`
+  - unavailable = `UNQUALIFIED`
+  - pending = `PENDING`
+- 人工质检辅口径固定为 `manual_qc_status`，必须独立展示，不得冒充最终可用资产
+- `not_reviewed_count` 与 `pending_dataset_count` 必须拆开，不得合并为模糊字段
+- 正式比率：
+  - `final_qualified_rate = QUALIFIED / (QUALIFIED + UNQUALIFIED)`
+  - `manual_pass_rate = MANUAL_PASS / (MANUAL_PASS + MANUAL_FAIL)`
+  - 分母为 0 时返回 `null`，禁止返回误导性 0
+- 正式 API：
+  - `GET /api/data-assets/tasks`
+  - `GET /api/data-assets/tasks/{task_type_id}`
+  - 扩展 `POST /api/data-assets/rebuild` 支持 batch/task/all
+- 钻取链路固定：Task → Batch（`taskTypeId` 过滤）→ Episode
+- `task_type:unclassified` / `待分类` 必须始终可展示；默认列表优先 active task，但待分类不得被隐藏
+- `task_types.total_batches` / `total_episodes` 进入废弃流程，不再作为长期资产计数权威源
+- 不使用 `/api/dataset/tasks/*` 作为数据总库任务资产画像主路径；该路径继续服务训练数据消费语义
 
 ### 相关既有业务约束（本次继续沿用，不因 Route C' 改变）
 

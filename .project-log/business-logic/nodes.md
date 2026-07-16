@@ -158,11 +158,15 @@ state:
   - 数据总库资产画像升级路线已确认：采用 Route C'，后续以显式 Batch–List 关系、批次级派生投影、PostgreSQL 持久化 dirty 队列和周期性对账作为正式实现边界
   - 数据总库长期正式形态不再继续依赖 Episode 实时聚合主路径，也不再把新增画像字段持续堆入 `batches`
   - 数据总库资产 summary 与 batch profile 的统一统计作用域已冻结为 `active_list_active_batch_indexed_episodes`
+  - 任务级资产画像长期路线已确认：采用 Route T2，新增 `task_asset_rollups` + `task_asset_recompute_jobs`；任务投影只从 `batch_asset_rollups` 汇总
+  - 任务级最终可用性主口径固定为 `final_dataset_status`，人工质检进度只作为辅口径；`not_reviewed_count` 与 `pending_dataset_count` 必须拆开
+  - `task_types.total_batches` / `total_episodes` 进入废弃流程，不再作为长期资产计数权威源
 inputs:
   - QC 指标体系（Node B 产出）
   - MinIO 控制面方案（Node F 产出）
   - 现有 manual QC / dashboard / task-pool 代码
   - 数据总库资产画像改造任务说明 + Route C' 架构决策
+  - 任务级数据资产画像长期架构方案 + Route T2 决策
 outputs:
   - reviewer 个人任务看板（新页面 `/reviewer`）← 待实现
   - task-pool reviewer 版（同路由按角色分支渲染）← 待实现
@@ -171,8 +175,10 @@ outputs:
   - 角色路由守卫与菜单过滤 ← 待实现
   - 数据总库总体资产 summary API（正式接口边界：`GET /api/data-assets/summary`）
   - 数据总库批次级资产画像 API（正式接口边界：`GET /api/data-assets/batches`）
-  - 数据总库资产画像手动全量重建入口（正式接口边界：`POST /api/data-assets/rebuild`）
+  - 数据总库任务级资产画像 API（正式接口边界：`GET /api/data-assets/tasks`、`GET /api/data-assets/tasks/{task_type_id}`）
+  - 数据总库资产画像手动全量重建入口（正式接口边界：`POST /api/data-assets/rebuild`，支持 batch/task/all）
   - `batches.list_id` 显式关系 + `batch_asset_rollups` 批次级统计投影 + `batch_asset_recompute_jobs` 持久化 dirty/recompute 队列 + 周期性对账
+  - `task_asset_rollups` 任务级统计投影 + `task_asset_recompute_jobs` 持久化 dirty/recompute 队列
 data_format:
   - 文档（Markdown）
   - 代码（Python/Vue）
@@ -181,7 +187,9 @@ notes:
   - 当前 manual QC 依赖本地文件系统，需迁移到 MinIO
   - 角色视图分离是 D 节点的前端体验子任务，不改变后端 QC 数据模型
   - 数据总库资产画像属于 D 节点内部的读模型升级子路线：事实源仍是现有控制面/业务面/QC 面表，新增的是可重建的批次级统计投影层
+  - 任务资产画像是同一子路线的二级读模型：batch rollup 是聚合基座，task rollup 只汇总其子批次贡献
   - `/api/database` 继续承接 Episode 明细浏览；数据资产聚合不再以它作为长期主路径
+  - 任务资产画像不得复用 `/api/dataset/tasks/*`；该路径继续服务训练数据消费语义
 ```
 
 ## Node D2: 训练数据消费与批次驳回模块

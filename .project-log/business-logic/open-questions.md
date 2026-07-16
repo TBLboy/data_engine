@@ -2,7 +2,26 @@
 
 ## Active Questions
 
+### Q-20260716-022
+
+- Related node: D（数据总库资产画像升级）
+- Related edge: F->D
+- Question: `task_asset_rollups.calculation_version` 的版本推进策略是否与 batch 层共用同一常量，还是任务层独立维护？若任务口径变更而 batch 口径未变，是否只提升 task version？
+- Why it matters: 这决定全量 rebuild 的触发范围、API freshness 判断，以及任务层与批次层是否可以独立演进
+- Current status: Open
+- Answer: Pending。当前倾向任务层独立 version 常量，但与 batch 层保持同风格字符串版本字段；实现前再确认
+
+### Q-20260716-023
+
+- Related node: D（数据总库资产画像升级）
+- Related edge: F->D
+- Question: 任务资产列表默认排序、默认筛选，以及 inactive task 是否允许继续持有 active-scope batch，是否需要额外业务约束？
+- Why it matters: 影响前端默认体验，以及 `SUM(task rollups) == global summary` 校验是否总能成立
+- Current status: Open
+- Answer: Pending。已确认 `待分类` 必须始终展示，默认优先 active task；inactive task 是否允许持有 active-scope batch 仍待实现前确认
+
 ### Q-20260629-017
+
 
 - Related node: D2
 - Related edge: D→D2
@@ -110,7 +129,15 @@
 ## Resolved Questions
 
 
+### Q-20260716-021（Resolved 2026-07-16）
+
+- Related node: D（数据总库资产画像升级）
+- Related edge: F->D
+- Question: 数据总库是否需要新增 Task 级资产画像？若需要，是否要新建任务级投影表，还是请求时对 batch rollup / episodes 现算？最终可用、未质检、待裁定等指标如何定义？
+- Resolution: 正式采用 Route T2。新增 `task_asset_rollups` + `task_asset_recompute_jobs`；任务投影只从 `batch_asset_rollups` 汇总，不回扫 episodes，也不让前端按批次临时求和。最终可用性主口径固定为 `final_dataset_status`（QUALIFIED / UNQUALIFIED / PENDING）；人工质检进度使用 `manual_qc_status` 作为辅口径；`not_reviewed_count` 与 `pending_dataset_count` 必须拆开；比率分母为 0 时返回 `null`。正式 API 为 `GET /api/data-assets/tasks` 与 `GET /api/data-assets/tasks/{task_type_id}`，并扩展 `POST /api/data-assets/rebuild` 支持 batch/task/all。全局 summary 继续从 batch rollup 汇总；`task_types.total_*` 进入废弃流程。实现风格对齐现有 Route C'，不另起更重 workflow/dirty 字段设计。
+
 ### Q-20260625-015（Resolved 2026-06-25）
+
 
 - Related node: D
 - Related edge: B->D
@@ -193,4 +220,4 @@
 - Related edge: D→D (内部增强)
 - Question: 是否应该为平台新增一个"数据画像"展示界面？参考 LeRobot Dataset Visualizer 的 Statistics Panel，但需要结合我们的数据模型和业务需求做定制设计。
 - Why it matters: 当前工作台的指标（候选总量/已抽中样本/抽检通过率/待处理任务）都是业务进度指标，缺少数据集本身的质量画像（episode 长度分布、L3 指标分布、任务类型占比等）。有了数据画像，质检管理员可以一眼看出批次的数据健康度，而不是只看到"有多少条待质检"。
-- Resolution: 已确定需要为平台新增“数据总库资产画像”能力，但正式实现不走“直接在现有 Episode 明细接口上继续堆实时聚合”的路线，而采用 Route C'：显式 Batch–List 关系 + 批次级派生统计投影 + PostgreSQL 持久化 dirty 重算队列 + 周期性对账。第一版优先落地总体资产卡片和批次级资产画像，不把更高维的 L3 分布、任务趋势、关节覆盖率等可视化一起塞入首期范围
+- Resolution: 已确定需要为平台新增“数据总库资产画像”能力，但正式实现不走“直接在现有 Episode 明细接口上继续堆实时聚合”的路线，而采用 Route C'：显式 Batch–List 关系 + 批次级派生统计投影 + PostgreSQL 持久化 dirty 重算队列 + 周期性对账。第一版优先落地总体资产卡片和批次级资产画像，不把更高维的 L3 分布、任务趋势、关节覆盖率等可视化一起塞入首期范围；任务级画像作为后续正式扩展，见 Q-20260716-021
