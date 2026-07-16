@@ -3529,3 +3529,92 @@ PY'`
 - Next steps:
   - commit 实现
   - 可选真实库迁移 + rebuild 冒烟
+
+## 2026-07-16 Route T2 收尾：total_* 清理 + 真实库迁移 + 前端修复
+
+### 目标
+
+完成 Route T2 最后两个残余步骤：`task_types.total_*` 废弃清理和真实库 rebuild 冒烟。
+
+### 改动
+
+**commit `73f4c0c` — `task_types.total_*` 清理：**
+- 删除 `task_types.total_batches` / `total_episodes` 列（Alembic `20260716_0025`）
+- `serialize_task_type` 改为接受 `db` + 可选 `counts` 映射，实时计算
+- 新增 `task_type_counts_map()` 批次查询批量避免 N+1
+- 移除 `_refresh_task_type_stats` 函数及全部调用点
+- 移除 `scanner.py` / `classification_seed.py` / qc router 中的 total_* 写入
+- 测试构造器同步清理
+- 相关文件: `backend/app/services/payloads.py`, `backend/app/api/routes/qc.py`, `backend/app/services/scanner.py`, `backend/app/models/task_type.py`, `backend/app/services/classification_seed.py`, `backend/migrations/versions/20260716_0025_drop_task_type_totals.py`, `tests/test_data_assets.py`
+
+**commit `845a5fb` — 前端 TS 编译修复：**
+- `database-view.vue` 存在未使用的 `drillTaskToEpisodes` 变量，导致 `vue-tsc -b` 报错 `error TS6133`
+- 移除后构建通过
+
+**commit `a3b59b8` — 卡片顺序修正：**
+- 数据总库三个资产视图的顺序原为 Episode → 任务 → 批次
+- 修正为 Episode → 批次 → 任务
+
+### 线上迁移
+
+- `docker compose --build` 因 Bake/buildx 警告静默失败
+- 改用 `docker compose build --no-cache frontend` 两步重建
+- Alembic head: `20260716_0025`
+- `rebuild-all` 完成: 52 batches / 20 tasks
+
+### 经验教训
+
+- Docker Compose Bake/buildx 配置下 `--build` 可能不实际重建；需要手动 `build --no-cache`
+- Frontend Dockerfile 为 COPY dist 模式，dist 需要本地先 `npm run build`
+- Vite 8 (Rolldown) 强 minification 下 JS 变量名全部缩短，调试时需用 `strings` / `grep -oP` 而非精确匹配
+
+### 待讨论
+
+- `index.html` 无 Cache-Control 头，用户浏览器缓存旧 index.html 导致引用不存在的旧 JS 哈希
+  - 建议 nginx 配置 `index.html` 的 `Cache-Control: no-cache`
+
+## 2026-07-16 扫描入库架构升级 v2 决策完成
+
+### 背景
+
+当前扫描器使用 `threading.Thread` + `list_objects(recursive=True)` 全桶递归扫描，存在根本性缺陷：
+- 线程挂死后无法终止（后台长期残留 zombie scan）
+- 无超时、无分片、无进度、无增量检测
+- 每次全量重新入库，规模增长后不可持续
+
+### 决策过程
+
+1. 向 GPT 提供背景信息，获取初始分层并行扫描架构方案
+2. GPT 返回方案后，结合项目实际做技术评估，提出 8 个不确定问题
+3. 将问题反馈 GPT，获取关键决策分析反馈
+4. 综合 GPT 反馈，生成最终实施方案 v2
+
+### GPT 反馈采纳（10 项）
+
+| 采纳项 | 说明 |
+|--------|------|
+| `next_scan_at` 自适应退避 | 替代 `skip_until_next_change` |
+| 删除检测限 shard 范围 | 不按 job 全局标记 |
+| `rerun_requested` 幂等字段 | 修复 running→pending 竞态 |
+| 独立 Docker Worker Service | 替换 FastAPI 内嵌 |
+| BIGINT IDENTITY 主键 | 替换 BIGSERIAL |
+| 保留旧表一个发布周期 | 不立即删除 |
+| business_resolver 提前抽离 | 新旧 scanner 共用 |
+| worker 初始 2 个 | Docker replica |
+| 不建 object_inventory | 复用 episode_objects |
+| 不做四级冷热调度 | 自适应退避等价替代 |
+
+### 最终架构
+
+Prefix 分片 + PostgreSQL 持久化队列 + 独立 Docker Worker Service + 子进程隔离 + 流式指纹对比增量检测 + `next_scan_at` 自适应退避 + shard 级安全删除判断 + `rerun_requested` 幂等资产投影联动
+
+### 产出文件
+
+- `docs/scan-architecture-final-plan-v2.md` — 最终实施方案
+- `docs/scan-architecture-assessment.md` — 技术评估
+- `docs/scan-architecture-open-questions.md` — 8 个不确定问题
+- `.project-log/business-logic/decision-records.md` — 正式决策记录
+
+### 下一步
+
+等待用户确认后启动 Step 0：基线测试 + Feature Flag

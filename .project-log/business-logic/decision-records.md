@@ -275,3 +275,51 @@
 
 - Impacted nodes: D, E
 - Status: active
+
+### 2026-07-16 — MinIO 扫描入库架构升级：分层并行扫描 v2
+
+- Type: architecture
+- Status: confirmed
+- Importance: high
+- Objective: 将当前单线程全桶递归扫描器升级为分层并行、可终止、可重试的正式架构，一步到位按大规模数据设计。
+
+- Context:
+  - 当前扫描器使用 `threading.Thread` + `list_objects(recursive=True)` 全桶递归，存在线程挂死后无法终止、无超时、无分片、无进度、无法增量等根本性缺陷
+  - 综合两次 GPT 方案反馈，确定了 v2 最终方案
+  - 核心原则：MinIO 是数据事实源、PostgreSQL 是业务索引、日常同步只处理变化数据、全量扫描只做最终一致性、任务必须可分片可终止可重试
+
+- Decision:
+  - 正式架构：**Prefix 分片 + PostgreSQL 持久化队列 + 独立 Docker Worker Service + 子进程隔离 + 流式指纹对比增量检测 + `next_scan_at` 自适应退避 + shard 级安全删除判断 + `rerun_requested` 幂等资产投影联动**
+  - 新增表：`scan_jobs` (v2, BIGINT IDENTITY)、`scan_shards`、`scan_prefix_states`
+  - 扩展表：`batch_asset_recompute_jobs.rerun_requested`、`task_asset_recompute_jobs.rerun_requested`
+  - 旧 `scan_jobs` → `scan_jobs_legacy`，保留一个发布周期后删除
+  - 部署：独立 Docker Service `scan-worker`，与 FastAPI 平级，初始 2 副本
+  - 增量策略：`list_objects` 遍历元数据 + 四元组 (object_key, etag, size, last_modified) 指纹对比变化检测，只对已变化对象执行业务解析
+  - Prefix 调度：`next_scan_at` 自适应退避（30min → 2h → 12h → 1day → 7day），替代有逻辑缺陷的 `skip_until_next_change`
+  - 删除检测：仅限成功完成完整枚举的 shard 范围内执行，skipped/failed/cancelled 的 shard 不参与删除判断
+  - 分片级重试：指数退避（30s → 2min → 10min → 1h），max_attempts=3，含随机抖动
+
+- Rejected alternatives:
+  - `object_inventory` 新表：经核实，所有 MinIO 对象均归属 Episode（路径模式固定），`episode_objects` 已含所需指纹字段（content_hash/size_bytes/last_modified），额外建表维护两套元数据一致性 ROI 为负
+  - HOT/WARM/COLD/ARCHIVED 四级冷热调度：`next_scan_at` 自适应退避实现等价效果，管理复杂度更低
+  - `skip_until_next_change` 布尔值：无 MinIO 事件通知时逻辑不闭环（不扫 = 无法知道变化），废弃
+  - 超大 Batch 二级拆分：当前无单 Batch > 10K episodes，保留 `parent_shard_id` 接口
+
+- Reference: `docs/scan-architecture-final-plan-v2.md`
+
+- Implementation roadmap (10 steps):
+  0. 基线测试 + Feature Flag (`SCANNER_V2_ENABLED=false`)
+  1. 数据库模型落地（Alembic migration + 模型代码）
+  2. 抽离 `business_resolver.py`（新旧 scanner 共用）
+  3. `scan_jobs` + `scan_shards` + 单 Worker Shadow 模式
+  4. Prefix Discovery + Full Scan（流式 + 批量写入）
+  5. 子进程隔离 + Timeout + Lease + Heartbeat + Retry
+  6. 变化检测 + 增量写入
+  7. Asset Recompute 幂等化（`rerun_requested`）
+  8. `next_scan_at` 自适应调度 + 安全删除
+  9. API + 前端（进度展示、取消、重试失败 shard）
+  10. 灰度切换 + 多 Worker 并行
+
+- Estimated: ~5,000-8,500 行代码，16-25 人日
+
+- Impact: 扫描子系统整体重写，不影响已上线的 `batch_asset_rollups` / `task_asset_rollups` 数据资产投影链路
