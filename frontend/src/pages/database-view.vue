@@ -602,6 +602,93 @@ const frameCoverageText = computed(() => {
       </el-card>
 
 
+
+      <el-card shadow="never" class="qc-card episode-table-card" v-loading="assetLoading">
+        <template #header>
+          <div class="card-header-with-meta">
+            <div>
+              <strong>批次数据资产</strong>
+              <div class="table-subtitle">按批次查看数据规模、质检进度和最终可用状态</div>
+            </div>
+            <div v-if="batchAssetTaskTypeId" class="active-filter-bar">
+              <span>当前任务：{{ selectedTaskName }}</span>
+              <el-button link type="primary" @click="clearTaskBatchFilter">清除任务筛选</el-button>
+            </div>
+          </div>
+        </template>
+        <div class="filter-grid batch-filter-grid">
+          <el-input v-model="batchAssetKeyword" placeholder="搜索批次名称 / task type / batch id" class="qc-input" clearable />
+          <el-select v-model="batchAssetTaskTypeId" placeholder="任务类型" class="qc-select" clearable filterable>
+            <el-option v-for="item in taskTypes" :key="item.id" :label="item.name" :value="item.id" />
+          </el-select>
+          <el-select v-model="batchAssetDecision" placeholder="最终判定" class="qc-select" clearable filterable>
+            <el-option label="待判定" value="PENDING" />
+            <el-option label="已接受" value="ACCEPTED" />
+            <el-option label="已驳回" value="REJECTED" />
+          </el-select>
+          <el-select v-model="batchAssetQcStatus" placeholder="流程状态" class="qc-select" clearable filterable>
+            <el-option label="未派发" value="new" />
+            <el-option label="已派发" value="assigned" />
+            <el-option label="审核中" value="in_review" />
+            <el-option label="已完成" value="done" />
+          </el-select>
+        </div>
+        <el-table :data="batchAssetItems" stripe class="qc-table" height="420" scrollbar-always-on>
+          <el-table-column label="批次名称" min-width="200">
+            <template #default="{ row }">
+              <el-button link type="primary" class="batch-name-button" @click="applyEpisodeBatchFilter(row.batchId)">{{ row.batchName }}</el-button>
+            </template>
+          </el-table-column>
+          <el-table-column prop="taskTypeName" label="任务类型" min-width="160" />
+          <el-table-column prop="episodeCount" label="Episode 数量" width="110" />
+          <el-table-column label="总时长" min-width="150">
+            <template #default="{ row }">
+              <div>{{ formatInteger(Math.round(row.totalDurationSec)) }} 秒</div>
+              <small class="table-meta">覆盖 {{ row.durationCoveredEpisodeCount }} / {{ row.episodeCount }}</small>
+            </template>
+          </el-table-column>
+          <el-table-column label="总帧数" min-width="150">
+            <template #default="{ row }">
+              <div>{{ formatInteger(row.totalFrameCount) }}</div>
+              <small class="table-meta">覆盖 {{ row.frameCoveredEpisodeCount }} / {{ row.episodeCount }}</small>
+            </template>
+          </el-table-column>
+          <el-table-column label="QC 进度" width="120">
+            <template #default="{ row }">{{ reviewedText(row) }}</template>
+          </el-table-column>
+          <el-table-column label="最终判定" width="120">
+            <template #default="{ row }">
+              <el-tag :type="decisionTagType(row.batchDecision)">{{ row.batchDecision }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="流程状态" width="120">
+            <template #default="{ row }">
+              <el-tag :type="qcStatusTagType(row.qcStatus)">{{ qcStatusLabel(row.qcStatus) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="updatedAt" label="更新时间" min-width="160">
+            <template #default="{ row }">{{ row.updatedAt || '未产生 Episode 更新时间' }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="170" fixed="right">
+            <template #default="{ row }">
+              <div class="batch-row-actions">
+                <el-button link type="primary" @click="applyEpisodeBatchFilter(row.batchId)">查看 Episode</el-button>
+                <el-button link @click="openBatchAssetDrawer(row)">查看画像</el-button>
+              </div>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div class="database-pagination-row">
+          <el-pagination
+            v-model:current-page="batchAssetPage"
+            v-model:page-size="batchAssetPageSize"
+            background
+            layout="total, sizes, prev, pager, next"
+            :total="batchAssetTotal"
+            :page-sizes="[10, 20, 50]"
+          />
+        </div>
+      </el-card>
       <el-card shadow="never" class="qc-card episode-table-card" v-loading="assetLoading">
         <template #header>
           <div class="card-header-with-meta">
@@ -688,93 +775,6 @@ const frameCoverageText = computed(() => {
             background
             layout="total, sizes, prev, pager, next"
             :total="taskAssetTotal"
-            :page-sizes="[10, 20, 50]"
-          />
-        </div>
-      </el-card>
-
-      <el-card shadow="never" class="qc-card episode-table-card" v-loading="assetLoading">
-        <template #header>
-          <div class="card-header-with-meta">
-            <div>
-              <strong>批次数据资产</strong>
-              <div class="table-subtitle">按批次查看数据规模、质检进度和最终可用状态</div>
-            </div>
-            <div v-if="batchAssetTaskTypeId" class="active-filter-bar">
-              <span>当前任务：{{ selectedTaskName }}</span>
-              <el-button link type="primary" @click="clearTaskBatchFilter">清除任务筛选</el-button>
-            </div>
-          </div>
-        </template>
-        <div class="filter-grid batch-filter-grid">
-          <el-input v-model="batchAssetKeyword" placeholder="搜索批次名称 / task type / batch id" class="qc-input" clearable />
-          <el-select v-model="batchAssetTaskTypeId" placeholder="任务类型" class="qc-select" clearable filterable>
-            <el-option v-for="item in taskTypes" :key="item.id" :label="item.name" :value="item.id" />
-          </el-select>
-          <el-select v-model="batchAssetDecision" placeholder="最终判定" class="qc-select" clearable filterable>
-            <el-option label="待判定" value="PENDING" />
-            <el-option label="已接受" value="ACCEPTED" />
-            <el-option label="已驳回" value="REJECTED" />
-          </el-select>
-          <el-select v-model="batchAssetQcStatus" placeholder="流程状态" class="qc-select" clearable filterable>
-            <el-option label="未派发" value="new" />
-            <el-option label="已派发" value="assigned" />
-            <el-option label="审核中" value="in_review" />
-            <el-option label="已完成" value="done" />
-          </el-select>
-        </div>
-        <el-table :data="batchAssetItems" stripe class="qc-table" height="420" scrollbar-always-on>
-          <el-table-column label="批次名称" min-width="200">
-            <template #default="{ row }">
-              <el-button link type="primary" class="batch-name-button" @click="applyEpisodeBatchFilter(row.batchId)">{{ row.batchName }}</el-button>
-            </template>
-          </el-table-column>
-          <el-table-column prop="taskTypeName" label="任务类型" min-width="160" />
-          <el-table-column prop="episodeCount" label="Episode 数量" width="110" />
-          <el-table-column label="总时长" min-width="150">
-            <template #default="{ row }">
-              <div>{{ formatInteger(Math.round(row.totalDurationSec)) }} 秒</div>
-              <small class="table-meta">覆盖 {{ row.durationCoveredEpisodeCount }} / {{ row.episodeCount }}</small>
-            </template>
-          </el-table-column>
-          <el-table-column label="总帧数" min-width="150">
-            <template #default="{ row }">
-              <div>{{ formatInteger(row.totalFrameCount) }}</div>
-              <small class="table-meta">覆盖 {{ row.frameCoveredEpisodeCount }} / {{ row.episodeCount }}</small>
-            </template>
-          </el-table-column>
-          <el-table-column label="QC 进度" width="120">
-            <template #default="{ row }">{{ reviewedText(row) }}</template>
-          </el-table-column>
-          <el-table-column label="最终判定" width="120">
-            <template #default="{ row }">
-              <el-tag :type="decisionTagType(row.batchDecision)">{{ row.batchDecision }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="流程状态" width="120">
-            <template #default="{ row }">
-              <el-tag :type="qcStatusTagType(row.qcStatus)">{{ qcStatusLabel(row.qcStatus) }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="updatedAt" label="更新时间" min-width="160">
-            <template #default="{ row }">{{ row.updatedAt || '未产生 Episode 更新时间' }}</template>
-          </el-table-column>
-          <el-table-column label="操作" width="170" fixed="right">
-            <template #default="{ row }">
-              <div class="batch-row-actions">
-                <el-button link type="primary" @click="applyEpisodeBatchFilter(row.batchId)">查看 Episode</el-button>
-                <el-button link @click="openBatchAssetDrawer(row)">查看画像</el-button>
-              </div>
-            </template>
-          </el-table-column>
-        </el-table>
-        <div class="database-pagination-row">
-          <el-pagination
-            v-model:current-page="batchAssetPage"
-            v-model:page-size="batchAssetPageSize"
-            background
-            layout="total, sizes, prev, pager, next"
-            :total="batchAssetTotal"
             :page-sizes="[10, 20, 50]"
           />
         </div>
