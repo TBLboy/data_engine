@@ -221,14 +221,6 @@ const drillTaskToBatches = (row: DataAssetTaskRow) => {
   applyTaskToBatchFilter(row.taskTypeId)
 }
 
-const drillTaskToEpisodes = (row: DataAssetTaskRow) => {
-  applyTaskToBatchFilter(row.taskTypeId)
-  // Episode list still filters by batch; clear batch and keep task context on batch panel.
-  if (batch.value) {
-    batch.value = ''
-    if (page.value !== 1) page.value = 1
-  }
-}
 
 onMounted(() => {
   void loadPage()
