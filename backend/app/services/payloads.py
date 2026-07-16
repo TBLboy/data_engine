@@ -54,15 +54,65 @@ def serialize_account(user: User) -> dict:
     }
 
 
-def serialize_task_type(task_type: TaskType) -> dict:
+def task_type_active_counts(db: Session, task_type_id: str) -> tuple[int, int]:
+    """业务口径的任务类型批次/集数：仅统计在 lists 控制面有 active 记录的批次，
+    与 database/总库列表一致，排除无 ListRecord 的历史残留批次（如 raw_data）。"""
+    batch_count = _task_type_batch_query(db, task_type_id).count()
+    episode_count = _active_episode_query(db).filter(Batch.task_type_id == task_type_id).count()
+    return batch_count, episode_count
+
+
+def task_type_counts_map(db: Session, task_type_ids: Iterable[str] | None = None) -> dict[str, tuple[int, int]]:
+    """批量读取 active-scope 任务批次数/Episode 数，避免序列化时 N+1。"""
+    batch_query = _active_batch_query(db)
+    episode_query = _active_episode_query(db)
+    if task_type_ids is not None:
+        ids = [task_type_id for task_type_id in task_type_ids if task_type_id]
+        if not ids:
+            return {}
+        batch_query = batch_query.filter(Batch.task_type_id.in_(ids))
+        episode_query = episode_query.filter(Batch.task_type_id.in_(ids))
+
+    batch_rows = (
+        batch_query.with_entities(Batch.task_type_id, func.count(Batch.id))
+        .group_by(Batch.task_type_id)
+        .all()
+    )
+    episode_rows = (
+        episode_query.with_entities(Batch.task_type_id, func.count(Episode.id))
+        .group_by(Batch.task_type_id)
+        .all()
+    )
+    counts: dict[str, tuple[int, int]] = {
+        task_type_id: (int(batch_count or 0), 0)
+        for task_type_id, batch_count in batch_rows
+    }
+    for task_type_id, episode_count in episode_rows:
+        batch_count = counts.get(task_type_id, (0, 0))[0]
+        counts[task_type_id] = (batch_count, int(episode_count or 0))
+    if task_type_ids is not None:
+        for task_type_id in ids:
+            counts.setdefault(task_type_id, (0, 0))
+    return counts
+
+
+def serialize_task_type(
+    db: Session,
+    task_type: TaskType,
+    counts: dict[str, tuple[int, int]] | None = None,
+) -> dict:
+    if counts is not None and task_type.id in counts:
+        total_batches, total_episodes = counts[task_type.id]
+    else:
+        total_batches, total_episodes = task_type_active_counts(db, task_type.id)
     return {
         'id': task_type.id,
         'name': task_type.name,
         'description': task_type.description,
         'armMode': task_type.arm_mode,
         'isActive': bool(task_type.is_active),
-        'totalBatches': task_type.total_batches,
-        'totalEpisodes': task_type.total_episodes,
+        'totalBatches': int(total_batches or 0),
+        'totalEpisodes': int(total_episodes or 0),
     }
 
 
@@ -137,14 +187,6 @@ def _batch_query(db: Session):
 
 def _task_type_batch_query(db: Session, task_type_id: str):
     return _batch_query(db).filter(Batch.task_type_id == task_type_id)
-
-
-def task_type_active_counts(db: Session, task_type_id: str) -> tuple[int, int]:
-    """业务口径的任务类型批次/集数：仅统计在 lists 控制面有 active 记录的批次，
-    与 database/总库列表一致，排除无 ListRecord 的历史残留批次（如 raw_data）。"""
-    batch_count = _task_type_batch_query(db, task_type_id).count()
-    episode_count = _active_episode_query(db).filter(Batch.task_type_id == task_type_id).count()
-    return batch_count, episode_count
 
 
 def serialize_batch(db: Session, batch: Batch, storage_locations: dict[str, tuple[str, str]] | None = None) -> dict:
@@ -601,8 +643,9 @@ def _build_real_manual_qc_context(db: Session, episode_id: str) -> dict | None:
 
 def task_type_detail_payload(db: Session, task_type: TaskType) -> dict:
     batches = _task_type_batch_query(db, task_type.id).options(joinedload(Batch.episodes)).order_by(Batch.imported_at.desc()).all()
+    counts = task_type_counts_map(db, [task_type.id])
     return {
-        'taskType': serialize_task_type(task_type),
+        'taskType': serialize_task_type(db, task_type, counts),
         'batches': _serialize_batches(db, batches),
     }
 
@@ -617,9 +660,11 @@ def dashboard_payload(db: Session, current_user: User) -> dict:
     active_batch_ids = {item.id for item in batches}
     counts_by_batch = _task_counts_by_batch(db, active_batch_ids)
     superseded_by_batch = _superseded_task_counts_by_batch(db, active_batch_ids)
+    task_types = db.query(TaskType).filter(TaskType.is_active == True).order_by(TaskType.id).all()
+    task_type_counts = task_type_counts_map(db, [item.id for item in task_types])
     return {
         'currentUser': serialize_user(current_user),
-        'taskTypes': [serialize_task_type(item) for item in db.query(TaskType).filter(TaskType.is_active == True).order_by(TaskType.id).all()],
+        'taskTypes': [serialize_task_type(db, item, task_type_counts) for item in task_types],
         'batches': _serialize_batches(db, batches),
         'qcTasks': [
             serialize_task(item, current_user)
@@ -670,10 +715,12 @@ def database_payload(
     total_episodes = episode_query.order_by(None).count()
     episodes = episode_query.order_by(Episode.updated_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
     batches = _active_batch_query(db).order_by(Batch.imported_at.desc()).all()
+    task_types = db.query(TaskType).filter(TaskType.is_active == True).order_by(TaskType.id).all()
+    task_type_counts = task_type_counts_map(db, [item.id for item in task_types])
     return {
         'episodes': [serialize_episode(item) for item in episodes],
         'batches': _serialize_batches(db, batches),
-        'taskTypes': [serialize_task_type(item) for item in db.query(TaskType).filter(TaskType.is_active == True).order_by(TaskType.id).all()],
+        'taskTypes': [serialize_task_type(db, item, task_type_counts) for item in task_types],
         'reasonStats': reason_stats_payload_from_db(db),
         'ingestJobs': _recent_ingest_jobs_payload(db),
         'totalEpisodes': total_episodes,

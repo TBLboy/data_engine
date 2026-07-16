@@ -145,8 +145,6 @@ def _ensure_task_type(db: Session, task_type_id: str, label: str) -> TaskType:
         id=task_type_id,
         name=label,
         description=label,
-        total_batches=0,
-        total_episodes=0,
     )
     db.add(task_type)
     return task_type
@@ -173,11 +171,7 @@ def _cleanup_replaced_batch(
     if inventory:
         inventory.ingested_episode_id = canonical_episode.id
     db.delete(legacy_episode)
-    legacy_task_type = legacy_batch.task_type
     db.delete(legacy_batch)
-    if legacy_task_type:
-        legacy_task_type.total_batches = db.query(Batch).filter(Batch.task_type_id == legacy_task_type.id).count()
-        legacy_task_type.total_episodes = db.query(Episode).join(Batch, Episode.batch_id == Batch.id).filter(Batch.task_type_id == legacy_task_type.id).count()
     canonical_batch = db.query(Batch).filter(Batch.id == canonical_batch_id).first()
     if canonical_batch:
         canonical_batch.episode_count = db.query(Episode).filter(Episode.batch_id == canonical_batch_id).count()
@@ -742,8 +736,6 @@ def _execute_minio_scan(
 
             batch.episode_count = len(raw_episode_names | processed_episode_names)
             enqueue_batch_asset_recompute(db, batch.id, reason='scan_sync')
-            task_type.total_batches = db.query(Batch).filter(Batch.task_type_id == task_type.id).count()
-            task_type.total_episodes = db.query(Episode).join(Batch, Episode.batch_id == Batch.id).filter(Batch.task_type_id == task_type.id).count()
             scan_job.confirmed_lists = len(current_list_ids)
             scan_job.total_episodes = len(current_episode_inventory_ids)
             scan_job.new_episodes = new_episode_count

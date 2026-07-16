@@ -98,7 +98,6 @@ from app.services.payloads import (
     serialize_user,
     sync_batch_metrics,
     task_pool_payload,
-    task_type_active_counts,
     task_type_detail_payload,
     unclassified_batch_payload,
 )
@@ -374,15 +373,6 @@ def _reassign_batch_task_type(db: Session, *, batch: Batch, task_type: TaskType)
     ).update({Episode.task_name: task_type.name}, synchronize_session=False)
 
 
-def _refresh_task_type_stats(db: Session, *task_type_ids: str) -> None:
-    unique_ids = {task_type_id for task_type_id in task_type_ids if task_type_id}
-    for task_type_id in unique_ids:
-        task_type = db.query(TaskType).filter(TaskType.id == task_type_id).first()
-        if not task_type:
-            continue
-        task_type.total_batches, task_type.total_episodes = task_type_active_counts(db, task_type.id)
-
-
 @router.get('/task-types', response_model=list[TaskTypeSchema])
 def list_task_types(
     db: Session = Depends(get_db),
@@ -390,9 +380,9 @@ def list_task_types(
 ):
     require_roles(current_user, 'admin', 'qc_manager')
     task_types = db.query(TaskType).order_by(TaskType.id.asc()).all()
-    _refresh_task_type_stats(db, *[t.id for t in task_types])
-    db.commit()
-    return [serialize_task_type(item) for item in task_types]
+    from app.services.payloads import task_type_counts_map
+    counts = task_type_counts_map(db, [item.id for item in task_types])
+    return [serialize_task_type(db, item, counts) for item in task_types]
 
 
 @router.post('/task-types', response_model=TaskTypeSchema, status_code=status.HTTP_201_CREATED)
@@ -412,8 +402,6 @@ def create_task_type(
         description=description or name,
         arm_mode=arm_mode,
         is_active=True,
-        total_batches=0,
-        total_episodes=0,
     )
     if db.query(TaskType).filter(TaskType.id == task_type.id).first():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='任务类型标识已存在，请更换名称')
@@ -430,7 +418,7 @@ def create_task_type(
     ))
     db.commit()
     db.refresh(task_type)
-    return serialize_task_type(task_type)
+    return serialize_task_type(db, task_type)
 
 
 @router.patch('/task-types/{task_type_id}', response_model=TaskTypeSchema)
@@ -468,7 +456,7 @@ def update_task_type(
     ))
     db.commit()
     db.refresh(task_type)
-    return serialize_task_type(task_type)
+    return serialize_task_type(db, task_type)
 
 
 @router.delete('/task-types/{task_type_id}', response_model=TaskTypeSchema)
@@ -498,10 +486,9 @@ def delete_task_type(
         detail=f'batch_ids={"|".join(batch.id for batch in affected_batches)} -> {UNCLASSIFIED_TASK_TYPE_ID}',
         time=now,
     ))
-    _refresh_task_type_stats(db, task_type.id, unclassified.id)
     db.commit()
     db.refresh(task_type)
-    return serialize_task_type(task_type)
+    return serialize_task_type(db, task_type)
 
 
 @router.get('/task-types/{task_type_id}/batches', response_model=TaskTypeDetailPayloadSchema)
@@ -563,7 +550,6 @@ def attach_batches_to_task_type(
         detail=f'from={unclassified.id} batches={"|".join(batch.id for batch in batches)}',
         time=now,
     ))
-    _refresh_task_type_stats(db, task_type.id, unclassified.id)
     db.commit()
     db.refresh(task_type)
     return task_type_detail_payload(db, task_type)
@@ -598,7 +584,6 @@ def detach_batch_from_task_type(
         detail=f'from={task_type.id} to={unclassified.id}',
         time=now,
     ))
-    _refresh_task_type_stats(db, task_type.id, unclassified.id)
     db.commit()
     db.refresh(task_type)
     return task_type_detail_payload(db, task_type)
@@ -1962,7 +1947,9 @@ def list_dataset_tasks(
 ):
     """列出可供下游查看的任务列表."""
     task_types = db.query(TaskType).filter(TaskType.is_active == True).order_by(TaskType.name.asc()).all()
-    return [serialize_task_type(tt) for tt in task_types]
+    from app.services.payloads import task_type_counts_map
+    counts = task_type_counts_map(db, [item.id for item in task_types])
+    return [serialize_task_type(db, item, counts) for item in task_types]
 
 
 @router.get('/dataset/tasks/{task_type_id}/summary')

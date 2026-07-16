@@ -44,8 +44,6 @@ def seed_classification_rules(db: Session, *, created_by: str = 'system') -> Non
                 name=spec['name'],
                 description=spec['description'],
                 is_active=bool(spec.get('is_active', True)),
-                total_batches=0,
-                total_episodes=0,
             )
             db.add(task_type)
             existing_task_types[spec['id']] = task_type

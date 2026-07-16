@@ -75,8 +75,6 @@ class DataAssetsServiceTests(unittest.TestCase):
                         description='task one',
                         arm_mode='both_arms',
                         is_active=True,
-                        total_batches=0,
-                        total_episodes=0,
                     ),
                     TaskType(
                         id='task_type_2',
@@ -84,8 +82,6 @@ class DataAssetsServiceTests(unittest.TestCase):
                         description='task two',
                         arm_mode='left_arm',
                         is_active=True,
-                        total_batches=0,
-                        total_episodes=0,
                     ),
                     ScanJob(
                         id='scan_active',
