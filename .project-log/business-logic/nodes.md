@@ -95,7 +95,7 @@ name: MinIO 数据湖控制面方案设计
 status: stable（control-plane 业务规则已闭环，可交接 Node D）
 state:
   - PostgreSQL 控制面模型已确定：MinIO = raw storage only
-  - list 定义与全量扫描规则已确定：全层级递归 + 结构特征识别
+  - list 定义与扫描规则已确定：任意深度按层 namespace discovery + 结构特征识别 + 已知 List prefix 分片
   - episode 状态模型已确定：ingestable / processable / qc_ready
   - task_type 控制面归类方案已细化：prefix 规范化 + 分层 seed 规则 + 人工确认
   - 控制面 schema v0.2 已产出：6 张新表 + 扫描器实现级规则 + object_role/qc_ready 清单
@@ -161,6 +161,10 @@ state:
   - 任务级资产画像 Route T2 已全量落地：`task_asset_rollups` + `task_asset_recompute_jobs`；任务投影只从 `batch_asset_rollups` 汇总；单测/导入/前端类型检查已通过，待真实库迁移/重建冒烟
   - 任务级最终可用性主口径固定为 `final_dataset_status`，人工质检进度只作为辅口径；`not_reviewed_count` 与 `pending_dataset_count` 必须拆开
   - `task_types.total_batches` / `total_episodes` 进入废弃流程，不再作为长期资产计数权威源
+  - 扫描入库 v3 正式固化：以当前约 291 万 `episode_objects` 生产规模为基线，替代旧 v2 实施依据
+  - 正式扫描职责为 smart/incremental/full/manual_prefix；每日 smart、每周 full，前端普通操作只需一次点击
+  - 正式执行模型为 PostgreSQL 持久 shard 队列 + 独立 scan-coordinator/scan-worker + 可终止子进程；FastAPI 不执行长任务
+  - 正式同步语义覆盖新增、修改、二次确认缺失和恢复；扫描器只软失活，不自动物理删除业务/QC/审计历史
 inputs:
   - QC 指标体系（Node B 产出）
   - MinIO 控制面方案（Node F 产出）

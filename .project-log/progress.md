@@ -1,3 +1,48 @@
+## 2026-07-17 CST
+
+- Type: architecture decision
+- Status: validated and frozen
+- Importance: critical
+- Reusable: yes
+- Objective: 基于真实生产数据和现有代码，把扫描入库优化从 v2 升级为可直接实施、覆盖每日自动/性能扩展/失败恢复/删除同步/一键操作的 v3 正式主干。
+- Work completed:
+  - 审计当前 `scanner.py`、控制面模型、线程队列、APScheduler、扫描 API、MinIO client 和扫描外键关系。
+  - 查询生产 PostgreSQL：58 active List、5,987 Inventory、约 2,909,780 条 `episode_objects`；确认 49 个一级 List、9 个二级 List。
+  - 确认最近两个旧扫描停在 `classifying`，瓶颈不只是 MinIO 网络，还包括全量内存、逐对象 ORM 和部分提交。
+  - 创建 `docs/scan-architecture-final-plan-v3.md`，将 v2 标记为被替代。
+  - 固化每日 smart/每周 full、任意深度 namespace discovery、List shard、独立 coordinator/worker、可终止子进程、Episode 指纹、选择性对象索引、原子发布和二次确认软删除/恢复。
+  - 关闭 Q-20260623-004、Q-20260624-008、Q-20260624-009、Q-20260624-010。
+  - 将五项用户目标写成正式能力合同和验收标准。
+- Business logic impact:
+  - v3 替代 v2，成为唯一扫描实现依据。
+  - `scan_jobs` 改为原地演进；废弃重命名旧表并新建 BIGINT 主键的方案。
+  - `episode_objects` 改为选择性关键对象索引；bulk frame 使用 Episode 聚合指纹。
+  - 删除同步采用两次独立成功扫描确认、软失活和自动恢复，失败 shard 不得产生缺失证据。
+- Problems encountered:
+  - v2 基于约 10 万对象估算，与当前约 291 万对象索引严重不符。
+  - v2 的 `scan_jobs` 重建方案与现有多张表的字符串扫描 ID 外键冲突。
+  - 当前单调 Episode state 无法表达关键对象删除后的 readiness 降级。
+- Resolution:
+  - 以真实库重定方案边界；保留历史扫描主键；增加当前 state + max_observed_state；以选择性索引和 Episode fingerprint 控制数据库规模。
+- Verification:
+  - 已通过代码与数据库查询交叉验证现状和外键/路径层级约束。
+  - 已人工检查 v3 五项能力均有执行链、失败边界和验收标准。
+  - 本次只固化业务逻辑，未修改运行代码、未执行 v3 扫描。
+- Files changed:
+  - `docs/scan-architecture-final-plan-v3.md`
+  - `docs/scan-architecture-final-plan-v2.md`
+  - `AGENTS.md`
+  - `.project-log/business-logic/main.md`
+  - `.project-log/business-logic/decision-records.md`
+  - `.project-log/business-logic/constraints.md`
+  - `.project-log/business-logic/graph.md`
+  - `.project-log/business-logic/nodes.md`
+  - `.project-log/business-logic/edges.md`
+  - `.project-log/business-logic/open-questions.md`
+  - `.project-log/current-session.md`
+  - `.project-log/progress.md`
+- Next steps:
+  - 启动 v3 Step 0，只读 census 和旧扫描性能基线；之后进入 schema migration 与 `business_resolver.py` 抽离。
 
 ## 2026-07-15 CST
 

@@ -40,7 +40,7 @@
 ## Data Lake Constraints
 
 - V1 默认只连接 `yaocao` 这一个 bucket，不做多 bucket 路由
-- MinIO bucket/prefix 扫描必须采用全层级递归发现策略，不能假设 list 固定出现在第一层或第二层
+- List 发现必须支持任意历史层级，但正式算法是 `recursive=False` 按层 namespace discovery；确认 List 后必须停止进入其 Episode/逐帧对象内部，禁止把全桶递归对象枚举作为日常发现主路径
 - list 的识别依据结构特征（直接子级命中 `raw/`、`processed/` 且其下存在 `episode_xxxxxx/`），而不是固定深度或命名正则
 - MinIO 凭据（endpoint、access_key、secret_key）必须以环境变量注入，不能写入仓库代码或部署文档中的明文默认值
 - 扫描结果（discovered_prefixes vs lists）采用两层 PostgreSQL 存储，分别跟踪原始发现与结构确认结果
@@ -88,6 +88,20 @@
 - `task_type:unclassified` / `待分类` 是系统保底任务类型，必须永久存在，不能被删除
 - 正式任务类型主数据只面向 `admin` 与 `qc_manager` 开放管理；`reviewer`、`viewer` 无权创建、删除、重命名或改挂批次
 - 扫描器不自动创建正式任务类型，不自动把新 batch 归入正式任务类型；新 batch 默认进入 `待分类`
+- 扫描职责固定为 `smart / incremental / full / manual_prefix`；每日定时和前端主按钮默认使用 `smart`，每周 `full` 做最终一致性兜底
+- 无 MinIO 事件通知时，任何 List 最长 7 天必须被重新扫描；不得设计永久跳过 prefix 的状态
+- 不强制 bucket 下一层必须直接是 List；List 识别只依赖结构特征，`raw/processed` 必须是 List 直接子级
+- List 身份固定为 `(bucket, canonical_list_prefix)`；路径移动/重命名视为旧 List 缺失和新 List 出现，禁止静默迁移 QC 历史
+- 现有 `scan_jobs` 必须原地演进并保留 String 主键及历史外键，禁止按 v2 方案重建为新的 BIGINT 主键表
+- 默认一个 List 一个 shard；超大 List 必须可通过 `parent_shard_id` 扩展为 Episode-group 子分片
+- 扫描必须流式处理并使用批量查询/upsert；禁止 `list(all_objects)` 和逐对象 ORM 查询
+- `episode_objects` 只持久化业务可寻址关键对象；逐帧 PNG/PLY 等 bulk 对象使用 Episode 级 count/size/fingerprint 对齐，不再逐行持久化
+- 只有完整成功且原子发布的 shard 可以产生缺失证据；failed/skipped/cancelled/timeout shard 禁止做删除判断
+- 来源缺失必须经过两次独立成功观测确认：第一次 `suspect_missing`，第二次仍未见才 `missing`；重新出现必须自动恢复
+- 扫描器禁止自动物理删除 List/Batch/Episode/QC/审计历史；missing 只执行软失活和 active scope 排除
+- Episode 当前 readiness 允许因关键对象缺失降级；历史最高 readiness 必须单独保留，不得继续用单调 state 冒充当前状态
+- 扫描 Worker 必须独立于 FastAPI，使用 PostgreSQL 持久队列、lease、heartbeat、wall-clock timeout、terminate/kill 和有限次数重试
+- 普通前端必须提供一键 `smart` 扫描；Worker 数、prefix、timeout、重试等技术参数不得暴露为完成普通扫描的必填项
 - 已经归入正式任务类型的 batch，不得作为“新增批次”候选再次出现在其他任务类型的加入列表里
 - 删除任务类型时，关联 batch 必须回收到 `待分类`，不得联动删除 batch / episode / QC 历史数据
 - 从任务类型中移除 batch，本质上等价于把该 batch 重新归入 `待分类`

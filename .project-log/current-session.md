@@ -2,11 +2,11 @@
 
 ## Last Updated
 
-- 2026-07-16 14:30 CST（扫描架构升级决策固化完成）
+- 2026-07-17 CST（扫描入库 v3 正式固化完成）
 
 ## Current Objective
 
-- 扫描入库架构升级：分层并行扫描 v2 方案正式确定，等待实施启动
+- 扫描入库架构升级：可靠增量同步 v3 已成为正式主干，等待实施 Step 0
 
 ## Current Status
 
@@ -47,19 +47,14 @@
 
 - 4 commits 已全部推送至 `origin/main`
 
-#### 扫描入库架构升级决策固化
+#### 扫描入库架构 v3 决策固化
 
-- GPT 关键决策分析反馈已收到
-- 采纳 10 项 GPT 建议，生成最终实施方案 v2（`docs/scan-architecture-final-plan-v2.md`）
-- v2 方案正式决策已写入 `decision-records.md`
-- 核心修改：
-  - `skip_until_next_change` → `next_scan_at` 自适应退避
-  - 删除检测收窄到 shard 范围
-  - Asset Recompute 新增 `rerun_requested` 幂等字段
-  - 独立 Docker Worker Service 替代 FastAPI 内嵌
-  - 不建 `object_inventory`，复用 `episode_objects`
-  - 不做四级冷热调度
-- 实施计划：10 步，约 5,000-8,500 行代码，16-25 人日
+- 基于真实生产库重新评估：58 active List、5,987 Inventory、约 2,909,780 条 `episode_objects`；旧“约 10 万对象”评估作废
+- v3 正式方案已写入 `docs/scan-architecture-final-plan-v3.md`，v2 标记为被替代
+- 正式能力：每日 smart、每周 full、manual_prefix；任意深度 namespace discovery；持久 shard 队列；独立 coordinator/worker；可终止子进程；Episode 指纹与选择性对象索引；二次确认软删除/自动恢复；一键扫描
+- 原四个扫描开放问题 Q-004/008/009/010 已全部关闭
+- 关键修正：现有 `scan_jobs` 原地演进，不重建 BIGINT 主键；逐帧 PNG/PLY 不再逐行写 `episode_objects`
+- 五项验收已固化：每日定时、速度/扩展、故障鲁棒性、删除同步、一键操作
 
 ### 遗留约束
 
@@ -75,5 +70,5 @@
 
 ## Next Steps
 
-- 扫描架构升级 v2：等待用户确认后启动 Step 0（基线测试 + Feature Flag）
-- 当前扫描器稳定性问题（后台扫描卡死）待 v2 升级解决
+- 按 v3 启动 Step 0：只读 MinIO census + 当前扫描耗时/内存/数据库行为基线
+- 当前扫描器仍是旧 daemon thread，全量扫描卡死问题在 v3 实施完成前仍存在

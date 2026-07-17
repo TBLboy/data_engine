@@ -3,7 +3,7 @@
 ## Status
 
 - Research phase: Complete（公开数据集调研 + TeleDex 格式分析 + MinIO 数据湖实查均已完成）
-- Current phase: RDDQF v1.2 平台增强 — 数据总库 Batch 资产画像（Route C'）已落地；任务级资产画像 Route T2 已全量落地并通过单测/类型检查，待真实库迁移/重建冒烟
+- Current phase: 扫描入库架构升级 v3 已固化，等待从 Step 0（只读 census + 性能基线）开始实施
 
 ## Main Path
 
@@ -40,7 +40,7 @@ A → B1 + B2 + B3 → C → F → D → E
 当前业务逻辑主线已经从“定义 MinIO 控制面规则”推进到“按既定规则实施 Node D 改造”。Node F 已完成的实现前规则包括：
 
 - `yaocao` bucket 对象布局实查确认：`<bucket>/<list_prefix>/{raw|processed}/episode_xxxxxx/...`
-- list 定义、deepest-match 排重、全量递归扫描策略
+- list 定义、deepest-match 排重、任意深度按层 namespace discovery + 已知 List 分片扫描策略
 - `ingestable / processable / qc_ready` 三层 episode 状态模型
 - `scan_jobs / discovered_prefixes / lists / episode_inventory / episode_objects / classification_rules` 六张控制面表设计
 - `task_types` / `lists` / `qc_tasks` 三类实体区分，以及 bind / unbind / retire 语义
@@ -48,10 +48,6 @@ A → B1 + B2 + B3 → C → F → D → E
 - Node D manual QC API 合同：`qc-context` embedded `media[]`、按 `objectId` 定向 refresh、下载走独立 endpoint
 - `database` 页面长期性能方向已明确：不能继续依赖“全量 episodes 拉到前端后本地过滤”，后续正式方案应切换为“服务端分页 + 服务端筛选 + 前端短时缓存”
 - `数据总库` 的总体资产统计与批次级资产画像路线已确认：正式采用 Route C'，即显式 Batch–List 关系 + 批次级派生投影 + PostgreSQL 持久化重算队列 + 周期性对账
-
-仍保留但不阻塞实现的开放项：
-
-- `Q-20260623-004`：`yaocao` bucket 的全量 list census（raw_only / processed_only / both 分布）尚未完成；这影响规模评估和验收覆盖，不影响当前实现方向
 
 ## Stable Assumptions
 
@@ -70,6 +66,9 @@ A → B1 + B2 + B3 → C → F → D → E
 - 任务级资产画像正式采用 `task_asset_rollups` + `task_asset_recompute_jobs`，只从 `batch_asset_rollups` 汇总，不回扫 episodes
 - 任务级最终可用性主口径固定为 `final_dataset_status`；人工质检进度只作为辅口径
 - `task_types.total_batches` / `total_episodes` 不再作为长期资产计数权威源，进入废弃流程
+- 扫描入库正式采用 v3：每日 smart + 每周 full + manual_prefix，任意深度 namespace discovery，List 分片持久队列，独立 coordinator/worker，可终止子进程，Episode 指纹与选择性对象索引，二次确认软删除/自动恢复
+- `scan_jobs` 在现有字符串主键表上原地演进；不得按旧 v2 方案重建 BIGINT `scan_jobs`
+- 普通用户扫描操作固定为一次点击 `开始扫描`；后端自动完成 discovery、模式选择、分片、并行、重试、缺失确认和资产重算
 
 ## 数据总库资产画像升级 — 已确认业务逻辑
 
@@ -189,7 +188,7 @@ batch_asset_rollups
 - reviewer 的工作模式是流水线式：从个人看板进入质检 → 提交 → 自动跳转下一条待质检任务，直到全部完成；提交后不应停留在原地或需要手动返回列表选择下一条
 - reviewer 完成全部待质检任务后触发庆祝动画（礼花彩条 + 音效），作为正向激励闭环
 - `task_types` 是人工维护的业务目录，由 `admin/qc_manager` 管理；扫描器不再负责自动创建正式任务类型，未分类或新增批次统一进入 `待分类`
-- bucket 全量扫描采用全层级递归发现 + 结构特征识别 list
+- bucket discovery 采用 `recursive=False` 按层探索 + 结构特征识别 List；确认 List 后按 prefix 分片扫描，不再继续递归进入其 Episode/逐帧对象内部
 - Episode 生命周期采用 ingestable / processable / qc_ready 三层模型
 - 扫描器只负责把 MinIO 数据同步到 PostgreSQL，并保持已人工分类 batch 的任务类型不被自动覆盖
 - 批次与任务类型关系是可人工改挂的业务关系，而不是扫描器不可变的自动归类结果

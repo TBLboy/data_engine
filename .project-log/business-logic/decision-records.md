@@ -276,10 +276,53 @@
 - Impacted nodes: D, E
 - Status: active
 
-### 2026-07-16 — MinIO 扫描入库架构升级：分层并行扫描 v2
+### 2026-07-17 — MinIO 扫描入库架构升级：可靠增量同步 v3
 
 - Type: architecture
-- Status: confirmed
+- Status: confirmed; replaces the 2026-07-16 v2 decision below
+- Importance: critical
+- Objective: 以当前约 291 万条对象索引的真实生产规模为基线，一步到位固化每日自动、前端一键、可扩展、可终止、可恢复、可同步删除事实的扫描入库主干。
+- Evidence:
+  - 生产 PostgreSQL 当前有 58 个 active List、5,987 个 EpisodeInventory、约 2,909,780 条 `episode_objects`
+  - 49 个 List 位于一级、9 个位于二级，证明扫描正确性不能依赖固定目录深度
+  - 最近两个旧扫描停在 `classifying`，证明瓶颈同时存在于全桶枚举、全量内存、逐对象 ORM upsert 和不可终止线程
+  - 现有 `discovered_prefixes/lists/episode_inventory/episode_objects` 均通过字符串扫描 ID 外键引用 `scan_jobs`，不适合重建为 BIGINT 主键表
+- Decision:
+  - 正式架构采用：任意深度 namespace discovery + 已知 List prefix 分片 + PostgreSQL 持久队列 + 独立 `scan-coordinator`/`scan-worker` Docker Service + 每 shard 可终止子进程 + 流式 Episode 指纹 + 选择性关键对象索引 + 原子 shard 发布 + 二次确认软删除/自动恢复 + 幂等资产重算 + 每日 smart/每周 full + 前端一键操作
+  - 扫描职责固定为 `smart / incremental / full / manual_prefix`。普通前端和每日定时任务只使用 `smart`；后端自动完成 discovery、模式升级、分片、重试、缺失确认与资产重算
+  - 每日按 `Asia/Shanghai` 配置时间创建 smart job；每周低峰创建 full reconcile。无 MinIO 事件通知时，删除同步采用最终一致性：活跃/到期 List 按 `next_scan_at` 扫描，任何 adaptive List 最长 7 天重扫，每周 full 兜底
+  - namespace discovery 使用 `recursive=False` 按层探索，确认 List 后不进入其 Episode/逐帧对象内部；List 仍由结构特征识别并使用 deepest-match，不强制一级目录
+  - 新上传推荐 `<bucket>/<list>/`，允许 `<bucket>/<group>/<list>/`；`raw/processed` 必须为 List 直接子级。List 身份固定为 `(bucket, canonical_list_prefix)`；移动/重命名视为旧实体缺失 + 新实体出现，不自动迁移 QC 历史
+  - 默认一个 List 一个 shard；保留 `parent_shard_id`。Episode > 10,000、历史对象数 > 1,000,000 或连续两次 > 600s 时，允许自动升级为 Episode-group 子分片
+  - `scan_jobs` 原地扩展并保留 String(64) 主键；新 job ID 使用 UUID/ULID 字符串。`scan_shards` 使用 BIGINT IDENTITY，`scan_job_id` 保持字符串外键。废弃 v2 的“旧表改名 + 新 BIGINT scan_jobs”方案
+  - `episode_objects` 只保存 manifest/metadata/telemetry/video/MCAP/timestamp 等业务可寻址关键对象；depth PNG、pointcloud PLY 等 bulk 对象不再逐行持久化
+  - 所有对象仍参与 Episode 级 count/size/fingerprint 计算；指纹由 `(object_key, etag, size, last_modified)` 确定性生成，任意新增、修改、删除都会改变指纹
+  - List、Inventory、关键 Object 来源状态统一为 `present / suspect_missing / missing`。第一次成功完整扫描未见进入 suspect 并安排 10 分钟后确认；第二次独立成功扫描仍未见才确认 missing；重新出现自动恢复
+  - skipped/failed/cancelled/timeout shard 不增加 missing streak，且绝不执行删除判断；扫描器永不自动物理删除 List/Batch/Episode/QC/审计历史
+  - Episode 增加 active 来源语义；当前 readiness `state` 允许因关键对象缺失降级，另存只升不降的 `max_observed_state`
+  - shard 必须在完整枚举后用单一事务原子发布；失败时回滚并保留上次成功快照。数据库写入必须 bulk load/upsert，禁止逐对象 ORM 查询
+  - Worker 使用 `FOR UPDATE SKIP LOCKED`、lease、heartbeat、wall-clock timeout、terminate/kill 和最多 3 次指数退避重试；容器/主机重启后从 PostgreSQL 恢复
+  - batch/task asset recompute job 增加 `rerun_requested`，running 时再次 enqueue 不得覆盖成 pending
+  - 前端主合同固定为一个 `开始扫描` 按钮，默认 `mode=smart`；重复点击返回现有 active job，页面关闭不影响任务。高级 full/prefix/cancel/retry 收入 admin/qc_manager 二级入口
+- Resolved questions:
+  - `Q-20260623-004`: census 改为动态基线，不是固定常量；当前 DB 快照为 58 active lists，v3 Step 0 重新执行只读 MinIO census
+  - `Q-20260624-008`: 正式采用每日 smart + 自适应 incremental + 每周 full + manual_prefix
+  - `Q-20260624-009`: 不强制一级目录；结构规则是硬约束，目录深度不是
+  - `Q-20260624-010`: 二次成功观测确认 missing，软失活、保留历史、重新出现自动恢复
+- Five capability assessment:
+  - 每日自动入库：支持；定时 smart job 幂等创建，服务重启可恢复
+  - 大幅提速与扩展：支持；通过 discovery 剪枝、List 分片、流式固定内存、Episode 指纹短路、选择性索引、bulk upsert 和 Worker 横向扩展实现。无事件通知时 full scan 仍为 O(对象总数)，这是不可消除下界
+  - 鲁棒性：支持；失败必须超时、重试、恢复或明确终止，不能永久 running
+  - 删除同步：支持最终一致软删除；仅完整成功 shard 可产生缺失证据
+  - 傻瓜式操作：支持；普通用户一次点击 smart scan，后端自动编排全部技术步骤
+- Verification target: 详见 `docs/scan-architecture-final-plan-v3.md` 第 13 节
+- Reference: `docs/scan-architecture-final-plan-v3.md`
+- Impacted nodes: F, D
+
+### 2026-07-16 — MinIO 扫描入库架构升级：分层并行扫描 v2（已被 v3 替代）
+
+- Type: architecture
+- Status: replaced by v3 on 2026-07-17
 - Importance: high
 - Objective: 将当前单线程全桶递归扫描器升级为分层并行、可终止、可重试的正式架构，一步到位按大规模数据设计。
 

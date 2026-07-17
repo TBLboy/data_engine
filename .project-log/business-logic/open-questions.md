@@ -31,15 +31,6 @@
 - Current status: Open
 - Answer: Pending。首版先放驳回阈值一个参数，后续按需扩展
 
-### Q-20260623-004
-
-- Related node: C
-- Related edge: C->F
-- Question: `yaocao` bucket 当前完整有多少个 list？它们中哪些是 raw_only、哪些是 processed_only、哪些两者兼有？
-- Why it matters: 这个数量决定 V1 扫描器和 episode inventory 表需要处理的数据规模和判定覆盖范围
-- Current status: Open
-- Answer: Unknown（样本检查确认每 list 约 101–151 个 episode，但全量统计未做）
-
 ### Q-20260623-005（Resolved 2026-06-23）
 
 - Related node: D
@@ -60,33 +51,6 @@
 - Related edge: C->F
 - Question: 任务类型与 batch 的人工管理模型应该如何正式落地？尤其是“新 batch 默认进 `待分类`”、“已人工分类 batch 的 rescan 不覆盖”、“删除任务类型后批次自动回收到 `待分类`”这三条规则，对 schema/API/UI 的最终约束分别是什么？
 - Resolution: 已确定方向。任务类型改为 `admin/qc_manager` 人工维护主数据；扫描器只同步数据，不自动决定正式任务类型；新 batch 默认进入 `task_type:unclassified` / `待分类`；从任务中移除 batch 或删除任务类型时，batch 都回收到 `待分类`；错分 batch 的标准纠正流程是“先移出到待分类，再加入正确任务”；`数据总库` 负责按批次确认当前归属，后续任务类型管理页负责改挂与维护
-
-### Q-20260624-008
-
-- Related node: F
-- Related edge: C->F
-- Question: 当前 `yaocao` bucket 继续增长后，V1 的“全量递归扫描 + 幂等落库”是否还能承担日常入库？如果不能，后续应该如何拆分成全量校准、增量发现和定向重扫三种模式？
-- Why it matters: 目前扫描发现阶段仍是全量递归遍历所有对象，数据量增长后扫描耗时会持续上升。若不提前规划增量模式，生产现场每次新上传一批数据都要等待全量扫描，入库体验和系统负载都会越来越差
-- Current status: Open
-- Answer: Pending。当前判断是 V1 方案适合作为稳妥兜底，但长期生产主路径大概率需要升级为“低频全量校准 + 高频增量入库/指定 list 重扫”的分层模式
-
-### Q-20260624-009
-
-- Related node: F
-- Related edge: C->F
-- Question: 是否应该把 MinIO 上传规范正式收紧为“bucket 下一层每个目录必须直接代表一个 list，禁止 `K1/<list>` 这类二层嵌套”，从而把新数据发现阶段降级为只列 bucket 下一层 prefix 名单？
-- Why it matters: 如果上传规范可以严格约束，后续就不需要每次为发现新 list 而递归扫全部对象，只需要列出 bucket 下一层目录并和 PostgreSQL 已知 list 做差集，再对新增 list 做深扫入库，成本会明显更低
-- Current status: Open
-- Answer: Pending。用户建议这一方向可行，但还需要结合真实上传流程、采集侧约束、历史兼容成本和异常数据处理方式综合评估，不能只从扫描性能单点决定
-
-### Q-20260624-010
-
-- Related node: F
-- Related edge: C->F
-- Question: 当 MinIO 中某个 list / episode / 对象被删除或替换后，PostgreSQL 应该如何同步？是立即物理删除、标记 inactive、保留历史版本，还是区分“用户主动删除”和“暂时缺失”？
-- Why it matters: 动态数据关联系统不能只处理新增入库，还必须定义删除与失活语义，否则 MinIO 和 PostgreSQL 会越来越不一致；同时若处理过于激进，又可能破坏历史 QC 记录、审计链和可追溯性
-- Current status: Open
-- Answer: Pending。当前更倾向先做状态同步而非直接物理删除，即优先引入 inactive/missing/soft-delete 一类语义，再在后续明确何时允许彻底清理历史记录
 
 ### Q-20260715-020
 
@@ -119,6 +83,34 @@
 - Resolution: 已确定应引入“活跃派发版本”语义。每次重生成都创建新的当前版本；旧版本中未开始的任务必须退役或标记 superseded，不再参与当前运营视图。历史任务保留用于审计，但不能继续污染当前任务统计与派发状态
 
 ## Resolved Questions
+
+### Q-20260623-004（Resolved 2026-07-17）
+
+- Related node: C / F
+- Related edge: C->F
+- Question: `yaocao` bucket 当前完整有多少个 List，raw-only / processed-only / both 分布是什么？
+- Resolution: List census 不再作为固定业务常量，而是 v3 namespace discovery 的动态基线和 Shadow 验收产物。2026-07-17 PostgreSQL 快照为 58 个 active List，其中 raw-only 6、processed-only 0、raw+processed 52；一级 49、二级 9。由于旧扫描存在部分提交，v3 Step 0 仍必须执行只读 MinIO census，并对差异逐项解释。数量不阻塞 v3 架构实施。
+
+### Q-20260624-008（Resolved 2026-07-17）
+
+- Related node: F / D
+- Related edge: F->D
+- Question: 全量扫描、增量发现和定向重扫如何形成长期生产主路径？
+- Resolution: 正式采用 v3 四职责：`smart / incremental / full / manual_prefix`。每日定时与前端主按钮使用 smart；smart 先 discovery，再扫描新发现、需确认、失败重试和 `next_scan_at` 到期 List；每周 full 忽略退避做最终一致性对账；管理员可定向重扫。任何 adaptive List 最长 7 天必须扫描，禁止永久跳过。
+
+### Q-20260624-009（Resolved 2026-07-17）
+
+- Related node: F
+- Related edge: C->F
+- Question: 是否强制 bucket 下一层必须直接是 List？
+- Resolution: 不强制一级目录。真实库已有 9 个 active List 位于二级 `K1/<list>`。扫描使用 `recursive=False` 按层 namespace discovery，结构特征是硬约束，目录深度不是。推荐新数据使用一级 List，但允许业务分组层；`raw/processed` 必须是 List 直接子级。List 移动/改名视为旧实体缺失和新实体出现，不自动迁移 QC 历史。
+
+### Q-20260624-010（Resolved 2026-07-17）
+
+- Related node: F / D
+- Related edge: F->D
+- Question: MinIO 中 List/Episode/对象被删除或替换后，PostgreSQL 如何同步？
+- Resolution: 采用二次成功观测确认的软删除状态机：`present -> suspect_missing -> missing`。第一次完整成功扫描未见只标 suspect 并安排确认；第二次独立成功扫描仍未见才 missing；失败/跳过/取消/超时扫描不得产生缺失证据；重新出现自动恢复。missing 从 active scope、预览、QC 新派发和导出中排除，但扫描器永不自动物理删除 Batch/Episode/QC/审计历史。
 
 ### Q-20260716-022（Resolved 2026-07-16）
 
