@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
-from app.models import DiscoveredPrefix, ListRecord, ScanJob, ScanPrefixState, ScanShard
+from app.models import DiscoveredPrefix, GeneralConfig, ListRecord, ScanJob, ScanPrefixState, ScanShard
 from app.services.business_resolver import list_id
 from app.services.data_assets import process_pending_recompute_jobs
 from app.services.scan_queue import ACTIVE_JOB_STATUSES, add_scan_shard, create_or_get_scan_job
@@ -42,17 +42,29 @@ def _scheduled_job_id(mode: str, bucket: str, local_now: datetime) -> str:
     return f'scan_scheduled_{mode}_{bucket_key}_{period}'
 
 
+def _cron_config(db: Session) -> dict:
+    gc = GeneralConfig.get_params(db)
+    settings = get_settings()
+    return {
+        'hour': gc.get('scan_cron_hour', settings.scan_cron_hour),
+        'minute': gc.get('scan_cron_minute', settings.scan_cron_minute),
+        'full_day_of_week': gc.get('scan_full_cron_day_of_week', settings.scan_full_cron_day_of_week),
+        'full_hour': gc.get('scan_full_cron_hour', settings.scan_full_cron_hour),
+        'full_minute': gc.get('scan_full_cron_minute', settings.scan_full_cron_minute),
+    }
+
 def ensure_scheduled_jobs(db: Session, *, now: datetime | None = None) -> int:
     settings = get_settings()
+    cron = _cron_config(db)
     local_now = (now or datetime.now(ZoneInfo(settings.app_timezone))).astimezone(ZoneInfo(settings.app_timezone))
     created = 0
-    daily_due = (local_now.hour, local_now.minute) >= (settings.scan_cron_hour, settings.scan_cron_minute)
+    daily_due = (local_now.hour, local_now.minute) >= (cron['hour'], cron['minute'])
     day_map = {'mon': 0, 'tue': 1, 'wed': 2, 'thu': 3, 'fri': 4, 'sat': 5, 'sun': 6}
-    full_day = day_map.get(settings.scan_full_cron_day_of_week.lower(), 6)
+    full_day = day_map.get(cron['full_day_of_week'].lower(), 6)
     full_due = local_now.weekday() == full_day and (
         local_now.hour,
         local_now.minute,
-    ) >= (settings.scan_full_cron_hour, settings.scan_full_cron_minute)
+    ) >= (cron['full_hour'], cron['full_minute'])
     if full_due:
         job, was_created = create_or_get_scan_job(
             db,

@@ -19,6 +19,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /usr/bin/docker:/usr/bin/docker:ro
+      - /usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro
+      - ../:/app/project:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
       interval: 10s

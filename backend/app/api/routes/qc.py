@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import random
 import uuid
 from datetime import datetime, timedelta
@@ -1970,6 +1971,33 @@ def update_l3_v2_params(
 
 # ── 通用配置 ──
 
+import subprocess
+import logging
+
+_logger = logging.getLogger(__name__)
+
+_SCALE_SCRIPT = '/app/project/scripts/set-scan-worker-replicas.sh'
+_FALLBACK_COMPOSE_DIR = '/app/project/deploy'
+
+
+def _scale_worker_replicas(target: int) -> dict:
+    target = max(1, int(target))
+    try:
+        result = subprocess.run(
+            ['docker', 'compose', '-f', f'{_FALLBACK_COMPOSE_DIR}/docker-compose.yml',
+             '-p', 'deploy', 'up', '-d', '--no-deps', '--scale', f'scan-worker={target}', 'scan-worker'],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode != 0:
+            _logger.error('docker compose scale failed: %s', result.stderr)
+            return {'success': False, 'detail': result.stderr.strip()}
+        return {'success': True}
+    except FileNotFoundError:
+        return {'success': False, 'detail': 'docker CLI not available'}
+    except subprocess.TimeoutExpired:
+        return {'success': False, 'detail': 'docker compose timed out after 120s'}
+
+
 @router.get('/admin/general-config')
 def get_general_config(
     db: Session = Depends(get_db),
@@ -1987,6 +2015,16 @@ def update_general_config(
 ):
     require_roles(current_user, 'admin')
     GeneralConfig.save_params(db, payload, updated_by=current_user.name)
+    replicas = payload.get('scan_worker_replicas')
+    if replicas is not None:
+        result = _scale_worker_replicas(replicas)
+        if not result['success']:
+            _logger.warning('worker scale failed: %s', result.get('detail'))
+            return {
+                'success': True,
+                'message': '通用配置已保存',
+                'scale_worker': result,
+            }
     return {'success': True, 'message': '通用配置已保存'}
 
 

@@ -11,6 +11,12 @@ def default_general_config() -> dict:
         'ai_model_host': '127.0.0.1',
         'ai_model_port': 11434,
         'ai_model_name': 'qwen2.5:7b',
+        'scan_worker_replicas': 1,
+        'scan_cron_hour': 0,
+        'scan_cron_minute': 0,
+        'scan_full_cron_day_of_week': 'sun',
+        'scan_full_cron_hour': 2,
+        'scan_full_cron_minute': 0,
     }
 
 

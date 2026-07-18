@@ -309,6 +309,94 @@ onMounted(load)
               </el-col>
             </el-row>
           </el-card>
+
+          <el-card shadow="never" class="qc-card" style="margin-top: 16px">
+            <template #header>
+              <div>
+                <strong>定时扫描</strong>
+                <div class="group-desc">配置每日 smart 和每周 full 自动扫描的执行时间</div>
+              </div>
+            </template>
+            <el-alert type="info" :closable="false" style="margin-bottom: 16px">
+              下次 coordinator tick 生效，无需重启服务。每周 full 扫描覆盖整桶数据，建议设置在低峰时段。
+            </el-alert>
+            <el-row :gutter="20">
+              <el-col :span="12">
+                <div class="field-label">每日 smart 扫描 — 小时 (0-23)</div>
+                <el-input-number
+                  v-model="generalConfig.scan_cron_hour"
+                  :step="1" :min="0" :max="23"
+                  controls-position="right" style="width: 100%"
+                />
+                <div class="field-hint">默认 0（午夜）</div>
+              </el-col>
+              <el-col :span="12">
+                <div class="field-label">每日 smart 扫描 — 分钟 (0-59)</div>
+                <el-input-number
+                  v-model="generalConfig.scan_cron_minute"
+                  :step="1" :min="0" :max="59"
+                  controls-position="right" style="width: 100%"
+                />
+                <div class="field-hint">默认 0</div>
+              </el-col>
+            </el-row>
+            <el-row :gutter="20" style="margin-top: 16px">
+              <el-col :span="8">
+                <div class="field-label">每周 full 扫描 — 星期</div>
+                <el-select v-model="generalConfig.scan_full_cron_day_of_week" style="width: 100%">
+                  <el-option label="周一" value="mon" />
+                  <el-option label="周二" value="tue" />
+                  <el-option label="周三" value="wed" />
+                  <el-option label="周四" value="thu" />
+                  <el-option label="周五" value="fri" />
+                  <el-option label="周六" value="sat" />
+                  <el-option label="周日" value="sun" />
+                </el-select>
+                <div class="field-hint">默认周日</div>
+              </el-col>
+              <el-col :span="8">
+                <div class="field-label">每周 full 扫描 — 小时 (0-23)</div>
+                <el-input-number
+                  v-model="generalConfig.scan_full_cron_hour"
+                  :step="1" :min="0" :max="23"
+                  controls-position="right" style="width: 100%"
+                />
+                <div class="field-hint">默认 2</div>
+              </el-col>
+              <el-col :span="8">
+                <div class="field-label">每周 full 扫描 — 分钟 (0-59)</div>
+                <el-input-number
+                  v-model="generalConfig.scan_full_cron_minute"
+                  :step="1" :min="0" :max="59"
+                  controls-position="right" style="width: 100%"
+                />
+                <div class="field-hint">默认 0</div>
+              </el-col>
+            </el-row>
+          </el-card>
+
+          <el-card shadow="never" class="qc-card" style="margin-top: 16px">
+            <template #header>
+              <div>
+                <strong>扫描工作进程</strong>
+                <div class="group-desc">配置 MinIO 扫描 worker 并发数量</div>
+              </div>
+            </template>
+            <el-alert type="info" :closable="false" style="margin-bottom: 16px">
+              增加 worker 副本可让多个 List 分片同时扫描，提升吞吐量。修改保存后需要重新部署 worker 容器。
+            </el-alert>
+            <el-row :gutter="20">
+              <el-col :span="8">
+                <div class="field-label">Worker 副本数</div>
+                <el-input-number
+                  v-model="generalConfig.scan_worker_replicas"
+                  :step="1" :min="1" :max="16"
+                  controls-position="right" style="width: 100%"
+                />
+                <div class="field-hint">默认 1。增加副本需要宿主机有足够资源。保存后自动生效，无需额外操作。</div>
+              </el-col>
+            </el-row>
+          </el-card>
         </el-tab-pane>
 
         <el-tab-pane label="L3 v2 指标参数" name="l3v2">
