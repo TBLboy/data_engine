@@ -66,10 +66,7 @@ def start_scheduler() -> None:
     if _scheduler is not None:
         return
     settings = get_settings()
-    hour = settings.scan_cron_hour
-    minute = settings.scan_cron_minute
     _scheduler = BackgroundScheduler(daemon=True)
-    _scheduler.add_job(_scan_job, CronTrigger(hour=hour, minute=minute, timezone='Asia/Shanghai'), id='daily_scan')
     _scheduler.add_job(
         _data_assets_recompute_job,
         IntervalTrigger(seconds=max(5, settings.data_assets_recompute_interval_seconds), timezone='Asia/Shanghai'),
@@ -90,9 +87,7 @@ def start_scheduler() -> None:
     )
     _scheduler.start()
     logger.info(
-        '[scan_cron] scheduler started, daily_scan=%02d:%02d recompute_interval=%ss reconcile=%02d:%02d (Asia/Shanghai)',
-        hour,
-        minute,
+        '[scheduler] started recompute_interval=%ss reconcile=%02d:%02d (Asia/Shanghai)',
         max(5, settings.data_assets_recompute_interval_seconds),
         settings.data_assets_reconcile_cron_hour,
         settings.data_assets_reconcile_cron_minute,

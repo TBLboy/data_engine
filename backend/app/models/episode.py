@@ -19,6 +19,7 @@ class Episode(Base):
     updated_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), nullable=False)
     in_candidate_pool: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     sampled_for_qc: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
 
     # ── Dataset consumption fields ──
     manual_qc_status: Mapped[str] = mapped_column(String(32), default='NOT_REVIEWED', nullable=False)

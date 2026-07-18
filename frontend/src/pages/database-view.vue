@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
-import { fetchDataAssetBatches, fetchDataAssetSummary, fetchDataAssetTasks, fetchDatabase, rebuildDataAssets, scanDatabase, type DatabasePayload } from '../api/client'
+import { fetchDataAssetBatches, fetchDataAssetSummary, fetchDataAssetTasks, fetchDatabase, rebuildDataAssets, scanDatabase, fetchScanJob, cancelScanJob, retryScanJob, type DatabasePayload } from '../api/client'
 import { useSessionStore } from '../stores/session'
 import type { BatchSummary, DataAssetBatchRow, DataAssetSummary, DataAssetTaskRow } from '../types/qc'
 import { reasonLabel } from '../utils/reasonLabels'
@@ -25,6 +25,8 @@ const summaryError = ref('')
 const batchAssetError = ref('')
 const taskAssetError = ref('')
 const scanning = ref(false)
+const scanJobId = ref<string | null>(null)
+const scanPollTimer = ref<ReturnType<typeof setTimeout> | null>(null)
 const rebuilding = ref(false)
 const batchAssetDrawerVisible = ref(false)
 const taskAssetDrawerVisible = ref(false)
@@ -55,7 +57,8 @@ let taskAssetKeywordTimer: ReturnType<typeof setTimeout> | null = null
 
 const scanForm = reactive({
   bucket: 'yaocao',
-  scope: 'full'
+  mode: 'smart' as 'smart' | 'incremental' | 'full' | 'manual_prefix',
+  prefixes: ''
 })
 
 const canScanDatabase = computed(() => ['admin', 'qc_manager'].includes(session.user?.role ?? 'viewer'))
@@ -148,19 +151,84 @@ const loadPage = async () => {
   await Promise.all([loadDatabaseOnly(), loadDataAssets()])
 }
 
+const stopScanPolling = () => {
+  if (scanPollTimer.value) {
+    clearTimeout(scanPollTimer.value)
+    scanPollTimer.value = null
+  }
+}
+
+const startScanPolling = (jobId: string) => {
+  stopScanPolling()
+  const poll = async () => {
+    if (!scanJobId.value || scanJobId.value !== jobId) return
+    try {
+      const job = await fetchScanJob(jobId)
+      const active = ['queued', 'discovering', 'running', 'cancelling'].includes(job.status)
+      const legacyActive = ['scanning', 'classifying'].includes(job.status)
+      if (active || legacyActive) {
+        if (scanJobId.value === jobId) {
+          scanPollTimer.value = setTimeout(poll, 3000)
+        }
+      } else {
+        scanJobId.value = null
+        await loadPage()
+      }
+    } catch (err) {
+      scanJobId.value = null
+    }
+  }
+  scanPollTimer.value = setTimeout(poll, 3000)
+}
+
 const submitScan = async () => {
   scanning.value = true
+  stopScanPolling()
+  scanJobId.value = null
   try {
+    const prefixes = scanForm.mode === 'manual_prefix'
+      ? scanForm.prefixes.split('\n').map(s => s.trim()).filter(Boolean)
+      : undefined
     const job = await scanDatabase({
       bucket: scanForm.bucket.trim(),
-      scope: scanForm.scope,
+      mode: scanForm.mode,
+      prefixes,
     })
-    ElMessage.success(`扫描完成：${job.detail}`)
-    await loadPage()
+    scanJobId.value = job.id
+    if (['queued', 'discovering', 'running', 'cancelling'].includes(job.status)) {
+      ElMessage.success('扫描任务已创建')
+      startScanPolling(job.id)
+    } else if (['scanning', 'classifying'].includes(job.status)) {
+      ElMessage.success('扫描任务已创建')
+      startScanPolling(job.id)
+    } else {
+      ElMessage.success('扫描已完成')
+      await loadPage()
+    }
   } catch (err) {
     ElMessage.error(formatError(err, '扫描入库失败'))
   } finally {
     scanning.value = false
+  }
+}
+
+const cancelScan = async (jobId: string) => {
+  try {
+    await cancelScanJob(jobId)
+    ElMessage.success('已请求取消扫描')
+  } catch (err) {
+    ElMessage.error(formatError(err, '取消失败'))
+  }
+}
+
+const retryScan = async (jobId: string) => {
+  try {
+    const job = await retryScanJob(jobId)
+    ElMessage.success('已重新入队失败分片')
+    scanJobId.value = job.id
+    startScanPolling(job.id)
+  } catch (err) {
+    ElMessage.error(formatError(err, '重试失败'))
   }
 }
 
@@ -223,10 +291,19 @@ const drillTaskToBatches = (row: DataAssetTaskRow) => {
 
 
 onMounted(() => {
-  void loadPage()
+  void loadPage().then(() => {
+    const activeJobs = (payload.value?.ingestJobs ?? []).filter(
+      j => ['queued', 'discovering', 'running', 'cancelling', 'scanning', 'classifying'].includes(j.status)
+    )
+    if (activeJobs.length) {
+      scanJobId.value = activeJobs[0].id
+      startScanPolling(activeJobs[0].id)
+    }
+  })
 })
 
 onBeforeUnmount(() => {
+  stopScanPolling()
   if (episodeKeywordTimer) clearTimeout(episodeKeywordTimer)
   if (batchAssetKeywordTimer) clearTimeout(batchAssetKeywordTimer)
   if (taskAssetKeywordTimer) clearTimeout(taskAssetKeywordTimer)
@@ -478,17 +555,25 @@ const frameCoverageText = computed(() => {
             <template #header>扫描 MinIO</template>
             <div class="filter-grid">
               <el-input v-model="scanForm.bucket" placeholder="输入 MinIO bucket 名称" class="qc-input" clearable />
-              <el-select v-model="scanForm.scope" class="qc-select" placeholder="扫描范围">
+              <el-select v-model="scanForm.mode" class="qc-select" placeholder="扫描模式">
+                <el-option label="智能扫描 (推荐)" value="smart" />
                 <el-option label="全量扫描" value="full" />
+                <el-option label="指定前缀" value="manual_prefix" />
               </el-select>
-              <el-button type="primary" :loading="scanning" @click="submitScan">扫描入库</el-button>
+              <el-button type="primary" :loading="scanning" @click="submitScan">开始扫描</el-button>
+            </div>
+            <div v-if="scanForm.mode === 'manual_prefix'" class="hint-text" style="margin-top:10px">
+              <el-input
+                v-model="scanForm.prefixes"
+                type="textarea"
+                :rows="3"
+                placeholder="每行一个 List 前缀，例如：&#10;group/list-a/&#10;group/list-b/"
+              />
             </div>
             <div class="hint-text">
-              当前扫描直接面向 MinIO 数据湖，默认 bucket 为
+              默认 bucket 为
               <code>yaocao</code>
-              ，scope 目前保留
-              <code>full</code>
-              全量扫描语义。
+              ，smart 模式自动发现；full 全量扫描；manual_prefix 仅扫描指定前缀。
             </div>
           </el-card>
         </el-col>
@@ -496,18 +581,46 @@ const frameCoverageText = computed(() => {
           <el-card shadow="never" class="qc-card" v-loading="databaseLoading">
             <template #header>最近扫描任务</template>
             <el-table :data="ingestJobs" stripe class="qc-table" height="240">
-              <el-table-column prop="bucket" label="Bucket" min-width="150" />
-              <el-table-column prop="scope" label="范围" width="110" />
-              <el-table-column label="状态" width="110">
+              <el-table-column prop="bucket" label="Bucket" min-width="120" />
+              <el-table-column label="模式" width="90">
+                <template #default="{ row }">
+                  <el-tag size="small" type="info">{{ row.mode || row.scope }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="状态" width="100">
                 <template #default="{ row }">
                   <el-tag :type="ingestStatusType(row.status)">{{ row.status }}</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column prop="confirmedLists" label="列表" width="80" />
-              <el-table-column prop="totalEpisodes" label="Episodes" width="90" />
-              <el-table-column prop="newEpisodes" label="新增" width="80" />
-              <el-table-column prop="detail" label="详情" min-width="180" show-overflow-tooltip />
-              <el-table-column prop="startedAt" label="开始时间" width="160" />
+              <el-table-column label="进度" width="80">
+                <template #default="{ row }">{{ row.progress }}%</template>
+              </el-table-column>
+              <el-table-column label="分片" width="130">
+                <template #default="{ row }">
+                  <span v-if="row.totalShards">s{{ row.succeededShards || 0 }}/r{{ row.runningShards || 0 }}/f{{ row.failedShards || 0 }}/t{{ row.totalShards }}</span>
+                  <span v-else>-</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="confirmedLists" label="列表" width="70" />
+              <el-table-column prop="totalEpisodes" label="Episodes" width="80" />
+              <el-table-column prop="newEpisodes" label="新增" width="70" />
+              <el-table-column label="操作" width="140">
+                <template #default="{ row }">
+                  <div class="batch-row-actions">
+                    <el-button
+                      v-if="['queued','discovering','running','cancelling','scanning','classifying'].includes(row.status)"
+                      link type="danger" size="small"
+                      @click="cancelScan(row.id)"
+                    >取消</el-button>
+                    <el-button
+                      v-if="['failed','partially_failed'].includes(row.status)"
+                      link type="primary" size="small"
+                      @click="retryScan(row.id)"
+                    >重试失败</el-button>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column prop="startedAt" label="开始时间" width="150" />
             </el-table>
           </el-card>
         </el-col>

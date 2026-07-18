@@ -1,7 +1,12 @@
-from sqlalchemy import BIGINT, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, UniqueConstraint
+from datetime import datetime
+
+from sqlalchemy import BIGINT, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
+
+
+SCAN_BIGINT = BIGINT().with_variant(Integer, 'sqlite')
 
 
 class ScanJob(Base):
@@ -20,6 +25,82 @@ class ScanJob(Base):
     error_detail: Mapped[str] = mapped_column(String(500), default='', nullable=False)
     started_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), nullable=False)
     finished_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    scan_mode: Mapped[str] = mapped_column(String(32), default='full', nullable=False, index=True)
+    priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    trigger_source: Mapped[str] = mapped_column(String(32), default='manual', nullable=False)
+    active_key: Mapped[str | None] = mapped_column(String(256), nullable=True, unique=True)
+    total_shards: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    succeeded_shards: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failed_shards: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    running_shards: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    skipped_shards: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    heartbeat_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    cancel_requested_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    error_summary: Mapped[str] = mapped_column(Text, default='', nullable=False)
+    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), default=datetime.utcnow, nullable=False)
+
+
+class ScanShard(Base):
+    __tablename__ = 'scan_shards'
+    __table_args__ = (
+        UniqueConstraint('scan_job_id', 'shard_key', name='uq_scan_shards_job_key'),
+        Index('ix_scan_shards_claim', 'status', 'next_retry_at', 'priority', 'id'),
+    )
+
+    id: Mapped[int] = mapped_column(SCAN_BIGINT, primary_key=True, autoincrement=True)
+    scan_job_id: Mapped[str] = mapped_column(ForeignKey('scan_jobs.id'), nullable=False, index=True)
+    parent_shard_id: Mapped[int | None] = mapped_column(ForeignKey('scan_shards.id'), nullable=True, index=True)
+    shard_key: Mapped[str] = mapped_column(String(1200), nullable=False)
+    shard_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    bucket: Mapped[str] = mapped_column(String(128), nullable=False)
+    prefix: Mapped[str] = mapped_column(String(1024), default='', nullable=False)
+    range_start: Mapped[str] = mapped_column(String(128), default='', nullable=False)
+    range_end: Mapped[str] = mapped_column(String(128), default='', nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default='pending', nullable=False, index=True)
+    priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    lease_owner: Mapped[str] = mapped_column(String(128), default='', nullable=False)
+    lease_expires_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    heartbeat_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=600, nullable=False)
+    next_retry_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    processed_objects: Mapped[int] = mapped_column(SCAN_BIGINT, default=0, nullable=False)
+    total_objects: Mapped[int] = mapped_column(SCAN_BIGINT, default=0, nullable=False)
+    processed_episodes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_episodes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    changed_episodes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    new_episodes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_detail: Mapped[str] = mapped_column(Text, default='', nullable=False)
+    started_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    finished_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), default=datetime.utcnow, nullable=False)
+
+
+class ScanPrefixState(Base):
+    __tablename__ = 'scan_prefix_states'
+    __table_args__ = (
+        UniqueConstraint('bucket', 'prefix', name='uq_scan_prefix_states_bucket_prefix'),
+        Index('ix_scan_prefix_states_due', 'scan_policy', 'next_scan_at'),
+    )
+
+    id: Mapped[int] = mapped_column(SCAN_BIGINT, primary_key=True, autoincrement=True)
+    bucket: Mapped[str] = mapped_column(String(128), nullable=False)
+    prefix: Mapped[str] = mapped_column(String(1024), nullable=False)
+    list_id: Mapped[str | None] = mapped_column(ForeignKey('lists.id'), nullable=True, index=True)
+    scan_policy: Mapped[str] = mapped_column(String(32), default='adaptive', nullable=False)
+    last_success_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    last_changed_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    next_scan_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    consecutive_unchanged: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_episode_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_object_count: Mapped[int] = mapped_column(SCAN_BIGINT, default=0, nullable=False)
+    last_duration_seconds: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    last_error: Mapped[str] = mapped_column(Text, default='', nullable=False)
+    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), default=datetime.utcnow, nullable=False)
 
 
 class DiscoveredPrefix(Base):
@@ -58,6 +139,12 @@ class ListRecord(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), nullable=False)
     updated_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), nullable=False)
+    source_status: Mapped[str] = mapped_column(String(32), default='present', nullable=False, index=True)
+    missing_streak: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    missing_evidence_shard_id: Mapped[int | None] = mapped_column(ForeignKey('scan_shards.id'), nullable=True)
+    first_missing_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    last_missing_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    last_confirmed_present_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
 
     final_task_type = relationship('TaskType')
     episode_inventory = relationship('EpisodeInventory', back_populates='list_record')
@@ -85,6 +172,30 @@ class EpisodeInventory(Base):
     first_seen_scan_id: Mapped[str] = mapped_column(ForeignKey('scan_jobs.id'), nullable=False)
     last_seen_scan_id: Mapped[str] = mapped_column(ForeignKey('scan_jobs.id'), nullable=False)
     ingested_episode_id: Mapped[str | None] = mapped_column(ForeignKey('episodes.id'), nullable=True, index=True)
+    max_observed_state: Mapped[str] = mapped_column(String(32), default='ingestable', nullable=False)
+    source_status: Mapped[str] = mapped_column(String(32), default='present', nullable=False, index=True)
+    missing_streak: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    missing_evidence_shard_id: Mapped[int | None] = mapped_column(ForeignKey('scan_shards.id'), nullable=True)
+    first_missing_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    last_missing_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    last_confirmed_present_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    raw_source_status: Mapped[str] = mapped_column(String(32), default='present', nullable=False)
+    processed_source_status: Mapped[str] = mapped_column(String(32), default='present', nullable=False)
+    raw_missing_streak: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    processed_missing_streak: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    raw_missing_evidence_shard_id: Mapped[int | None] = mapped_column(ForeignKey('scan_shards.id'), nullable=True)
+    processed_missing_evidence_shard_id: Mapped[int | None] = mapped_column(ForeignKey('scan_shards.id'), nullable=True)
+    raw_first_missing_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    processed_first_missing_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    raw_last_missing_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    processed_last_missing_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    raw_object_count: Mapped[int] = mapped_column(BIGINT, default=0, nullable=False)
+    processed_object_count: Mapped[int] = mapped_column(BIGINT, default=0, nullable=False)
+    raw_total_size_bytes: Mapped[int] = mapped_column(BIGINT, default=0, nullable=False)
+    processed_total_size_bytes: Mapped[int] = mapped_column(BIGINT, default=0, nullable=False)
+    raw_content_fingerprint: Mapped[str] = mapped_column(String(64), default='', nullable=False)
+    processed_content_fingerprint: Mapped[str] = mapped_column(String(64), default='', nullable=False)
+    latest_object_modified_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
 
     list_record = relationship('ListRecord', back_populates='episode_inventory')
     objects = relationship('EpisodeObject', back_populates='episode_inventory')
@@ -104,6 +215,12 @@ class EpisodeObject(Base):
     content_hash: Mapped[str] = mapped_column(String(64), default='', nullable=False, index=True)
     last_modified: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     last_seen_scan_id: Mapped[str] = mapped_column(ForeignKey('scan_jobs.id'), nullable=False)
+    source_status: Mapped[str] = mapped_column(String(32), default='present', nullable=False, index=True)
+    missing_streak: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    missing_evidence_shard_id: Mapped[int | None] = mapped_column(ForeignKey('scan_shards.id'), nullable=True)
+    first_missing_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    last_missing_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    last_confirmed_present_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
 
     episode_inventory = relationship('EpisodeInventory', back_populates='objects')
 
@@ -145,6 +262,7 @@ class BatchAssetRecomputeJob(Base):
     last_error: Mapped[str] = mapped_column(String(500), default='', nullable=False)
     last_started_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     last_finished_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    rerun_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     batch = relationship('Batch')
 
@@ -191,6 +309,7 @@ class TaskAssetRecomputeJob(Base):
     last_error: Mapped[str] = mapped_column(String(500), default='', nullable=False)
     last_started_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     last_finished_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    rerun_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     task_type = relationship('TaskType')
 

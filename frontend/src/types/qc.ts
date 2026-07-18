@@ -381,12 +381,21 @@ export interface IngestJob {
   id: string
   bucket: string
   scope: string
-  status: 'scanning' | 'classifying' | 'done' | 'failed'
+  mode?: string
+  status: 'scanning' | 'classifying' | 'done' | 'failed' | 'queued' | 'discovering' | 'running' | 'cancelling' | 'succeeded' | 'partially_failed' | 'cancelled'
   progress: number
+  totalShards?: number
+  succeededShards?: number
+  runningShards?: number
+  failedShards?: number
+  skippedShards?: number
   confirmedLists: number
   totalEpisodes: number
   newEpisodes: number
   detail: string
+  errorSummary?: string
+  triggerSource?: string
+  cancelRequestedAt?: string | null
   startedAt: string
   finishedAt: string | null
 }

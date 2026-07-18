@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.models import Batch, DatasetExportJob, Episode, TaskType, AuditEvent
+from app.models import AuditEvent, Batch, DatasetExportJob, Episode, ListRecord, TaskType
 
 
 class DatasetSummaryService:
@@ -19,9 +19,18 @@ class DatasetSummaryService:
         if not task_type:
             return None
 
-        batches = db.query(Batch).filter(Batch.task_type_id == task_type_id, Batch.is_active == True).all()
-        episodes = db.query(Episode).filter(
-            Episode.batch.has((Batch.task_type_id == task_type_id) & (Batch.is_active == True))
+        batches = db.query(Batch).join(ListRecord, Batch.list_id == ListRecord.id).filter(
+            Batch.task_type_id == task_type_id,
+            Batch.is_active == True,
+            ListRecord.is_active == True,
+        ).all()
+        episodes = db.query(Episode).join(Batch, Episode.batch_id == Batch.id).join(
+            ListRecord, Batch.list_id == ListRecord.id
+        ).filter(
+            Batch.task_type_id == task_type_id,
+            Batch.is_active == True,
+            ListRecord.is_active == True,
+            Episode.is_active == True,
         ).all()
 
         qualified = [e for e in episodes if e.final_dataset_status == 'QUALIFIED']
@@ -55,12 +64,17 @@ class DatasetSummaryService:
 
     @staticmethod
     def task_batches(db: Session, task_type_id: str) -> list[dict]:
-        batches = db.query(Batch).filter(Batch.task_type_id == task_type_id, Batch.is_active == True).order_by(Batch.imported_at.desc()).all()
+        batches = db.query(Batch).join(ListRecord, Batch.list_id == ListRecord.id).filter(
+            Batch.task_type_id == task_type_id,
+            Batch.is_active == True,
+            ListRecord.is_active == True,
+        ).order_by(Batch.imported_at.desc()).all()
         result = []
         for batch in batches:
             available = db.query(Episode).filter(
                 Episode.batch_id == batch.id,
                 Episode.final_dataset_status == 'QUALIFIED',
+                Episode.is_active == True,
             ).count()
             result.append({
                 'batchId': batch.id,
@@ -101,8 +115,13 @@ class DatasetExportService:
 
     @classmethod
     def _get_episodes(cls, db: Session, task_type_id: str, batch_ids: list[str] | None = None):
-        query = db.query(Episode).filter(
-            Episode.batch.has((Batch.task_type_id == task_type_id) & (Batch.is_active == True)),
+        query = db.query(Episode).join(Batch, Episode.batch_id == Batch.id).join(
+            ListRecord, Batch.list_id == ListRecord.id
+        ).filter(
+            Batch.task_type_id == task_type_id,
+            Batch.is_active == True,
+            ListRecord.is_active == True,
+            Episode.is_active == True,
             Episode.final_dataset_status == 'QUALIFIED',
         )
         if batch_ids:

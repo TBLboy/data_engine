@@ -400,7 +400,31 @@ def serialize_audit(audit: AuditEvent) -> dict:
 
 
 def serialize_ingest_job(job: ScanJob) -> dict:
-    if job.status == 'done':
+    shard_count = (job.total_shards or 0)
+    succeeded = (job.succeeded_shards or 0)
+    if job.status == 'succeeded':
+        progress = 100
+    elif job.scan_mode == 'manual_prefix':
+        progress = round((succeeded / shard_count) * 100) if shard_count else 0
+    elif job.status == 'queued':
+        progress = 0
+    elif job.status == 'discovering':
+        progress = 5
+    elif job.status in ('running', 'cancelling'):
+        discovery_done = job.succeeded_shards is not None and job.succeeded_shards > 0
+        if discovery_done and shard_count and shard_count > 1:
+            list_shards = shard_count - 1
+            list_succeeded = max(succeeded - 1, 0)
+            progress = 10 + round((list_succeeded / list_shards) * 90) if list_shards else 10
+        elif job.status == 'cancelling':
+            progress = max(progress if 'progress' in dir() else 0, 15)
+        else:
+            progress = 5
+    elif job.status == 'partially_failed':
+        progress = round((succeeded / shard_count) * 100) if shard_count else 0
+    elif job.status in ('failed', 'cancelled'):
+        progress = 0
+    elif job.status == 'done':
         progress = 100
     elif job.status == 'classifying':
         progress = 70
@@ -408,18 +432,28 @@ def serialize_ingest_job(job: ScanJob) -> dict:
         progress = 15
     else:
         progress = 0
+    waiting = max(shard_count - succeeded - (job.failed_shards or 0) - (job.running_shards or 0) - (job.skipped_shards or 0), 0)
     return {
         'id': job.id,
         'bucket': job.bucket,
-        'scope': job.scope,
+        'scope': job.scope or job.scan_mode or 'full',
+        'mode': job.scan_mode or job.scope or 'full',
         'status': job.status,
         'progress': progress,
-        'confirmedLists': job.confirmed_lists,
-        'totalEpisodes': job.total_episodes,
-        'newEpisodes': job.new_episodes,
-        'detail': job.error_detail or f'lists={job.confirmed_lists} episodes={job.total_episodes} new={job.new_episodes}',
+        'totalShards': shard_count,
+        'succeededShards': succeeded,
+        'runningShards': (job.running_shards or 0),
+        'failedShards': (job.failed_shards or 0),
+        'skippedShards': (job.skipped_shards or 0),
+        'confirmedLists': (job.confirmed_lists or 0),
+        'totalEpisodes': (job.total_episodes or 0),
+        'newEpisodes': (job.new_episodes or 0),
+        'detail': job.error_detail or f'shards={shard_count} succeeded={succeeded} episodes={job.total_episodes or 0} new={job.new_episodes or 0}',
+        'errorSummary': job.error_summary or '',
+        'triggerSource': job.trigger_source or 'manual',
+        'cancelRequestedAt': format_optional_time(job.cancel_requested_at),
         'startedAt': format_time(job.started_at),
-        'finishedAt': format_time(job.finished_at) if job.finished_at else None,
+        'finishedAt': format_optional_time(job.finished_at) if job.finished_at else None,
     }
 
 
@@ -492,6 +526,7 @@ def _manual_qc_media(db: Session, episode_id: str, current_user: User | None) ->
     manifest_key = next((row.object_key for row in db.query(EpisodeObject).filter(
         EpisodeObject.episode_inventory_id == inventory.id,
         EpisodeObject.object_role == 'manifest',
+        EpisodeObject.source_status != 'missing',
     ).limit(1)), None)
     if manifest_key:
         try:
@@ -505,6 +540,7 @@ def _manual_qc_media(db: Session, episode_id: str, current_user: User | None) ->
         EpisodeObject.episode_inventory_id == inventory.id,
         EpisodeObject.object_scope == 'processed',
         EpisodeObject.object_key.like('%.mp4'),
+        EpisodeObject.source_status != 'missing',
     ).order_by(EpisodeObject.object_key.asc()).all()
 
     # Dynamic sort order from camera enumeration
@@ -568,6 +604,7 @@ def _build_real_manual_qc_context(db: Session, episode_id: str) -> dict | None:
     object_rows = db.query(EpisodeObject).filter(
         EpisodeObject.episode_inventory_id == inventory.id,
         EpisodeObject.object_scope == 'processed',
+        EpisodeObject.source_status != 'missing',
     ).all()
     object_map = {item.object_role: item.object_key for item in object_rows}
     manifest_key = object_map.get('manifest')

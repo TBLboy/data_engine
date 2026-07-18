@@ -74,6 +74,7 @@ def active_episode_query(db: Session):
         Batch.is_active == True,
         Batch.list_id.is_not(None),
         ListRecord.is_active == True,
+        Episode.is_active == True,
     )
 
 
@@ -91,14 +92,25 @@ def enqueue_batch_asset_recompute(db: Session, batch_id: str, *, reason: str) ->
             last_error='',
             last_started_at=None,
             last_finished_at=None,
+            rerun_requested=False,
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=[BatchAssetRecomputeJob.batch_id],
             set_={
                 'reason': normalized_reason,
                 'requested_at': now,
-                'status': 'pending',
-                'last_error': '',
+                'status': case(
+                    (BatchAssetRecomputeJob.status == 'running', 'running'),
+                    else_='pending',
+                ),
+                'rerun_requested': case(
+                    (BatchAssetRecomputeJob.status == 'running', True),
+                    else_=False,
+                ),
+                'last_error': case(
+                    (BatchAssetRecomputeJob.status == 'running', BatchAssetRecomputeJob.last_error),
+                    else_='',
+                ),
             },
         )
         db.execute(stmt)
@@ -108,8 +120,12 @@ def enqueue_batch_asset_recompute(db: Session, batch_id: str, *, reason: str) ->
     if job:
         job.reason = normalized_reason
         job.requested_at = now
-        job.status = 'pending'
-        job.last_error = ''
+        if job.status == 'running':
+            job.rerun_requested = True
+        else:
+            job.status = 'pending'
+            job.rerun_requested = False
+            job.last_error = ''
         return
     db.add(
         BatchAssetRecomputeJob(
@@ -121,6 +137,7 @@ def enqueue_batch_asset_recompute(db: Session, batch_id: str, *, reason: str) ->
             last_error='',
             last_started_at=None,
             last_finished_at=None,
+            rerun_requested=False,
         )
     )
 
@@ -148,14 +165,25 @@ def enqueue_task_asset_recompute(db: Session, task_type_id: str, *, reason: str)
             last_error='',
             last_started_at=None,
             last_finished_at=None,
+            rerun_requested=False,
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=[TaskAssetRecomputeJob.task_type_id],
             set_={
                 'reason': normalized_reason,
                 'requested_at': now,
-                'status': 'pending',
-                'last_error': '',
+                'status': case(
+                    (TaskAssetRecomputeJob.status == 'running', 'running'),
+                    else_='pending',
+                ),
+                'rerun_requested': case(
+                    (TaskAssetRecomputeJob.status == 'running', True),
+                    else_=False,
+                ),
+                'last_error': case(
+                    (TaskAssetRecomputeJob.status == 'running', TaskAssetRecomputeJob.last_error),
+                    else_='',
+                ),
             },
         )
         db.execute(stmt)
@@ -165,8 +193,12 @@ def enqueue_task_asset_recompute(db: Session, task_type_id: str, *, reason: str)
     if job:
         job.reason = normalized_reason
         job.requested_at = now
-        job.status = 'pending'
-        job.last_error = ''
+        if job.status == 'running':
+            job.rerun_requested = True
+        else:
+            job.status = 'pending'
+            job.rerun_requested = False
+            job.last_error = ''
         return
     db.add(
         TaskAssetRecomputeJob(
@@ -178,6 +210,7 @@ def enqueue_task_asset_recompute(db: Session, task_type_id: str, *, reason: str)
             last_error='',
             last_started_at=None,
             last_finished_at=None,
+            rerun_requested=False,
         )
     )
 
@@ -237,7 +270,7 @@ def recompute_batch_asset_rollup(db: Session, batch_id: str) -> BatchAssetRollup
         func.coalesce(func.sum(case((Episode.final_dataset_status == 'UNQUALIFIED', 1), else_=0)), 0).label('unqualified_count'),
         func.coalesce(func.sum(case((Episode.final_dataset_status == 'PENDING', 1), else_=0)), 0).label('pending_dataset_count'),
         func.max(Episode.updated_at).label('last_episode_updated_at'),
-    ).filter(Episode.batch_id == batch_id).one()
+    ).filter(Episode.batch_id == batch_id, Episode.is_active == True).one()
 
     source_updated_at = aggregate.last_episode_updated_at.isoformat() if aggregate.last_episode_updated_at else 'none'
     source_watermark = f'episodes:{aggregate.episode_count}:updated:{source_updated_at}'
@@ -274,7 +307,8 @@ def recompute_batch_asset_rollup(db: Session, batch_id: str) -> BatchAssetRollup
     db.flush()
     job = _query_or_pending(db, BatchAssetRecomputeJob, 'batch_id', batch_id)
     if job:
-        job.status = 'done'
+        job.status = 'pending' if job.rerun_requested else 'done'
+        job.rerun_requested = False
         job.attempts += 1
         job.last_error = ''
         job.last_started_at = job.last_started_at or now
@@ -293,6 +327,7 @@ def mark_recompute_started(db: Session, batch_id: str) -> BatchAssetRecomputeJob
     if job.status not in ('pending', 'failed'):
         return None
     job.status = 'running'
+    job.rerun_requested = False
     job.last_started_at = _utcnow()
     job.last_error = ''
     return job
@@ -419,7 +454,8 @@ def recompute_task_asset_rollup(db: Session, task_type_id: str) -> TaskAssetRoll
     db.flush()
     job = _query_or_pending(db, TaskAssetRecomputeJob, 'task_type_id', task_type_id)
     if job:
-        job.status = 'done'
+        job.status = 'pending' if job.rerun_requested else 'done'
+        job.rerun_requested = False
         job.attempts += 1
         job.last_error = ''
         job.last_started_at = job.last_started_at or now
@@ -435,6 +471,7 @@ def mark_task_recompute_started(db: Session, task_type_id: str) -> TaskAssetReco
     if job.status not in ('pending', 'failed'):
         return None
     job.status = 'running'
+    job.rerun_requested = False
     job.last_started_at = _utcnow()
     job.last_error = ''
     return job

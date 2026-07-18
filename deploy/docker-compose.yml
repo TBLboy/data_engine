@@ -31,6 +31,65 @@ services:
         max-size: 50m
         max-file: 5
 
+  scan-coordinator:
+    build:
+      context: ../backend
+    container_name: robot-qc-scan-coordinator
+    command: python -m app.services.scan_coordinator
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg://robot_qc:${POSTGRES_PASSWORD}@db:5432/robot_qc
+      APP_TIMEZONE: ${APP_TIMEZONE:-Asia/Shanghai}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_DEFAULT_BUCKET: ${MINIO_DEFAULT_BUCKET:-yaocao}
+      SCAN_CRON_HOUR: ${SCAN_CRON_HOUR:-0}
+      SCAN_CRON_MINUTE: ${SCAN_CRON_MINUTE:-0}
+      SCAN_FULL_CRON_DAY_OF_WEEK: ${SCAN_FULL_CRON_DAY_OF_WEEK:-sun}
+      SCAN_FULL_CRON_HOUR: ${SCAN_FULL_CRON_HOUR:-2}
+      SCAN_FULL_CRON_MINUTE: ${SCAN_FULL_CRON_MINUTE:-0}
+      SCAN_COORDINATOR_INTERVAL_SECONDS: ${SCAN_COORDINATOR_INTERVAL_SECONDS:-10}
+      DATA_ASSETS_RECOMPUTE_INTERVAL_SECONDS: ${DATA_ASSETS_RECOMPUTE_INTERVAL_SECONDS:-60}
+      DATA_ASSETS_RECOMPUTE_BATCH_LIMIT: ${DATA_ASSETS_RECOMPUTE_BATCH_LIMIT:-100}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: 5
+
+  scan-worker:
+    build:
+      context: ../backend
+    command: python -m app.services.scan_worker
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg://robot_qc:${POSTGRES_PASSWORD}@db:5432/robot_qc
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_SECURE: ${MINIO_SECURE:-false}
+      MINIO_REGION: ${MINIO_REGION:-}
+      MINIO_DEFAULT_BUCKET: ${MINIO_DEFAULT_BUCKET:-yaocao}
+      SCAN_WORKER_POLL_SECONDS: ${SCAN_WORKER_POLL_SECONDS:-2.0}
+      SCAN_WORKER_LEASE_SECONDS: ${SCAN_WORKER_LEASE_SECONDS:-90}
+      SCAN_WORKER_HEARTBEAT_SECONDS: ${SCAN_WORKER_HEARTBEAT_SECONDS:-10}
+      SCAN_SHARD_TIMEOUT_SECONDS: ${SCAN_SHARD_TIMEOUT_SECONDS:-600}
+      SCAN_MISSING_CONFIRMATION_SECONDS: ${SCAN_MISSING_CONFIRMATION_SECONDS:-600}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: 5
+
   frontend:
     build:
       context: ../frontend

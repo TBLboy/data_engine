@@ -9,6 +9,8 @@ from app.models.control_plane import (
     EpisodeObject,
     ListRecord,
     ScanJob,
+    ScanPrefixState,
+    ScanShard,
     TaskAssetRecomputeJob,
     TaskAssetRollup,
 )
@@ -47,6 +49,8 @@ __all__ = [
     'QcTask',
     'TaskOperationLog',
     'ScanJob',
+    'ScanPrefixState',
+    'ScanShard',
     'TaskType',
     'User',
 ]

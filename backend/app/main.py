@@ -35,7 +35,7 @@ async def _startup():
         start_scheduler()
     except Exception:
         import logging
-        logging.getLogger(__name__).exception('scan cron scheduler failed to start')
+        logging.getLogger(__name__).exception('asset recompute scheduler failed to start')
 
 
 @app.on_event('shutdown')

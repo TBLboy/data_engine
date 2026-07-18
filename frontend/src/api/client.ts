@@ -158,7 +158,9 @@ export interface DataAssetTaskQuery {
 
 export interface IngestScanRequest {
   bucket: string
-  scope: string
+  mode?: 'smart' | 'incremental' | 'full' | 'manual_prefix'
+  scope?: string
+  prefixes?: string[]
 }
 
 export interface TaskTypeCreateRequest {
@@ -384,6 +386,22 @@ export async function scanDatabase(payload: IngestScanRequest) {
   return request<IngestJob>('/database/scan', {
     method: 'POST',
     body: JSON.stringify(payload)
+  })
+}
+
+export async function fetchScanJob(jobId: string) {
+  return request<IngestJob>(`/database/scan/${encodeURIComponent(jobId)}`)
+}
+
+export async function cancelScanJob(jobId: string) {
+  return request<IngestJob>(`/database/scan/${encodeURIComponent(jobId)}/cancel`, {
+    method: 'POST'
+  })
+}
+
+export async function retryScanJob(jobId: string) {
+  return request<IngestJob>(`/database/scan/${encodeURIComponent(jobId)}/retry`, {
+    method: 'POST'
   })
 }
 

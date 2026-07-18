@@ -352,19 +352,30 @@ class IngestJobSchema(BaseModel):
     id: str
     bucket: str
     scope: str
+    mode: str = 'full'
     status: str
     progress: int
+    totalShards: int = 0
+    succeededShards: int = 0
+    runningShards: int = 0
+    failedShards: int = 0
+    skippedShards: int = 0
     confirmedLists: int
     totalEpisodes: int
     newEpisodes: int
     detail: str
+    errorSummary: str = ''
+    triggerSource: str = 'manual'
+    cancelRequestedAt: str | None = None
     startedAt: str
     finishedAt: str | None
 
 
 class IngestScanRequest(BaseModel):
     bucket: str
-    scope: str = 'full'
+    mode: str = 'smart'
+    scope: str | None = None
+    prefixes: list[str] | None = None
 
 
 class QcRevisionSchema(BaseModel):

@@ -273,9 +273,9 @@ export const reviewerWorkloads: ReviewerWorkload[] = [
 ]
 
 export const ingestJobs: IngestJob[] = [
-  { id: 'job_001', bucket: 'yaocao', scope: 'full', status: 'done', progress: 100, confirmedLists: 4, totalEpisodes: 64, newEpisodes: 64, detail: 'lists=4 episodes=64 new=64', startedAt: '2026-06-22 09:30', finishedAt: '2026-06-22 09:34' },
-  { id: 'job_002', bucket: 'yaocao', scope: 'full', status: 'scanning', progress: 0, confirmedLists: 0, totalEpisodes: 0, newEpisodes: 0, detail: '正在递归扫描对象前缀', startedAt: '2026-06-22 10:10', finishedAt: null },
-  { id: 'job_003', bucket: 'yaocao', scope: 'full', status: 'classifying', progress: 0, confirmedLists: 3, totalEpisodes: 58, newEpisodes: 12, detail: '正在匹配 list 与 episode 状态', startedAt: '2026-06-21 15:18', finishedAt: null }
+  { id: 'job_001', bucket: 'yaocao', scope: 'full', mode: 'full', status: 'done', progress: 100, totalShards: 4, succeededShards: 4, runningShards: 0, failedShards: 0, skippedShards: 0, confirmedLists: 4, totalEpisodes: 64, newEpisodes: 64, detail: 'lists=4 episodes=64 new=64', startedAt: '2026-06-22 09:30', finishedAt: '2026-06-22 09:34' },
+  { id: 'job_002', bucket: 'yaocao', scope: 'full', mode: 'smart', status: 'running', progress: 42, totalShards: 6, succeededShards: 2, runningShards: 3, failedShards: 0, skippedShards: 1, confirmedLists: 2, totalEpisodes: 0, newEpisodes: 0, detail: 'shards=6 succeeded=2 episodes=0 new=0', startedAt: '2026-06-22 10:10', finishedAt: null },
+  { id: 'job_003', bucket: 'yaocao', scope: 'full', mode: 'full', status: 'partially_failed', progress: 75, totalShards: 8, succeededShards: 6, runningShards: 0, failedShards: 2, skippedShards: 0, confirmedLists: 3, totalEpisodes: 58, newEpisodes: 12, detail: 'shards=8 succeeded=6 failed=2 episodes=58 new=12', errorSummary: 'shard timeout: list prefix_a\nconnection reset: list prefix_b', startedAt: '2026-06-21 15:18', finishedAt: '2026-06-21 16:00' }
 ]
 
 export const qcRevisions: QcRevision[] = [

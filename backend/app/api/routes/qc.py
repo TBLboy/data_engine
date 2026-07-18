@@ -101,7 +101,7 @@ from app.services.payloads import (
     task_type_detail_payload,
     unclassified_batch_payload,
 )
-from app.services.scan_queue import enqueue_scan_job
+from app.services.scan_queue import create_or_get_scan_job, request_cancel, retry_failed_shards
 
 router = APIRouter(prefix='/api', tags=['qc'])
 settings = get_settings()
@@ -1035,22 +1035,80 @@ def data_assets_rebuild_route(
     }
 
 
-def _expire_stale_scan_jobs(db: Session, *, bucket: str, stale_after: timedelta = timedelta(minutes=30)) -> None:
-    cutoff = _utcnow() - stale_after
-    stale_jobs = db.query(ScanJob).filter(
-        ScanJob.bucket == bucket,
-        ScanJob.status.in_(['scanning', 'classifying']),
-        ScanJob.finished_at.is_(None),
-        ScanJob.started_at < cutoff,
-    ).all()
-    if not stale_jobs:
-        return
-    now = _utcnow()
-    for job in stale_jobs:
-        job.status = 'failed'
-        job.error_detail = 'stale queued job'
-        job.finished_at = now
+VALID_SCAN_MODES = {'smart', 'incremental', 'full', 'manual_prefix'}
+
+
+def _normalize_scan_mode(mode: str | None, scope: str | None) -> tuple[str, str | None]:
+    if mode and mode not in VALID_SCAN_MODES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f'不支持的扫描模式: {mode}')
+    if scope and scope not in VALID_SCAN_MODES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f'不支持的 scope: {scope}')
+    if mode and scope and mode != scope:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='mode 与 scope 不一致')
+    effective = (mode or scope) if (mode or scope) else 'smart'
+    return effective, scope
+
+
+def _normalize_scan_prefixes(prefixes: list[str] | None, mode: str) -> list[str] | None:
+    if mode == 'manual_prefix':
+        if not prefixes:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='manual_prefix 必须提供 prefixes')
+        normalized = sorted({f'{p.strip("/")}/' for p in prefixes if p.strip('/')})
+        if not normalized:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='prefixes 不能为空')
+        for p in normalized:
+            if len(p) > 1024:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f'prefix 超过 1024 字符限制: {p}')
+        return normalized
+    if prefixes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f'{mode} 模式下不支持手动指定 prefixes')
+    return None
+
+
+@router.get('/database/scan/{job_id}', response_model=IngestJobSchema)
+def get_scan_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    job = db.query(ScanJob).filter(ScanJob.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='扫描任务不存在')
+    return serialize_ingest_job(job)
+
+
+@router.post('/database/scan/{job_id}/cancel', response_model=IngestJobSchema)
+def cancel_scan_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    job = request_cancel(db, job_id=job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='扫描任务不存在')
     db.commit()
+    db.refresh(job)
+    return serialize_ingest_job(job)
+
+
+@router.post('/database/scan/{job_id}/retry', response_model=IngestJobSchema)
+def retry_scan_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    require_roles(current_user, 'admin', 'qc_manager')
+    try:
+        job, count = retry_failed_shards(db, job_id=job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='扫描任务不存在')
+    db.commit()
+    db.refresh(job)
+    return serialize_ingest_job(job)
 
 
 @router.post('/database/scan', response_model=IngestJobSchema)
@@ -1064,35 +1122,24 @@ def scan_database(
     if not bucket:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='bucket 不能为空')
 
-    _expire_stale_scan_jobs(db, bucket=bucket)
+    mode, scope = _normalize_scan_mode(payload.mode, payload.scope)
+    prefixes = _normalize_scan_prefixes(payload.prefixes, mode)
 
-    existing_scan = db.query(ScanJob).filter(
-        ScanJob.bucket == bucket,
-        ScanJob.status.in_(['scanning', 'classifying']),
-    ).order_by(ScanJob.started_at.desc()).first()
-    if existing_scan:
-        return serialize_ingest_job(existing_scan)
+    try:
+        job, created = create_or_get_scan_job(
+            db,
+            bucket=bucket,
+            mode=mode,
+            triggered_by=current_user.id,
+            trigger_source='manual',
+            prefixes=prefixes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    scan_job = ScanJob(
-        id=f'queued_{int(datetime.utcnow().timestamp())}_{current_user.id}',
-        bucket=bucket,
-        scope=payload.scope,
-        status='scanning',
-        total_prefixes=0,
-        confirmed_lists=0,
-        total_episodes=0,
-        new_episodes=0,
-        triggered_by=current_user.id,
-        error_detail='queued',
-        started_at=datetime.utcnow(),
-        finished_at=None,
-    )
-    db.add(scan_job)
     db.commit()
-    db.refresh(scan_job)
-
-    enqueue_scan_job(scan_job.id, current_user.id)
-    return serialize_ingest_job(scan_job)
+    db.refresh(job)
+    return serialize_ingest_job(job)
 
 
 @router.get('/task-pool', response_model=TaskPoolPayloadSchema)
@@ -1373,6 +1420,7 @@ def telemetry_curve(episode_id: str, db: Session = Depends(get_db), current_user
         EpisodeObject.episode_inventory_id == inventory.id,
         EpisodeObject.object_scope == 'processed',
         EpisodeObject.object_role.in_(['telemetry_npz', 'metadata']),
+        EpisodeObject.source_status != 'missing',
     ).all()
     obj_map = {item.object_role: item.object_key for item in object_rows}
     telemetry_key = obj_map.get('telemetry_npz')
@@ -1451,6 +1499,8 @@ def _get_episode_inventory_object_or_404(db: Session, episode_id: str, object_id
     episode_object = db.query(EpisodeObject).filter(EpisodeObject.id == int(object_id)).first()
     if not episode_object:
         raise HTTPException(status_code=404, detail='Object not found')
+    if episode_object.source_status == 'missing':
+        raise HTTPException(status_code=404, detail='Object is no longer available')
     inventory = db.query(EpisodeInventory).filter(EpisodeInventory.id == episode_object.episode_inventory_id).first()
     if not inventory:
         raise HTTPException(status_code=404, detail='Episode inventory not found')
@@ -1553,8 +1603,11 @@ def apply_dispatch_plan(
     next_generation = batch.active_dispatch_generation + 1
     batch.active_dispatch_generation = next_generation
 
-    episodes = db.query(Episode).filter(Episode.batch_id == batch_id).order_by(Episode.id).all()
-    target_count = batch.episode_count if payload.dispatchMode == 'full' else max(1, round(batch.episode_count * batch.sampling_ratio / 100))
+    episodes = db.query(Episode).filter(
+        Episode.batch_id == batch_id,
+        Episode.is_active == True,
+    ).order_by(Episode.id).all()
+    target_count = len(episodes) if payload.dispatchMode == 'full' else max(1, round(len(episodes) * batch.sampling_ratio / 100))
 
     # 清理所有 episode 的上一轮 QC 痕迹，归零为干净数据
     for episode in episodes:
