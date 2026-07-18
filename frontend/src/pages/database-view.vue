@@ -3,11 +3,8 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
 import { fetchDataAssetBatches, fetchDataAssetSummary, fetchDataAssetTasks, fetchDatabase, rebuildDataAssets, scanDatabase, fetchScanJob, cancelScanJob, retryScanJob, type DatabasePayload } from '../api/client'
-import { useSessionStore } from '../stores/session'
 import type { BatchSummary, DataAssetBatchRow, DataAssetSummary, DataAssetTaskRow } from '../types/qc'
 import { reasonLabel } from '../utils/reasonLabels'
-
-const session = useSessionStore()
 
 const payload = ref<DatabasePayload | null>(null)
 const summary = ref<DataAssetSummary | null>(null)
@@ -60,8 +57,6 @@ const scanForm = reactive({
   mode: 'smart' as 'smart' | 'incremental' | 'full' | 'manual_prefix',
   prefixes: ''
 })
-
-const canScanDatabase = computed(() => ['admin', 'qc_manager'].includes(session.user?.role ?? 'viewer'))
 
 const formatError = (err: unknown, fallback: string) => {
   if (!(err instanceof Error)) return fallback
@@ -506,7 +501,7 @@ const frameCoverageText = computed(() => {
           <p>按 Episode、批次、任务三级资产视角查看采集数据规模、覆盖率、质检进度与最终可用性。</p>
         </div>
         <div class="toolbar-actions">
-          <el-button v-if="canScanDatabase" plain :loading="rebuilding" @click="rebuildAssets">重建资产画像</el-button>
+          <el-button plain :loading="rebuilding" @click="rebuildAssets">重建资产画像</el-button>
           <el-tag type="info" effect="light">{{ statisticsScopeLabel }}</el-tag>
         </div>
       </section>
@@ -550,7 +545,7 @@ const frameCoverageText = computed(() => {
       </section>
 
       <el-row :gutter="18">
-        <el-col v-if="canScanDatabase" :span="9">
+        <el-col :span="9">
           <el-card shadow="never" class="qc-card filter-card">
             <template #header>扫描 MinIO</template>
             <div class="filter-grid">
@@ -577,7 +572,7 @@ const frameCoverageText = computed(() => {
             </div>
           </el-card>
         </el-col>
-        <el-col :span="canScanDatabase ? 15 : 24">
+        <el-col :span="15">
           <el-card shadow="never" class="qc-card" v-loading="databaseLoading">
             <template #header>最近扫描任务</template>
             <el-table :data="ingestJobs" stripe class="qc-table" height="240">

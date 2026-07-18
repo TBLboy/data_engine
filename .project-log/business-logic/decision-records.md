@@ -1,4 +1,4 @@
-### 2026-07-18 — 数据标注模块 V1 业务逻辑固化
+### 2026-07-18 — 数据标注模块 V1 业务逻辑固化（历史初稿，已由最终收口覆盖冲突项）
 
 - Decision: 数据标注模块正式纳入平台 pipeline，按 TaskType 聚合数据（不引入标注批次），VLM 自动标注 + 人工标注双路径共享同一份标注结果模型，标注资格只读 `Episode.final_dataset_status = 'QUALIFIED'`，不与质检耦合。
 - Context: 平台已完成采集 → 扫描入库 → 质检 → 导出的 pipeline，缺失数据标注环节。已调研 LeRobot、Label Studio、RoboInter 三个开源方案（2026-07-14，`.project-log/标注工具调研.md`），决定自研标注模块（复用 Vue 3 + FastAPI 架构），由 VLM（Qwen3-VL-32B，已部署 Ollama）生成预标注，人工检查修改。
@@ -31,6 +31,25 @@
   5. **编辑锁 + 乐观锁**：`lock_owner` + 心跳续期（30s）防止多人同时编辑，`row_version` CAS 防止覆盖
   6. **VLM 三阶段抽帧**：均匀采样 + telemetry 事件检测（motion_score 局部峰值）+ 子任务边界局部密集抽帧细化，三路视频拼接为组合图
 - Full spec: `.project-log/business-logic/annotation-v1.md`
+
+### 2026-07-18 — 数据标注模块 V1 最终收口（稳定实施版本）
+
+- Decision: 标注 V1 不再保留未决实现边界。可用池固定为 `final_dataset_status = QUALIFIED` 加既有 `active_list_active_batch_indexed_episodes`；Episode 分组固定以 `Batch.task_type_id` 为准；VLM 采用独立持久化队列和单 GPU worker；标注统计采用持久化 TaskType rollup；训练集导出冻结 revision 快照。
+- Reason: 这些规则与项目已经冻结的 active scope、持久化 worker、资产 rollup、导出审计模式一致。它们避免了失效数据进入标注、单角色权限模型冲突、FastAPI 内存任务丢失、人工草稿被 AI 静默覆盖，以及重新编辑后训练集无法追溯的问题。
+- Implementation detail:
+  - `annotation_tasks` 保存 work_status、资格失效前状态、锁、任务归属和完成者；generation 生命周期从 task 移到 `annotation_generation_jobs`。
+  - 草稿 `episode_annotations` 允许内容不完整；完成时才执行严格校验并创建不可变 `annotation_revisions`。
+  - V1 不新增 `annotator` 单角色，既有 reviewer 具有本人标注编辑/完成权限，manager/admin 管理任务和导出。
+  - 新增 `task_annotation_rollups` / `annotation_recompute_jobs` 和 `dataset_export_items`，分别承载首页统计与导出 revision 快照。
+  - 初始 VLM 标注可自动写入空白草稿；所有重生成结果必须先展示候选差异，再由用户显式应用。
+- Full spec: `.project-log/business-logic/annotation-v1-final-decisions.md`
+
+### 2026-07-18 — VLM 初始标注改为后台流水线默认触发
+
+- Decision: 新合格 Episode 不再等待 reviewer 逐条点击“自动标注”。后台按固定周期扫描满足资格且尚无初始 generation job 的 Episode，默认在北京时间午夜后的低峰窗口按 TaskType 批量创建初始 VLM job。`admin` / `qc_manager` 可按 TaskType、Batch 或筛选范围手动批量启动、补漏、失败重试和重跑；reviewer 仅可对本人工作池批量补漏，不承担逐条启动职责。
+- Reason: 自动标注的价值是把人工工作从“等待模型生成”转为“审核和微调”。逐 Episode 手动触发会把流水线责任转嫁给标注员，增加等待成本并降低 GPU 利用效率。
+- Constraints: 后台扫描必须幂等；同一 Episode 已存在 annotation task 或 active/succeeded 初始 job 时不得重复创建。夜间调度、手动批量触发和 reviewer 补漏都必须进入同一个持久化 generation queue，不能绕过 worker 直接调用 VLM。初始成功结果可写入空白草稿，已有草稿或完成任务的重生成只能产生候选，须人工显式应用。
+- Full spec: `.project-log/business-logic/annotation-v1-final-decisions.md` §5.2
 
 ### 2026-07-16 — 任务级数据资产画像长期路线：Route T2（收敛实现）
 
@@ -352,6 +371,39 @@
 - Verification target: 详见 `docs/scan-architecture-final-plan-v3.md` 第 13 节
 - Reference: `docs/scan-architecture-final-plan-v3.md`
 - Impacted nodes: F, D
+
+### 2026-07-18 — MinIO 扫描入库 v3 实施验证完成
+
+- Type: verification
+- Status: validated (deployed, real MinIO end-to-end, browser E2E)
+- Decision: 扫描 v3 核心实现已完成离线测试、生产无缓存部署、真实 MinIO 扫描、在线迁移验证和浏览器端到端测试，确认核心功能按预期工作。
+- Verification scope:
+  - **离线测试**：`test_data_assets.py` 11 项通过，compileall 无错，SQLite/PostgreSQL 双数据库 Alembic 迁移兼容。
+  - **Docker 无缓存重建**：backend、frontend、scan-coordinator、scan-worker 四镜像重建并强制重启。
+  - **在线迁移**：`20260716_0025 → 20260717_0026` PostgreSQL 在线升级成功。
+  - **真实 MinIO 扫描**：
+    - namespace discovery 展开。
+    - manual-prefix scan 成功终态（succeeded/succeeded_shards=1）。
+    - 失败 shard 重试（`scan_scheduled_smart_yaocao_20260718` 修复并继续）。
+    - pending/running/retry_wait shard 取消保护（`scan_7e652bfb*` 等 3 个 job，共 115 个 shard cancelled）。
+    - 取消后已成功 shard 不回滚，不发布错误结果。
+    - 数据一致性：59 lists / 5,987 inventory / 2,909,780 objects，重复扫描无重复。
+  - **浏览器 E2E**：认证→页面挂载→模式切换→prefix 填写→创建扫描→轮询→终态→取消→cancelled 确认，0 console error/warning。
+  - **API**：session、scan 创建/详情/取消/retry，/health。
+  - **平台清理**：active job = 0，非终态 shard = 0，无残留 worker。
+- Known limitations:
+  - 未等待整桶大规模 full scan 自然完成（仅验证了 discovery、分片、部分处理、retry、cancel）。
+  - 取消竞态日志中存在 `RuntimeError: scan cancellation was requested before publication`，为发布前取消保护的预期路径，数据正确，可后续优化为 warning。
+  - 未开展多 worker 高并发压力测试。
+  - Ollama 服务未运行，仅验证了 AI explain fallback。
+- Outcome: 2026-07-18 13:02 完成所有服务无缓存重建和 Compose 强制重启，当前平台就绪，待用户手动测试。
+
+### 2026-07-18 — 数据总库扫描操作权限收口
+
+- Decision: 数据总库页面本身仅允许 `admin` 与 `qc_manager` 访问，因此扫描卡片、`full` 模式、取消和失败重试不再在页面内做第二层角色隐藏；页面访问路由与后端扫描 API 的同一角色校验是唯一权限边界。
+- Reason: 页面内再次按相同角色条件判断没有增加安全性，反而容易造成“高级功能仅对另一类页面用户显示”的错误产品语义。能进入数据总库的用户都应直接看到完整的扫描操作。
+- Implementation detail: 移除 `database-view.vue` 的 `canScanDatabase` 条件渲染；保留 `/database` 路由及 `POST /api/database/scan*` 的 `admin/qc_manager` 授权校验。
+- Status: implemented; frontend verification pending
 
 ### 2026-07-16 — MinIO 扫描入库架构升级：分层并行扫描 v2（已被 v3 替代）
 
