@@ -25,17 +25,17 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.execute(
         """
-        UPDATE task_types t SET
+        UPDATE task_types SET
           total_batches = (
             SELECT count(*) FROM batches b
             JOIN lists l ON b.id = 'batch_' || substr(l.id, 6)
-            WHERE l.is_active AND b.is_active AND b.task_type_id = t.id
+            WHERE l.is_active AND b.is_active AND b.task_type_id = task_types.id
           ),
           total_episodes = (
             SELECT count(*) FROM episodes e
             JOIN batches b ON e.batch_id = b.id
             JOIN lists l ON b.id = 'batch_' || substr(l.id, 6)
-            WHERE l.is_active AND b.is_active AND b.task_type_id = t.id
+            WHERE l.is_active AND b.is_active AND b.task_type_id = task_types.id
           )
         """
     )

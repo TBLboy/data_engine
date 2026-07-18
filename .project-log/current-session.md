@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-- 2026-07-18 CST（扫描入库 v3 API/前端集成）
+- 2026-07-18 CST（扫描入库 v3 离线审查与阻断性 BUG 修复）
 
 ## Current Objective
 
@@ -11,6 +11,14 @@
 ## Current Status
 
 ### 已完成
+
+#### 本轮离线审查与修复（2026-07-18）
+- 修复 `business_resolver`：确认缺失后的 raw/processed 恢复会重新置回存在；空 List/缺失 Episode 会同步确认选择性 `EpisodeObject` 缺失；未变化 fingerprint 保留 `qc_ready`。
+- 修复 `data_assets`：任务级资产重算等待子批次时退出当前循环，避免同一 pending job 无限重试阻塞 coordinator。
+- 修复 `scan_queue`/`scan_worker`：取消请求在 shard 完成、失败重试和业务发布前均有二次检查，不会在取消后提交成功结果。
+- 修复 `scan_coordinator`：full 调度先于 smart 调度，避免周日同桶 active job 去重导致 weekly full 被吞掉。
+- 切断应用内旧 `scanner.run_minio_scan` 定时入口，v3 coordinator 成为唯一调度扫描实现；Compose 中 coordinator/worker 等待 backend healthy，确保 backend 启动迁移先完成。
+- 新增资产重算死循环回归测试。
 
 #### 后端核心服务实现（本轮之前）
 - 迁移 `20260717_0026`：scan_mode、priority、active_key、shard 计数器、heartbeat、cancel、created_at/updated_at 追加；新增 `scan_shards`、`scan_prefix_states`；`lists/episode_inventory/episode_objects` source_status/missing 证据列；`episode_inventory` raw/processed 独立状态；`Episode.is_active`；batch/task recompute `rerun_requested`
@@ -61,6 +69,7 @@
 - `frontend` Docker 构建走 COPY dist 模式，要求本地 `npm run build` 后 Docker build 才会拿到新代码
 - 前端 JS 哈希每次构建变化，用户浏览器需要 Ctrl+Shift+R 硬刷新
 - 当前外网环境无 PostgreSQL/MinIO，无法运行 coordinator/worker 或执行 SQLite 之外的 ORM 测试
+- PostgreSQL `alembic --sql` 无法离线生成全量脚本：历史迁移 `20260623_0003`/后续条件迁移调用 `inspect(bind)`，Alembic mock connection 不支持 inspection；真实在线 PostgreSQL 迁移仍未验收。
 
 ## Problems And Resolutions
 
@@ -75,9 +84,6 @@
 
 ## Next Steps
 
-- 补写 SQLite 离线单元测试（queue state machine、coordinator expansion、worker publish、serializer）
-- 更新 `AGENTS.md` 记录 v3 已落地状态
-- 更新 `docs/scan-architecture-final-plan-v3.md` 或 `decision-records.md` 记录 API 集成完成
 - 生产内网 PostgreSQL/MinIO 验收：
   - 迁移 `20260717_0026` 执行
   - coordinator + worker 容器部署和健康检查

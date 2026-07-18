@@ -15,6 +15,9 @@ branch_labels = None
 depends_on = None
 
 
+SCAN_ID = sa.BigInteger().with_variant(sa.Integer(), 'sqlite')
+
+
 def _source_columns(table_name: str) -> None:
     op.add_column(table_name, sa.Column('source_status', sa.String(length=32), nullable=False, server_default='present'))
     op.add_column(table_name, sa.Column('missing_streak', sa.Integer(), nullable=False, server_default='0'))
@@ -22,21 +25,23 @@ def _source_columns(table_name: str) -> None:
     op.add_column(table_name, sa.Column('first_missing_at', sa.DateTime(timezone=False), nullable=True))
     op.add_column(table_name, sa.Column('last_missing_at', sa.DateTime(timezone=False), nullable=True))
     op.add_column(table_name, sa.Column('last_confirmed_present_at', sa.DateTime(timezone=False), nullable=True))
+    with op.batch_alter_table(table_name) as batch_op:
+        batch_op.create_foreign_key(
+            f'fk_{table_name}_missing_evidence_shard', 'scan_shards',
+            ['missing_evidence_shard_id'], ['id'],
+        )
     op.create_index(op.f(f'ix_{table_name}_source_status'), table_name, ['source_status'], unique=False)
-    op.create_foreign_key(
-        f'fk_{table_name}_missing_evidence_shard', table_name, 'scan_shards',
-        ['missing_evidence_shard_id'], ['id'],
-    )
 
 
 def _drop_source_columns(table_name: str) -> None:
-    op.drop_constraint(f'fk_{table_name}_missing_evidence_shard', table_name, type_='foreignkey')
     op.drop_index(op.f(f'ix_{table_name}_source_status'), table_name=table_name)
-    for name in (
-        'last_confirmed_present_at', 'last_missing_at', 'first_missing_at',
-        'missing_evidence_shard_id', 'missing_streak', 'source_status',
-    ):
-        op.drop_column(table_name, name)
+    with op.batch_alter_table(table_name) as batch_op:
+        batch_op.drop_constraint(f'fk_{table_name}_missing_evidence_shard', type_='foreignkey')
+        for name in (
+            'last_confirmed_present_at', 'last_missing_at', 'first_missing_at',
+            'missing_evidence_shard_id', 'missing_streak', 'source_status',
+        ):
+            batch_op.drop_column(name)
 
 
 def upgrade() -> None:
@@ -52,13 +57,13 @@ def upgrade() -> None:
     op.add_column('scan_jobs', sa.Column('created_at', sa.DateTime(timezone=False), nullable=False, server_default=sa.func.now()))
     op.add_column('scan_jobs', sa.Column('updated_at', sa.DateTime(timezone=False), nullable=False, server_default=sa.func.now()))
     op.create_index(op.f('ix_scan_jobs_scan_mode'), 'scan_jobs', ['scan_mode'], unique=False)
-    op.create_unique_constraint('uq_scan_jobs_active_key', 'scan_jobs', ['active_key'])
+    op.create_index('uq_scan_jobs_active_key', 'scan_jobs', ['active_key'], unique=True)
 
     op.create_table(
         'scan_shards',
-        sa.Column('id', sa.BIGINT(), autoincrement=True, nullable=False),
+        sa.Column('id', SCAN_ID, autoincrement=True, nullable=False),
         sa.Column('scan_job_id', sa.String(length=64), nullable=False),
-        sa.Column('parent_shard_id', sa.BIGINT(), nullable=True),
+        sa.Column('parent_shard_id', SCAN_ID, nullable=True),
         sa.Column('shard_key', sa.String(length=1200), nullable=False),
         sa.Column('shard_type', sa.String(length=32), nullable=False),
         sa.Column('bucket', sa.String(length=128), nullable=False),
@@ -97,7 +102,7 @@ def upgrade() -> None:
 
     op.create_table(
         'scan_prefix_states',
-        sa.Column('id', sa.BIGINT(), autoincrement=True, nullable=False),
+        sa.Column('id', SCAN_ID, autoincrement=True, nullable=False),
         sa.Column('bucket', sa.String(length=128), nullable=False),
         sa.Column('prefix', sa.String(length=1024), nullable=False),
         sa.Column('list_id', sa.String(length=64), nullable=True),
@@ -134,14 +139,15 @@ def upgrade() -> None:
     op.add_column('episode_inventory', sa.Column('processed_first_missing_at', sa.DateTime(timezone=False), nullable=True))
     op.add_column('episode_inventory', sa.Column('raw_last_missing_at', sa.DateTime(timezone=False), nullable=True))
     op.add_column('episode_inventory', sa.Column('processed_last_missing_at', sa.DateTime(timezone=False), nullable=True))
-    op.create_foreign_key(
-        'fk_episode_inventory_raw_missing_evidence_shard', 'episode_inventory', 'scan_shards',
-        ['raw_missing_evidence_shard_id'], ['id'],
-    )
-    op.create_foreign_key(
-        'fk_episode_inventory_processed_missing_evidence_shard', 'episode_inventory', 'scan_shards',
-        ['processed_missing_evidence_shard_id'], ['id'],
-    )
+    with op.batch_alter_table('episode_inventory') as batch_op:
+        batch_op.create_foreign_key(
+            'fk_episode_inventory_raw_missing_evidence_shard', 'scan_shards',
+            ['raw_missing_evidence_shard_id'], ['id'],
+        )
+        batch_op.create_foreign_key(
+            'fk_episode_inventory_processed_missing_evidence_shard', 'scan_shards',
+            ['processed_missing_evidence_shard_id'], ['id'],
+        )
     for name in ('raw_object_count', 'processed_object_count', 'raw_total_size_bytes', 'processed_total_size_bytes'):
         op.add_column('episode_inventory', sa.Column(name, sa.BIGINT(), nullable=False, server_default='0'))
     op.add_column('episode_inventory', sa.Column('raw_content_fingerprint', sa.String(length=64), nullable=False, server_default=''))
@@ -162,18 +168,19 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_episodes_is_active'), table_name='episodes')
     op.drop_column('episodes', 'is_active')
 
-    op.drop_constraint('fk_episode_inventory_processed_missing_evidence_shard', 'episode_inventory', type_='foreignkey')
-    op.drop_constraint('fk_episode_inventory_raw_missing_evidence_shard', 'episode_inventory', type_='foreignkey')
-    for name in (
-        'latest_object_modified_at', 'processed_content_fingerprint', 'raw_content_fingerprint',
-        'processed_total_size_bytes', 'raw_total_size_bytes', 'processed_object_count', 'raw_object_count',
-        'processed_last_missing_at', 'raw_last_missing_at',
-        'processed_first_missing_at', 'raw_first_missing_at',
-        'processed_missing_evidence_shard_id', 'raw_missing_evidence_shard_id',
-        'processed_missing_streak', 'raw_missing_streak', 'processed_source_status', 'raw_source_status',
-        'max_observed_state',
-    ):
-        op.drop_column('episode_inventory', name)
+    with op.batch_alter_table('episode_inventory') as batch_op:
+        batch_op.drop_constraint('fk_episode_inventory_processed_missing_evidence_shard', type_='foreignkey')
+        batch_op.drop_constraint('fk_episode_inventory_raw_missing_evidence_shard', type_='foreignkey')
+        for name in (
+            'latest_object_modified_at', 'processed_content_fingerprint', 'raw_content_fingerprint',
+            'processed_total_size_bytes', 'raw_total_size_bytes', 'processed_object_count', 'raw_object_count',
+            'processed_last_missing_at', 'raw_last_missing_at',
+            'processed_first_missing_at', 'raw_first_missing_at',
+            'processed_missing_evidence_shard_id', 'raw_missing_evidence_shard_id',
+            'processed_missing_streak', 'raw_missing_streak', 'processed_source_status', 'raw_source_status',
+            'max_observed_state',
+        ):
+            batch_op.drop_column(name)
     _drop_source_columns('episode_objects')
     _drop_source_columns('episode_inventory')
     _drop_source_columns('lists')
@@ -187,7 +194,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_scan_shards_scan_job_id'), table_name='scan_shards')
     op.drop_table('scan_shards')
 
-    op.drop_constraint('uq_scan_jobs_active_key', 'scan_jobs', type_='unique')
+    op.drop_index('uq_scan_jobs_active_key', table_name='scan_jobs')
     op.drop_index(op.f('ix_scan_jobs_scan_mode'), table_name='scan_jobs')
     for name in (
         'updated_at', 'created_at', 'error_summary', 'cancel_requested_at', 'heartbeat_at',

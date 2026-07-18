@@ -30,5 +30,6 @@ def downgrade() -> None:
         'task_types',
         sa.Column('total_episodes', sa.Integer(), nullable=False, server_default='0'),
     )
-    op.alter_column('task_types', 'total_batches', server_default=None)
-    op.alter_column('task_types', 'total_episodes', server_default=None)
+    with op.batch_alter_table('task_types') as batch_op:
+        batch_op.alter_column('total_batches', server_default=None)
+        batch_op.alter_column('total_episodes', server_default=None)

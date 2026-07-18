@@ -546,9 +546,10 @@ def process_pending_task_recompute_jobs(db: Session, *, limit: int = 100) -> int
                 continue
             result = recompute_task_asset_rollup(db, task_type_id)
             if result is None and _task_has_pending_child_batch_jobs(db, task_type_id):
-                # Keep pending and continue; do not count as processed success.
+                # Leave it pending for a later coordinator tick. Retrying the
+                # same row in this loop can spin forever while a child fails.
                 db.commit()
-                continue
+                break
             processed += 1
         except Exception as exc:
             db.rollback()

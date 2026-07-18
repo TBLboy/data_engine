@@ -573,6 +573,30 @@ class DataAssetsServiceTests(unittest.TestCase):
             self.assertEqual(job.status, 'pending')
             self.assertEqual(job.last_error, 'waiting_for_child_batch_jobs')
 
+    def test_process_pending_task_jobs_does_not_spin_on_pending_child(self) -> None:
+        with self.SessionLocal() as db:
+            recompute_batch_asset_rollup(db, 'batch_active_ready')
+            db.add(
+                BatchAssetRecomputeJob(
+                    batch_id='batch_active_ready',
+                    reason='manual_rebuild',
+                    requested_at=datetime(2026, 7, 16, 10, 0, 0),
+                    status='running',
+                    attempts=1,
+                    last_error='',
+                    last_started_at=datetime(2026, 7, 16, 10, 0, 0),
+                    last_finished_at=None,
+                )
+            )
+            enqueue_task_asset_recompute(db, 'task_type_1', reason='child_batch_refreshed')
+            db.commit()
+
+            processed = process_pending_recompute_jobs(db, limit=20)
+
+            self.assertEqual(processed, 0)
+            job = db.query(TaskAssetRecomputeJob).filter(TaskAssetRecomputeJob.task_type_id == 'task_type_1').one()
+            self.assertEqual(job.status, 'pending')
+
     def test_batch_recompute_enqueues_parent_task_job(self) -> None:
         with self.SessionLocal() as db:
             recompute_batch_asset_rollup(db, 'batch_active_ready')

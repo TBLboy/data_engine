@@ -245,6 +245,16 @@ def complete_shard(
     new_episodes: int = 0,
 ) -> bool:
     now = _utcnow()
+    cancelled = db.query(ScanJob.id).join(
+        ScanShard, ScanShard.scan_job_id == ScanJob.id
+    ).filter(
+        ScanShard.id == shard_id,
+        ScanShard.status == 'running',
+        ScanShard.lease_owner == worker_id,
+        ScanJob.cancel_requested_at.is_not(None),
+    ).first()
+    if cancelled is not None:
+        return False
     result = db.execute(
         update(ScanShard).where(
             ScanShard.id == shard_id,
@@ -304,12 +314,17 @@ def fail_shard(
     if shard is None:
         return None
     now = _utcnow()
+    job_cancelled = db.query(ScanJob.cancel_requested_at).filter(ScanJob.id == shard.scan_job_id).scalar() is not None
     shard.error_detail = error[:4000]
     shard.lease_owner = ''
     shard.lease_expires_at = None
     shard.heartbeat_at = now
     shard.updated_at = now
-    if shard.attempt < shard.max_attempts:
+    if job_cancelled:
+        shard.status = 'cancelled'
+        shard.next_retry_at = None
+        shard.finished_at = now
+    elif shard.attempt < shard.max_attempts:
         delay = RETRY_DELAYS_SECONDS[min(shard.attempt - 1, len(RETRY_DELAYS_SECONDS) - 1)]
         jitter = int(hashlib.sha1(f'{shard.id}:{shard.attempt}'.encode()).hexdigest()[:2], 16) % 11
         shard.status = 'retry_wait'

@@ -19,7 +19,8 @@ depends_on = None
 def upgrade() -> None:
     op.add_column('batches', sa.Column('list_id', sa.String(length=64), nullable=True))
     op.create_index(op.f('ix_batches_list_id'), 'batches', ['list_id'], unique=False)
-    op.create_foreign_key('fk_batches_list_id_lists', 'batches', 'lists', ['list_id'], ['id'])
+    with op.batch_alter_table('batches') as batch_op:
+        batch_op.create_foreign_key('fk_batches_list_id_lists', 'lists', ['list_id'], ['id'])
 
     op.create_table(
         'batch_asset_rollups',
@@ -63,11 +64,18 @@ def upgrade() -> None:
 
     op.execute(
         """
-        UPDATE batches AS b
-        SET list_id = l.id
-        FROM lists AS l
-        WHERE b.list_id IS NULL
-          AND b.id = ('batch_' || substr(l.id, 6))
+        UPDATE batches
+        SET list_id = (
+            SELECT l.id
+            FROM lists AS l
+            WHERE batches.id = ('batch_' || substr(l.id, 6))
+        )
+        WHERE list_id IS NULL
+          AND EXISTS (
+            SELECT 1
+            FROM lists AS l
+            WHERE batches.id = ('batch_' || substr(l.id, 6))
+          )
         """
     )
 
@@ -76,6 +84,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_batch_asset_recompute_jobs_status'), table_name='batch_asset_recompute_jobs')
     op.drop_table('batch_asset_recompute_jobs')
     op.drop_table('batch_asset_rollups')
-    op.drop_constraint('fk_batches_list_id_lists', 'batches', type_='foreignkey')
+    with op.batch_alter_table('batches') as batch_op:
+        batch_op.drop_constraint('fk_batches_list_id_lists', type_='foreignkey')
     op.drop_index(op.f('ix_batches_list_id'), table_name='batches')
     op.drop_column('batches', 'list_id')

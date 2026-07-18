@@ -47,18 +47,6 @@ def ensure_scheduled_jobs(db: Session, *, now: datetime | None = None) -> int:
     local_now = (now or datetime.now(ZoneInfo(settings.app_timezone))).astimezone(ZoneInfo(settings.app_timezone))
     created = 0
     daily_due = (local_now.hour, local_now.minute) >= (settings.scan_cron_hour, settings.scan_cron_minute)
-    if daily_due:
-        job, was_created = create_or_get_scan_job(
-            db,
-            bucket=settings.minio_default_bucket,
-            mode='smart',
-            triggered_by='system',
-            trigger_source='scheduled',
-            job_id=_scheduled_job_id('smart', settings.minio_default_bucket, local_now),
-        )
-        del job
-        created += int(was_created)
-
     day_map = {'mon': 0, 'tue': 1, 'wed': 2, 'thu': 3, 'fri': 4, 'sat': 5, 'sun': 6}
     full_day = day_map.get(settings.scan_full_cron_day_of_week.lower(), 6)
     full_due = local_now.weekday() == full_day and (
@@ -74,6 +62,17 @@ def ensure_scheduled_jobs(db: Session, *, now: datetime | None = None) -> int:
             trigger_source='scheduled',
             priority=90,
             job_id=_scheduled_job_id('full', settings.minio_default_bucket, local_now),
+        )
+        del job
+        created += int(was_created)
+    if daily_due:
+        job, was_created = create_or_get_scan_job(
+            db,
+            bucket=settings.minio_default_bucket,
+            mode='smart',
+            triggered_by='system',
+            trigger_source='scheduled',
+            job_id=_scheduled_job_id('smart', settings.minio_default_bucket, local_now),
         )
         del job
         created += int(was_created)

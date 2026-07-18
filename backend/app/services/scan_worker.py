@@ -12,7 +12,11 @@ from datetime import datetime, timedelta
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.models import DiscoveredPrefix, EpisodeInventory, ListRecord, ScanJob, ScanShard, User
-from app.services.business_resolver import mark_list_not_found, resolve_list_snapshot
+from app.services.business_resolver import (
+    mark_list_episodes_not_found,
+    mark_list_not_found,
+    resolve_list_snapshot,
+)
 from app.services.list_snapshot import build_list_snapshot
 from app.services.minio_client import get_minio_service
 from app.services.namespace_discovery import discover_namespaces
@@ -43,6 +47,9 @@ def _lock_owned_shard(db, *, shard_id: int, worker_id: str) -> ScanShard:
     ).with_for_update().first()
     if shard is None or shard.lease_expires_at is None or shard.lease_expires_at <= _utcnow():
         raise RuntimeError('shard lease was lost before publication')
+    job = db.query(ScanJob).filter(ScanJob.id == shard.scan_job_id).with_for_update().first()
+    if job is None or job.cancel_requested_at is not None:
+        raise RuntimeError('scan cancellation was requested before publication')
     return shard
 
 
@@ -131,8 +138,14 @@ def _publish_list(shard_id: int, worker_id: str, snapshot) -> None:
                     shard_id=shard.id,
                     confirmation_seconds=settings.scan_missing_confirmation_seconds,
                 )
+                needs_episode_confirmation = mark_list_episodes_not_found(
+                    db,
+                    list_id=existing_list.id,
+                    shard_id=shard.id,
+                    confirmation_seconds=settings.scan_missing_confirmation_seconds,
+                )
                 db.flush()
-                if existing_list.source_status == 'suspect_missing':
+                if existing_list.source_status == 'suspect_missing' or needs_episode_confirmation:
                     add_scan_shard(
                         db,
                         job=job,

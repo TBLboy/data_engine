@@ -15,8 +15,10 @@ depends_on = None
 
 
 def upgrade():
-    op.execute('ALTER TABLE audit_events ALTER COLUMN id TYPE VARCHAR(128)')
+    with op.batch_alter_table('audit_events') as batch_op:
+        batch_op.alter_column('id', type_=sa.String(length=128))
 
 
 def downgrade():
-    op.execute('ALTER TABLE audit_events ALTER COLUMN id TYPE VARCHAR(64)')
+    with op.batch_alter_table('audit_events') as batch_op:
+        batch_op.alter_column('id', type_=sa.String(length=64))

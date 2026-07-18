@@ -53,6 +53,8 @@ services:
       DATA_ASSETS_RECOMPUTE_INTERVAL_SECONDS: ${DATA_ASSETS_RECOMPUTE_INTERVAL_SECONDS:-60}
       DATA_ASSETS_RECOMPUTE_BATCH_LIMIT: ${DATA_ASSETS_RECOMPUTE_BATCH_LIMIT:-100}
     depends_on:
+      backend:
+        condition: service_healthy
       db:
         condition: service_healthy
     restart: unless-stopped
@@ -81,6 +83,8 @@ services:
       SCAN_SHARD_TIMEOUT_SECONDS: ${SCAN_SHARD_TIMEOUT_SECONDS:-600}
       SCAN_MISSING_CONFIRMATION_SECONDS: ${SCAN_MISSING_CONFIRMATION_SECONDS:-600}
     depends_on:
+      backend:
+        condition: service_healthy
       db:
         condition: service_healthy
     restart: unless-stopped

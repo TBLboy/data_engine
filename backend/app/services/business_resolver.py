@@ -107,7 +107,9 @@ def _derive_state(*, raw_exists: bool, processed_exists: bool, roles: set[str], 
         has_rgb = any(isinstance(value, dict) and value.get('video') for value in cameras.values())
     else:
         has_rgb = 'camera_rgb_video' in roles
-    if processed_exists and manifest is not None and {'manifest', 'metadata', 'telemetry_npz'} <= roles and has_rgb:
+    # Unchanged episodes intentionally skip manifest reads. Persisted selective
+    # roles still provide enough evidence to preserve the current readiness.
+    if processed_exists and {'manifest', 'metadata', 'telemetry_npz'} <= roles and has_rgb:
         return 'qc_ready'
     if processed_exists:
         return 'processable'
@@ -132,6 +134,22 @@ def _advance_missing(record, *, shard_id: int, now: datetime, confirmation_secon
             record.missing_evidence_shard_id = shard_id
             return True
     return False
+
+
+def _confirm_missing(record, *, shard_id: int, now: datetime) -> bool:
+    """Mark a child object missing once its owning episode is confirmed absent."""
+    if record.source_status == 'missing':
+        return False
+    if record.source_status == 'present':
+        record.missing_streak = 1
+        record.first_missing_at = now
+    else:
+        record.missing_streak += 1
+        record.first_missing_at = record.first_missing_at or now
+    record.source_status = 'missing'
+    record.last_missing_at = now
+    record.missing_evidence_shard_id = shard_id
+    return True
 
 
 def _observe_scope(
@@ -226,6 +244,60 @@ def mark_list_not_found(
         record.is_active = False
         record.updated_at = timestamp
     return became_missing
+
+
+def mark_list_episodes_not_found(
+    db: Session,
+    *,
+    list_id: str,
+    shard_id: int,
+    confirmation_seconds: int,
+    now: datetime | None = None,
+) -> bool:
+    """Advance episode absence when a successful full List scan is empty."""
+    timestamp = now or _utcnow()
+    needs_confirmation = False
+    inventories = db.query(EpisodeInventory).filter(EpisodeInventory.list_id == list_id).all()
+    touched_batch_ids: set[str] = set()
+    for inventory in inventories:
+        became_missing = _advance_missing(
+            inventory,
+            shard_id=shard_id,
+            now=timestamp,
+            confirmation_seconds=confirmation_seconds,
+        )
+        if inventory.source_status == 'suspect_missing':
+            needs_confirmation = True
+        if not became_missing:
+            for episode_object in inventory.objects:
+                _advance_missing(
+                    episode_object,
+                    shard_id=shard_id,
+                    now=timestamp,
+                    confirmation_seconds=confirmation_seconds,
+                )
+            continue
+        inventory.raw_source_status = 'missing'
+        inventory.processed_source_status = 'missing'
+        inventory.raw_exists = False
+        inventory.processed_exists = False
+        inventory.state = 'ingestable'
+        inventory.state_changed_at = timestamp
+        for episode_object in inventory.objects:
+            _confirm_missing(
+                episode_object,
+                shard_id=shard_id,
+                now=timestamp,
+            )
+        if inventory.ingested_episode_id:
+            episode = db.query(Episode).filter(Episode.id == inventory.ingested_episode_id).first()
+            if episode is not None:
+                episode.is_active = False
+                episode.updated_at = timestamp
+                touched_batch_ids.add(episode.batch_id)
+    for batch_id in touched_batch_ids:
+        enqueue_batch_asset_recompute(db, batch_id, reason='list_scope_changed')
+    return needs_confirmation
 
 
 def resolve_list_snapshot(
@@ -388,7 +460,7 @@ def resolve_list_snapshot(
         inventory.processed_prefix = episode_snapshot.processed_prefix
         raw_observed = bool(episode_snapshot.raw_prefix)
         processed_observed = bool(episode_snapshot.processed_prefix)
-        _observe_scope(
+        raw_recovered, raw_missing = _observe_scope(
             inventory,
             scope='raw',
             observed=raw_observed,
@@ -397,7 +469,7 @@ def resolve_list_snapshot(
             confirmation_seconds=missing_confirmation_seconds,
             is_new=is_new,
         )
-        _observe_scope(
+        processed_recovered, processed_missing = _observe_scope(
             inventory,
             scope='processed',
             observed=processed_observed,
@@ -406,8 +478,16 @@ def resolve_list_snapshot(
             confirmation_seconds=missing_confirmation_seconds,
             is_new=is_new,
         )
-        inventory.raw_exists = inventory.raw_source_status != 'missing'
-        inventory.processed_exists = inventory.processed_source_status != 'missing'
+        if raw_recovered or processed_recovered or raw_missing or processed_missing:
+            changed = True
+        if inventory.raw_source_status == 'suspect_missing' or inventory.processed_source_status == 'suspect_missing':
+            result.needs_missing_confirmation = True
+        # Keep source booleans true during the first suspect scan so a single
+        # incomplete observation does not downgrade readiness. A confirmed
+        # missing source is the only state that clears the booleans; using the
+        # current observation also restores them after a confirmed recovery.
+        inventory.raw_exists = raw_observed or inventory.raw_source_status != 'missing'
+        inventory.processed_exists = processed_observed or inventory.processed_source_status != 'missing'
         inventory.raw_object_count = episode_snapshot.raw_object_count
         inventory.processed_object_count = episode_snapshot.processed_object_count
         inventory.raw_total_size_bytes = episode_snapshot.raw_total_size_bytes
@@ -464,6 +544,8 @@ def resolve_list_snapshot(
                 confirmation_seconds=missing_confirmation_seconds,
             ):
                 changed = True
+            if episode_object.source_status == 'suspect_missing':
+                result.needs_missing_confirmation = True
 
         inventory.manifest_hash = manifest_hash
         inventory.metadata_hash = metadata_hash
@@ -547,6 +629,12 @@ def resolve_list_snapshot(
             inventory.processed_exists = False
             inventory.state = 'ingestable'
             inventory.state_changed_at = timestamp
+            for episode_object in inventory.objects:
+                _confirm_missing(
+                    episode_object,
+                    shard_id=shard_id,
+                    now=timestamp,
+                )
             if inventory.ingested_episode_id:
                 episode = db.query(Episode).filter(Episode.id == inventory.ingested_episode_id).first()
                 if episode is not None:
