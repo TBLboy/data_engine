@@ -3,12 +3,12 @@
 ## Status
 
 - Research phase: Complete（公开数据集调研 + TeleDex 格式分析 + MinIO 数据湖实查均已完成）
-- Current phase: 扫描入库架构升级 v3 已固化，等待从 Step 0（只读 census + 性能基线）开始实施
+- Current phase: 数据标注模块 V1 业务逻辑已固化，进入实施阶段
 
 ## Main Path
 
 ```text
-A → B1 + B2 + B3 → C → F → D → E
+A → B1 + B2 + B3 → C → F → D → G → E
 ```
 
 ## Path Summary
@@ -19,7 +19,8 @@ A → B1 + B2 + B3 → C → F → D → E
 - **B3**: 报告 03 — 数据筛选/策展框架（Data Quality in IL/DemInf/QoQ/SCIZOR/S2I）
 - **C**: Linker TeleDex 数据格式深度分析 + MinIO 对象存储实地验证
 - **F**: MinIO 数据湖控制面方案设计（业务规则已闭环）
-- **D**: 基于 MinIO 数据湖架构的 QC 方案落地
+- **D**: 基于 MinIO 数据湖架构的 QC 方案落地（含质检/批次驳回/数据集管理）
+- **G**: 数据标注模块建设（VLM 自动标注 + 人工标注，质检后独立环节）
 - **E**: 完整项目交付
 
 ## Deliverables
@@ -69,6 +70,12 @@ A → B1 + B2 + B3 → C → F → D → E
 - 扫描入库正式采用 v3：每日 smart + 每周 full + manual_prefix，任意深度 namespace discovery，List 分片持久队列，独立 coordinator/worker，可终止子进程，Episode 指纹与选择性对象索引，二次确认软删除/自动恢复
 - `scan_jobs` 在现有字符串主键表上原地演进；不得按旧 v2 方案重建 BIGINT `scan_jobs`
 - 普通用户扫描操作固定为一次点击 `开始扫描`；后端自动完成 discovery、模式选择、分片、并行、重试、缺失确认和资产重算
+- 标注按 TaskType 聚合组织，不引入独立的"标注批次"概念
+- 标注资格判据固定为单一字段 `Episode.final_dataset_status = 'QUALIFIED'`，标注模块不复算 L2/L3/L4 或批次驳回逻辑
+- 每个 Episode 只有一份当前有效标注结果（`episode_annotations` UNIQUE episode_id），VLM 和人工标注写入同一记录
+- 标注不能反向改变 Episode 的 `final_dataset_status` 或任何质检字段
+- 标注结果的内部存储格式与导出格式解耦：PostgreSQL 存内部模型，LeRobot 格式通过导出转换器生成
+- 标注新增 `annotator` 角色，纳入现有扁平化角色体系
 
 ## 数据总库资产画像升级 — 已确认业务逻辑
 

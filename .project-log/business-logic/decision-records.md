@@ -1,3 +1,37 @@
+### 2026-07-18 — 数据标注模块 V1 业务逻辑固化
+
+- Decision: 数据标注模块正式纳入平台 pipeline，按 TaskType 聚合数据（不引入标注批次），VLM 自动标注 + 人工标注双路径共享同一份标注结果模型，标注资格只读 `Episode.final_dataset_status = 'QUALIFIED'`，不与质检耦合。
+- Context: 平台已完成采集 → 扫描入库 → 质检 → 导出的 pipeline，缺失数据标注环节。已调研 LeRobot、Label Studio、RoboInter 三个开源方案（2026-07-14，`.project-log/标注工具调研.md`），决定自研标注模块（复用 Vue 3 + FastAPI 架构），由 VLM（Qwen3-VL-32B，已部署 Ollama）生成预标注，人工检查修改。
+- Alternatives considered:
+  - 集成 Label Studio：多用户标注平台成熟，但需写导入导出适配器，无法深度集成到现有 Vue 3 前端
+  - 直接使用 LeRobot `lerobot-annotate`：License 不明确、字段体系不一致、前提要求 LeRobot 格式
+  - 自研标注模块：与现有架构完全一致，复用 MinIO 媒体访问、AI 模块、角色权限体系，成本可控
+- Reason: 自研方案（IV）最符合当前架构。V1 范围最小可用——不做 SAM2 分割、双人审核、像素级标注。内部模型 → 导出转换器 → LeRobot 格式，数据库不绑定外部格式。标注与质检通过 `final_dataset_status` 单向依赖，标注不能反向改变质检状态。
+- Implementation detail:
+  - 正式数据对象：
+    - `annotation_tasks`：标注工作流状态（work_status / generation_status）
+    - `episode_annotations`：每个 Episode 唯一标注结果（UNIQUE episode_id）
+    - `annotation_segments`：子任务段标注
+    - `annotation_ai_runs`：VLM 生成记录
+  - 资格判据：`Episode.final_dataset_status = 'QUALIFIED'`（单一字段，不复算质检逻辑）
+  - 三状态计算：未标注（无任务）/ 待标注（work_status=pending）/ 完成标注（work_status=completed）
+  - VLM 双路径：initial_source=vlm（VLM 生成草稿） / manual（人工从零标注），human_modified 区分是否人工修改
+  - 角色：新增 annotator 角色，纳入现有权限体系
+  - 导出：Robot QC JSON（内部格式）+ LeRobot 通过转换器适配
+  - 训练集导出条件：`final_dataset_status = 'QUALIFIED' AND work_status = 'completed'`
+- Full spec: `.project-log/business-logic/annotation-v1.md`
+
+### 2026-07-18 — 数据标注模块 V1 补充决策（6 项）
+
+- Decision: 对标注 V1 设计中的 6 个待定问题作出最终决策：
+  1. **删除 `is_finalized`**：以 `annotation_tasks.work_status = 'completed'` 为唯一完成判据，避免双重事实源
+  2. **Revision 机制**：草稿阶段直接 UPDATE `episode_annotations`，每次确认完成生成 `annotation_revisions` 不可变快照
+  3. **JSONB Schema 固定**：`instruction_variants_en` 为 `string[]`，`objects` 含 `name_en/name_zh/role(枚举)/attributes`，三段校验（Pydantic → 业务 → DB），记录 `annotation_schema_version`
+  4. **不复用 AI 聊天面板**：V1 提供结构化 AI 操作按钮（重新生成/检查），不采用自由对话式面板
+  5. **编辑锁 + 乐观锁**：`lock_owner` + 心跳续期（30s）防止多人同时编辑，`row_version` CAS 防止覆盖
+  6. **VLM 三阶段抽帧**：均匀采样 + telemetry 事件检测（motion_score 局部峰值）+ 子任务边界局部密集抽帧细化，三路视频拼接为组合图
+- Full spec: `.project-log/business-logic/annotation-v1.md`
+
 ### 2026-07-16 — 任务级数据资产画像长期路线：Route T2（收敛实现）
 
 - Decision: 在已落地的 Route C' 之上，数据总库正式新增 **任务级资产画像**。长期路线采用 **Route T2：新增 `task_asset_rollups` 任务级派生投影 + `task_asset_recompute_jobs` 持久化 dirty/recompute 队列**；任务投影只从 `batch_asset_rollups` 汇总，不回扫 `episodes`，也不让前端按批次临时求和。

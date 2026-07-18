@@ -232,6 +232,41 @@ notes:
   - 导出只含 QUALIFIED episode 的元数据，不直接导出 MinIO 大文件
 ```
 
+## Node G: 数据标注模块
+
+```yaml
+id: G
+name: 数据标注模块建设
+status: 业务逻辑已固化，等待实施
+state:
+  - 标注工具调研已完成（2026-07-14，LeRobot/Label Studio/RoboInter 三方案对比）
+  - 标注 V1 业务逻辑已固化（2026-07-18，基于 GPT 初稿 + 项目真实模型对齐）
+  - V1 采用按 TaskType 聚合、VLM 自动 + 人工标注双路径、与质检解耦
+inputs:
+  - Node D 的 QC 完成态 Episode（final_dataset_status = 'QUALIFIED'）
+  - TaskType.description（标注时的任务描述基准）
+  - 三路视频 + telemetry 数据（VLM 输入）
+  - Ollama Qwen3-VL-32B（VLM 模型）
+outputs:
+  - 带标注的 Episode（episode_annotations + annotation_segments）
+  - 带标注的训练集导出（Robot QC JSON + LeRobot 格式）
+  - 标注任务管理（annotation_tasks）
+data_format:
+  - PostgreSQL: annotation_tasks / episode_annotations / annotation_segments / annotation_ai_runs
+  - 导出: JSON / LeRobot v3.x
+related_hardware:
+  - Ollama 服务器（已有，Qwen3-VL-32B）
+verification:
+  - 业务逻辑已对齐项目真实模型（final_dataset_status 而非 final_status）
+  - 数据模型已与现有 episodes / task_types / qc_tasks 关联确认
+notes:
+  - 标注是 pipeline 最后一块拼图：采集 → 扫描入库 → 质检 → 标注 → 导出
+  - 标注与质检彻底解耦，只消费 final_dataset_status
+  - 每个 Episode 只有一份当前有效标注结果
+  - VLM 失败不影响质检状态
+  - 不建设标注批次、SAM2 分割、双人审核等高级功能
+```
+
 ## Node E: 完整项目交付
 
 ```yaml
