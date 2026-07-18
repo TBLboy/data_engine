@@ -71,11 +71,15 @@ A → B1 + B2 + B3 → C → F → D → G → E
 - `scan_jobs` 在现有字符串主键表上原地演进；不得按旧 v2 方案重建 BIGINT `scan_jobs`
 - 普通用户扫描操作固定为一次点击 `开始扫描`；后端自动完成 discovery、模式选择、分片、并行、重试、缺失确认和资产重算
 - 标注按 TaskType 聚合组织，不引入独立的"标注批次"概念
-- 标注资格判据固定为单一字段 `Episode.final_dataset_status = 'QUALIFIED'`，标注模块不复算 L2/L3/L4 或批次驳回逻辑
+- 标注资格固定为 `Episode.final_dataset_status = 'QUALIFIED'` 加统一 active scope `active_list_active_batch_indexed_episodes`，标注模块不复算 L2/L3/L4 或批次驳回逻辑
+- 新合格 Episode 默认由后台低峰时段流水线自动创建初始 VLM 标注任务；admin/qc_manager 支持任务级批量触发，reviewer 仅支持本人工作池批量补漏，不要求逐 Episode 手动启动
+- 标注任务以管理员批量派发为标准路径；reviewer 只能从管理员显式开放的 VLM 已完成公共池原子领取任务。任务归属、编辑锁、人工状态、VLM 状态和导出状态必须分别建模，不得混用一个状态字段
+- 人工从零标注必须记录原因；VLM 失败后转人工保留 `initial_source = vlm`，不得篡改来源审计。完成标注退回、强制改派和 reviewer 异常上报均必须持久化审计
 - 每个 Episode 只有一份当前有效标注结果（`episode_annotations` UNIQUE episode_id），VLM 和人工标注写入同一记录
 - 标注不能反向改变 Episode 的 `final_dataset_status` 或任何质检字段
 - 标注结果的内部存储格式与导出格式解耦：PostgreSQL 存内部模型，LeRobot 格式通过导出转换器生成
-- 标注新增 `annotator` 角色，纳入现有扁平化角色体系
+- 标注训练语义固定为 TaskType 版本化 Sub Goal Schema；VLM 仅对固定 Definition 生成 occurrence 时间对齐，reviewer 不创建自由 Segment 标签。任务行为 `task_outcome` 与数据质量 `final_dataset_status` 分离，数据质量合格的失败 Episode 是正式标注与训练样本
+- 标注不新增 `annotator` 角色；沿用现有单角色体系，reviewer 处理本人标注任务，后台 worker 负责自动预标注
 
 ## 数据总库资产画像升级 — 已确认业务逻辑
 

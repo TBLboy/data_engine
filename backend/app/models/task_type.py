@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, String
+from sqlalchemy import Boolean, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
@@ -12,5 +12,8 @@ class TaskType(Base):
     description: Mapped[str] = mapped_column(String(255), nullable=False)
     arm_mode: Mapped[str] = mapped_column(String(32), default='both_arms', nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    default_published_sub_goal_schema_id: Mapped[str | None] = mapped_column(
+        ForeignKey('sub_goal_schemas.id'), nullable=True
+    )
 
     batches = relationship('Batch', back_populates='task_type')

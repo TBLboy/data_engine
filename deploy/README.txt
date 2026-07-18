@@ -65,7 +65,7 @@ docker compose -f deploy/docker-compose.yml up --build -d db
 
 ## 第五步：启动全部服务
 
-docker compose -f deploy/docker-compose.yml up --build -d backend frontend
+docker compose -f deploy/docker-compose.yml up --build -d backend frontend scan-coordinator scan-worker
 
 ## 第六步：验证部署
 
@@ -81,7 +81,11 @@ docker compose -f deploy/docker-compose.yml up --build -d backend frontend
    - 训练数据集管理: /dataset-management
    - 设置: /settings（左侧菜单底部齿轮图标）
 
-4. 进入设置页 → 通用 tab，检查"批次驳回阈值"是否为 0.10
+4. 确认扫描服务运行中：
+   docker compose -f deploy/docker-compose.yml ps scan-coordinator scan-worker
+   # scan-coordinator 应状态为 Up，scan-worker 应有 1 个实例
+
+5. 进入设置页 → 通用 tab，检查"批次驳回阈值"是否为 0.10
 
 ## 注意事项
 
@@ -103,7 +107,10 @@ docker compose -f deploy/docker-compose.yml up --build -d backend frontend
 docker compose -f deploy/docker-compose.yml down
 
 # 重新构建并启动
-docker compose -f deploy/docker-compose.yml up --build -d
+docker compose -f deploy/docker-compose.yml up --build -d backend frontend scan-coordinator scan-worker
+
+# 如果只想更新扫描服务
+docker compose -f deploy/docker-compose.yml up -d --build scan-coordinator scan-worker
 
 # 如果数据库 schema 有更新
 docker compose -f deploy/docker-compose.yml exec backend alembic upgrade head
@@ -119,6 +126,46 @@ docker compose -f deploy/docker-compose.yml exec backend alembic upgrade head
 docker compose -f deploy/docker-compose.yml down -v
 
 # 然后从第三步重新开始
+```
+
+---
+
+## 扫描工作进程
+
+平台包含一套自动 MinIO 扫描入库服务，由两个独立容器组成：
+
+```
+scan-coordinator (1 副本)       scan-worker (N 副本)
+  │                                │
+  ├─ 每日 smart 定时触发           ├─ 领取 shard
+  ├─ namespace discovery           ├─ 枚举 MinIO 对象
+  ├─ List 分片展开                 ├─ 流式指纹对比
+  ├─ shard 聚合/终态判定           ├─ bulk upsert
+  └─ 资产重算触发                  └─ lease/heartbeat/retry
+```
+
+### 配置
+
+**Worker 副本数**（默认 1）：
+- 设置页 → 通用 → 扫描工作进程 → Worker 副本数
+- 保存后自动生效，无需手动操作
+- 增加副本需要宿主机有足够 CPU/内存资源
+- 多个 worker 通过 PostgreSQL `FOR UPDATE SKIP LOCKED` 抢 shard，互不冲突
+
+**定时扫描时间**：
+- 设置页 → 通用 → 定时扫描
+- 每日 smart 增量扫描（默认 00:00）
+- 每周 full 全量 reconciliation（默认周日 02:00）
+- 下次 coordinator tick（约 10 秒）自动生效
+
+### 健康检查
+
+```bash
+# 查看所有服务状态
+docker compose -f deploy/docker-compose.yml ps
+
+# 确认 coordinator 正常运行（日志有 tick 记录）
+docker compose -f deploy/docker-compose.yml logs --tail=5 scan-coordinator
 ```
 
 ---

@@ -2,13 +2,25 @@
 
 ## Last Updated
 
-- 2026-07-18 CST（扫描入库 v3 离线审查与阻断性 BUG 修复）
+- 2026-07-18 CST（data_label 分支启动数据标注 V1 第一阶段）
 
 ## Current Objective
 
-- 扫描入库 v3 全量代码落地：schema migration、business resolver、namespace discovery、持久 coordinator/worker/shard 队列、流式指纹与选择性对象索引、缺失确认与恢复、资产重算幂等、API/前端一键扫描与进度控制
+- 按已确认边界落地数据标注 V1 第一阶段：只处理现有 `QUALIFIED` 且位于统一 active scope 的 Episode；`task_outcome` 在标注阶段填写；不改现有 QC 表单、批次裁决或历史 `UNQUALIFIED` 迁移。
 
 ## Current Status
+
+### 第一阶段实施计划
+- [x] Sub Goal Schema、annotation task、草稿、occurrence、revision 模型与 migration
+- [x] 标注资格、任务创建、草稿保存和完成校验领域服务
+- [x] 基础 API、权限、编辑锁和 revision 接口
+- [x] 人工标注首页、任务列表和 Sub Goal 工作台
+- [x] 回归测试、后端/前端/migration 检查（临时全新 SQLite migration 通过；默认历史 SQLite 存在既有 migration drift）
+
+### 当前基线
+- `data_label` 跟踪 `origin/data_label`。
+- annotation V1 已落地；不修改现有 QC 表单、批次裁决或历史 `UNQUALIFIED` 迁移。
+- 已有 project-log 文档修改保留；不修改现有 QC 逻辑。
 
 ### 已完成
 
@@ -70,6 +82,7 @@
 - 前端 JS 哈希每次构建变化，用户浏览器需要 Ctrl+Shift+R 硬刷新
 - 当前外网环境无 PostgreSQL/MinIO，无法运行 coordinator/worker 或执行 SQLite 之外的 ORM 测试
 - PostgreSQL `alembic --sql` 无法离线生成全量脚本：历史迁移 `20260623_0003`/后续条件迁移调用 `inspect(bind)`，Alembic mock connection 不支持 inspection；真实在线 PostgreSQL 迁移仍未验收。
+- 默认 `backend/data/robot_qc.db` 的 Alembic version 落后但已有 `batches.list_id`，执行全量升级会在历史 `20260715_0023` 报 duplicate column；本轮使用全新 `/tmp/annotation-v1-final.db` 验证完整 migration chain 至 `20260718_0027`。
 
 ## Problems And Resolutions
 
@@ -89,4 +102,26 @@
   - coordinator + worker 容器部署和健康检查
   - `POST /database/scan` smart/full/manual_prefix 三种模式执行验证
   - 取消、重试、轮询联动
-  - lease 回收、确认 shard 执行、资产重算触发
+   - lease 回收、确认 shard 执行、资产重算触发
+
+## Annotation V1 Implementation (2026-07-18)
+
+- Added ORM and migration `20260718_0027` for Sub Goal schemas/definitions, annotation tasks, mutable drafts, fixed occurrences, immutable revisions, locks and invalidation state.
+- Added domain service and API under `/api/annotations` for active-scope `QUALIFIED` eligibility, task ensure, assignment/public claim, locking, CAS draft saves, completion validation and revision creation.
+- Added Vue annotation workbench at `/annotations` with task queue, optional episode preview, schema-driven occurrence editor, task outcome, draft save, completion and lock controls.
+- Reviewer task visibility includes unassigned public-claim tasks; assignment and claim transition tasks to `assigned`, and lock acquisition transitions them to `in_progress`.
+- Verification: backend compile and mapper configuration pass; annotation routes are present; frontend `npm run build` passes; fresh SQLite `alembic upgrade head` passes through `20260718_0027`.
+
+## Annotation V1 Verification And Handoff (2026-07-18)
+
+- Fixed migration `20260715_0023` so databases that already contain `batches.list_id` can continue the Alembic chain without duplicate-column failure; clean installs keep the original schema and foreign key creation path.
+- Added `tests/test_annotations.py` covering published-schema replacement, QUALIFIED active-scope enforcement, idempotent task creation, reviewer lock, row-version CAS, completion validation, immutable revision creation and operational statistics.
+- Added `GET /api/annotations/statistics` for role-aware annotation progress counts.
+- Viewer access is read-only in the annotation workbench; only admin, qc_manager and assigned reviewers can edit.
+- Verification results: annotation service tests 4/4, data-assets tests 11/11, AI QC tests 6/6, backend compile and mapper configuration pass, frontend build pass, SQLite migration from the historical drift database reaches `20260718_0027`.
+
+## Next Cycle Decision
+
+- Keep the existing QC and batch adjudication boundaries unchanged. Annotation remains downstream of `QUALIFIED` episodes and upstream of training export.
+- Before any export is allowed, operations must be able to inspect Schema versions, ensure tasks in bulk, assign/claim work, and see completion/exception counts. These are the next production-facing capabilities.
+- Real PostgreSQL/MinIO and browser acceptance remain required before calling the platform production-ready; the running Compose stack currently uses the pre-annotation backend image and the local Playwright Chrome binary is unavailable.

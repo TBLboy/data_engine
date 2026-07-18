@@ -1,5 +1,13 @@
 from app.core.db import Base
 from app.models.ai_assistant import AiConversation, AiMessage
+from app.models.annotation import (
+    AnnotationRevision,
+    AnnotationTask,
+    EpisodeAnnotation,
+    EpisodeSubGoalInstance,
+    SubGoalDefinition,
+    SubGoalSchema,
+)
 from app.models.control_plane import (
     BatchAssetRecomputeJob,
     BatchAssetRollup,
@@ -27,6 +35,10 @@ __all__ = [
     'Base',
     'AiConversation',
     'AiMessage',
+    'AnnotationRevision',
+    'AnnotationTask',
+    'EpisodeAnnotation',
+    'EpisodeSubGoalInstance',
     'GeneralConfig',
     'L3V2Config',
     'AuditEvent',
@@ -52,5 +64,7 @@ __all__ = [
     'ScanPrefixState',
     'ScanShard',
     'TaskType',
+    'SubGoalDefinition',
+    'SubGoalSchema',
     'User',
 ]

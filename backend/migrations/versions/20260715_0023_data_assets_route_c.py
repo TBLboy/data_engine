@@ -17,10 +17,25 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column('batches', sa.Column('list_id', sa.String(length=64), nullable=True))
-    op.create_index(op.f('ix_batches_list_id'), 'batches', ['list_id'], unique=False)
-    with op.batch_alter_table('batches') as batch_op:
-        batch_op.create_foreign_key('fk_batches_list_id_lists', 'lists', ['list_id'], ['id'])
+    # Some early local SQLite databases received list_id from the ORM before
+    # this migration was introduced. Keep the migration chain usable for
+    # those databases while preserving the normal clean-install path.
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    batch_columns = {column['name'] for column in inspector.get_columns('batches')}
+    if 'list_id' not in batch_columns:
+        op.add_column('batches', sa.Column('list_id', sa.String(length=64), nullable=True))
+    if not any(index['name'] == op.f('ix_batches_list_id') for index in inspector.get_indexes('batches')):
+        op.create_index(op.f('ix_batches_list_id'), 'batches', ['list_id'], unique=False)
+    foreign_keys = inspector.get_foreign_keys('batches')
+    has_list_fk = any(
+        fk.get('name') == 'fk_batches_list_id_lists'
+        or (fk.get('constrained_columns') == ['list_id'] and fk.get('referred_table') == 'lists')
+        for fk in foreign_keys
+    )
+    if not has_list_fk:
+        with op.batch_alter_table('batches') as batch_op:
+            batch_op.create_foreign_key('fk_batches_list_id_lists', 'lists', ['list_id'], ['id'])
 
     op.create_table(
         'batch_asset_rollups',

@@ -6,6 +6,7 @@ import {
   Finished,
   FolderOpened,
   Monitor,
+  EditPen,
   User,
   VideoCamera
 } from '@element-plus/icons-vue'
@@ -44,6 +45,7 @@ const menuItems = [
   { path: '/database', label: '数据总库', icon: Files, roles: ['admin', 'qc_manager'] },
   { path: '/task-types', label: '任务类型管理', icon: CollectionTag, roles: ['admin', 'qc_manager'] },
   { path: '/task-pool', label: '人工质检入口', icon: VideoCamera },
+  { path: '/annotations', label: '数据标注工作台', icon: EditPen, roles: ['admin', 'qc_manager', 'reviewer', 'viewer'] },
   { path: '/qc-history', label: '历史审计', icon: Finished, roles: ['admin', 'qc_manager'] },
   { path: '/dataset-management', label: '训练数据集', icon: FolderOpened },
   { path: '/accounts', label: '账号管理', icon: User, roles: ['admin', 'qc_manager'] }

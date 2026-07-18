@@ -51,6 +51,24 @@
 - Constraints: 后台扫描必须幂等；同一 Episode 已存在 annotation task 或 active/succeeded 初始 job 时不得重复创建。夜间调度、手动批量触发和 reviewer 补漏都必须进入同一个持久化 generation queue，不能绕过 worker 直接调用 VLM。初始成功结果可写入空白草稿，已有草稿或完成任务的重生成只能产生候选，须人工显式应用。
 - Full spec: `.project-log/business-logic/annotation-v1-final-decisions.md` §5.2
 
+### 2026-07-18 — 标注任务派发、人工接管和异常协作收口
+
+- Decision: 管理员批量派发是 V1 的标准人工工作入口；reviewer 仅能从管理人员显式开放、初始 VLM 已成功的公共池原子领取。无预标注任务必须在单独的从零标注池派发，并显示原因和二次确认。任务归属与编辑锁严格分离；退回、强制改派、从零标注原因和 reviewer 异常上报均需持久化审计。
+- Reason: 标准派发保证 reviewer 默认面对可审核的 VLM 草稿，公共池补充避免管理端成为瓶颈；独立的无预标注路径避免高人工成本任务被无提示混派。保留 VLM 失败来源和协作异常历史，才能追溯自动化质量、人工成本和数据问题。
+- Implementation detail:
+  - `annotation_tasks` 增加派发、退回和 `manual_from_scratch_reason` 字段；分配/领取/改派使用不可变审计事件。
+  - `initial_source` 永不回写。VLM 失败转人工保留 `vlm`，原因写为 `vlm_failed`。
+  - 新增 `annotation_task_escalations`，承接 data/task type/VLM/blocked 等正式上报，不能仅用自由备注。
+  - `editing`、`returned`、`exported` 是读模型标签，分别由有效锁、退回审计和 export item 推导，不污染 `work_status`。
+- Full spec: `.project-log/business-logic/annotation-v1-final-decisions.md` §5.3–§5.7
+
+### 2026-07-18 — Sub Goal Schema 主语义与失败样本收口
+
+- Decision: 废除 Episode 自由 Segment 作为 V1 训练主语义。TaskType 通过版本化 `sub_goal_schemas` / 固定 `sub_goal_definitions` 定义标签空间；annotation task 冻结 Schema，Episode 只保存固定 Definition 的多次 occurrence、状态、时间范围、代表帧与失败信息。`task_outcome` 取代 `execution_observation`，并与 `final_dataset_status` 分离。
+- Reason: 自由标签无法保证同 TaskType 的训练语义稳定，也使 VLM 和人工产生不可统计的命名漂移。固定 Schema 可让 VLM 专注时间对齐、让 reviewer 专注边界修正，并保留抓取重试等多次 occurrence。数据质量合格但任务失败的数据应被保留为失败训练样本，而不是被质量状态隐式丢弃。
+- Migration boundary: 当前 `MANUAL_FAIL → UNQUALIFIED` 混合了质量与任务失败。新规则只适用于实现拆分 QC 判据后产生或经明确质量复核的数据；既有 UNQUALIFIED 不自动迁移或进入标注/导出。
+- Full spec: `.project-log/business-logic/annotation-sub-goals-v1.md`
+
 ### 2026-07-16 — 任务级数据资产画像长期路线：Route T2（收敛实现）
 
 - Decision: 在已落地的 Route C' 之上，数据总库正式新增 **任务级资产画像**。长期路线采用 **Route T2：新增 `task_asset_rollups` 任务级派生投影 + `task_asset_recompute_jobs` 持久化 dirty/recompute 队列**；任务投影只从 `batch_asset_rollups` 汇总，不回扫 `episodes`，也不让前端按批次临时求和。
@@ -404,6 +422,27 @@
 - Reason: 页面内再次按相同角色条件判断没有增加安全性，反而容易造成“高级功能仅对另一类页面用户显示”的错误产品语义。能进入数据总库的用户都应直接看到完整的扫描操作。
 - Implementation detail: 移除 `database-view.vue` 的 `canScanDatabase` 条件渲染；保留 `/database` 路由及 `POST /api/database/scan*` 的 `admin/qc_manager` 授权校验。
 - Status: implemented; frontend verification pending
+
+### 2026-07-18 — scan_worker_replicas 可配置化
+
+- Decision: `scan_worker_replicas` 加入 `GeneralConfig` 默认值（`default_general_config()`），前端设置页通用 tab 新增"扫描工作进程"卡片，附带应用脚本 `scripts/set-scan-worker-replicas.sh`。
+- Reason: 用户需要在 UI 上查看和调整 worker 数量，不需直接操作 docker-compose。后端配置只做持久化和读取，实际的容器扩缩容通过辅助脚本完成。
+- Implementation detail: 后端 `general_config.py` 新增 `scan_worker_replicas: 1` 到 defaults；前端 `settings.vue` 通用 tab 新增 `el-input-number` 控件（1-16），hint 文字说明修改后运行脚本；新增 `scripts/set-scan-worker-replicas.sh`，可带参数直接指定或从 DB 自动读取。
+- Script usage:
+  ```bash
+  # 从数据库读取副本数并应用
+  scripts/set-scan-worker-replicas.sh
+  # 手动指定副本数
+  scripts/set-scan-worker-replicas.sh 3
+  ```
+- Status: implemented; frontend verification pending
+
+### 2026-07-18 — scan_worker_replicas 保存后自动扩缩容
+
+- Decision: `scan_worker_replicas` 在通用设置保存时自动调用 `docker compose up -d --no-deps --scale scan-worker=N` 生效，不再需要手动运行脚本。
+- Reason: 用户期望修改 worker 副本数后立即生效，不需要额外的手动操作。
+- Implementation detail: Docker socket (`/var/run/docker.sock`) 及宿主机的 `docker`/`docker-compose` CLI 二进制通过 volume mount 挂入 backend 容器；`PUT /api/admin/general-config` 检测 `scan_worker_replicas` 变化后执行 `_scale_worker_replicas()`；使用 `--no-deps` 避免 `depends_on` 触发 backend 自身重建。
+- Status: implemented; verified (3→1→3 scale up/down works)
 
 ### 2026-07-16 — MinIO 扫描入库架构升级：分层并行扫描 v2（已被 v3 替代）
 

@@ -2,6 +2,20 @@ export type QcStatus = 'new' | 'assigned' | 'in_review' | 'done' | 'blocked'
 export type QcResult = 'pass' | 'fail' | 'pending'
 export type UserRole = 'admin' | 'qc_manager' | 'reviewer' | 'viewer'
 export type DispatchMode = 'sampled' | 'full'
+export type AnnotationWorkStatus = 'pending' | 'assigned' | 'in_progress' | 'completed' | 'invalidated'
+export type AnnotationTaskOutcome =
+  | 'completed_normally'
+  | 'completed_with_retry'
+  | 'partially_completed'
+  | 'failed'
+  | 'uncertain'
+export type SubGoalInstanceStatus =
+  | 'observed'
+  | 'failed'
+  | 'skipped'
+  | 'not_observed'
+  | 'not_applicable'
+  | 'uncertain'
 
 export interface UserProfile {
   id: string
@@ -114,6 +128,94 @@ export interface QcTask {
   assignmentMode: string
   createdAt: string
   reviewLock: ReviewLock
+}
+
+export interface SubGoalDefinition {
+  id?: string
+  sequenceNo: number
+  code: string
+  nameEn: string
+  nameZh: string
+  description: string
+  actionVerb: string
+  isRequired: boolean
+  isConditional: boolean
+  maxOccurrences: number | null
+  objectRoleHints: Record<string, unknown>
+}
+
+export interface AnnotationSchema {
+  id: string
+  taskTypeId: string
+  versionNo: number
+  status: 'draft' | 'published' | 'retired'
+  contentHash: string
+  definitions: SubGoalDefinition[]
+  createdAt: string
+  publishedAt: string | null
+}
+
+export interface AnnotationOccurrence {
+  id?: number
+  definitionId: string
+  definitionCode?: string
+  definitionNameEn?: string
+  occurrenceNo: number
+  status: SubGoalInstanceStatus
+  startStep: number | null
+  endStepExclusive: number | null
+  representativeStep: number | null
+  failureReason: string | null
+  notes: string | null
+  source?: string
+}
+
+export interface AnnotationDraft {
+  canonicalInstructionEn: string
+  canonicalInstructionZh: string | null
+  instructionVariantsEn: string[]
+  episodeSummary: string | null
+  objects: unknown[]
+  taskOutcome: AnnotationTaskOutcome | null
+  failureSubGoalInstanceId: number | null
+  lastSuccessfulSubGoalInstanceId: number | null
+  failureReason: string | null
+  annotationNotes: string | null
+  annotationSchemaVersion: string
+  occurrences: AnnotationOccurrence[]
+}
+
+export interface AnnotationTask {
+  id: string
+  episodeId: string
+  batchId: string
+  batchName: string
+  taskTypeId: string
+  taskTypeName: string
+  workStatus: AnnotationWorkStatus
+  assignedTo: string | null
+  assignedName: string | null
+  assignedAt: string | null
+  publicClaimEnabled: boolean
+  lockOwner: string | null
+  lockExpiresAt: string | null
+  currentRevisionNo: number
+  rowVersion: number
+  initialSource: string
+  frameCount: number
+  durationSec: number
+  finalDatasetStatus: string
+  schema: AnnotationSchema | null
+  draft: AnnotationDraft | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AnnotationTaskListPayload {
+  items: AnnotationTask[]
+  page: number
+  pageSize: number
+  total: number
 }
 
 export interface DispatchPreview {

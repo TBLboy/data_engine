@@ -33,6 +33,10 @@ import type {
   AiChatRequest,
   AiChatResponse,
   AiConversationDetail,
+  AnnotationTask,
+  AnnotationTaskListPayload,
+  AnnotationDraft,
+  AnnotationSchema,
 } from '../types/qc'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') || '/api'
@@ -560,6 +564,66 @@ export async function fetchHistoryExport(batchId = 'all', scope: 'report' | 'epi
 
 export async function fetchManualQcContext(episodeId: string) {
   return request<ManualQcContext>(`/episodes/${episodeId}/qc-context`)
+}
+
+export interface AnnotationTaskQuery {
+  page?: number
+  pageSize?: number
+  workStatus?: string
+  taskTypeId?: string
+}
+
+export interface AnnotationDraftRequest extends AnnotationDraft {
+  rowVersion: number
+}
+
+export async function fetchAnnotationTasks(query: AnnotationTaskQuery = {}) {
+  const params = new URLSearchParams()
+  if (query.page) params.set('page', String(query.page))
+  if (query.pageSize) params.set('page_size', String(query.pageSize))
+  if (query.workStatus) params.set('work_status', query.workStatus)
+  if (query.taskTypeId) params.set('task_type_id', query.taskTypeId)
+  const suffix = params.size ? `?${params.toString()}` : ''
+  return request<AnnotationTaskListPayload>(`/annotations/tasks${suffix}`)
+}
+
+export async function fetchAnnotationTask(taskId: string) {
+  return request<AnnotationTask>(`/annotations/tasks/${encodeURIComponent(taskId)}`)
+}
+
+export async function claimAnnotationTask(taskId: string) {
+  return request<AnnotationTask>(`/annotations/tasks/${encodeURIComponent(taskId)}/claim`, { method: 'POST' })
+}
+
+export async function acquireAnnotationLock(taskId: string) {
+  return request<{ taskId: string; lockOwner: string | null; lockExpiresAt: string | null; rowVersion: number }>(
+    `/annotations/tasks/${encodeURIComponent(taskId)}/lock`, { method: 'POST' }
+  )
+}
+
+export async function releaseAnnotationLock(taskId: string, force = false) {
+  const suffix = force ? '?force=true' : ''
+  return request<{ taskId: string; lockOwner: string | null; lockExpiresAt: string | null; rowVersion: number }>(
+    `/annotations/tasks/${encodeURIComponent(taskId)}/lock${suffix}`, { method: 'DELETE' }
+  )
+}
+
+export async function saveAnnotationDraft(taskId: string, payload: AnnotationDraftRequest) {
+  return request<AnnotationTask>(`/annotations/tasks/${encodeURIComponent(taskId)}/draft`, {
+    method: 'PUT',
+    body: JSON.stringify(payload)
+  })
+}
+
+export async function completeAnnotationTask(taskId: string) {
+  return request<{ task: AnnotationTask; revisionNo: number; contentHash: string }>(
+    `/annotations/tasks/${encodeURIComponent(taskId)}/complete`, { method: 'POST' }
+  )
+}
+
+export async function fetchAnnotationSchemas(taskTypeId?: string) {
+  const suffix = taskTypeId ? `?task_type_id=${encodeURIComponent(taskTypeId)}` : ''
+  return request<AnnotationSchema[]>(`/annotations/schemas${suffix}`)
 }
 
 export async function refreshManualQcMedia(episodeId: string, payload: ManualQcMediaRefreshRequest) {

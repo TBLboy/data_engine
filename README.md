@@ -73,28 +73,4 @@ cd frontend && npm run build
 cd frontend && npx vue-tsc --noEmit
 ```
 
-### 快速部署（新机器）
-
-```bash
-# 1. 准备密钥
-SECRET_KEY=$(openssl rand -hex 32)
-POSTGRES_PASSWORD=$(openssl rand -hex 16)
-# 编辑 deploy/.env 填入上述值和 MinIO 凭据
-
-# 2. 构建前端
-npm run build --prefix frontend
-
-# 3. 启动数据库
-docker compose -f deploy/docker-compose.yml up --build -d db
-
-# 4. 初始化 schema + 创建管理员
-docker compose -f deploy/docker-compose.yml run --rm -e APP_ENV=development backend alembic upgrade head
-docker compose -f deploy/docker-compose.yml run --rm -e APP_ENV=development backend python -m app.services.bootstrap --admin-username admin --admin-password '你的密码' --admin-name '系统管理员' --admin-role admin
-
-# 5. 启动全部
-docker compose -f deploy/docker-compose.yml up --build -d backend frontend
-
-# 6. 浏览器打开 http://<机器IP>:8080
-```
-
-详细部署说明见 `deploy/README.txt`。
+部署说明见 `deploy/README.txt`（AI 安装指南，可以直接粘贴给 AI 助手按步骤执行）。
