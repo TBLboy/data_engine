@@ -267,6 +267,7 @@ class AnnotationServiceTests(unittest.TestCase):
             # Re-edit and complete again; historical export item must stay on revision 1.
             existing_instance_id = task.annotation.sub_goal_instances[0].id
             acquire_lock(db, task, reviewer)
+            self.assertEqual(task.work_status, 'in_progress')
             save_draft(db, task, reviewer, {
                 'rowVersion': task.row_version,
                 'canonicalInstructionEn': 'Pick the object carefully',

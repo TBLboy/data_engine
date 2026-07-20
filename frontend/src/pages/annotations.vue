@@ -4,20 +4,35 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import AppLayout from '../components/AppLayout.vue'
 import {
   acquireAnnotationLock,
+  assignAnnotationTask,
   claimAnnotationTask,
   completeAnnotationTask,
+  createAnnotationSchema,
+  ensureAnnotationTasks,
+  fetchAccounts,
+  fetchAnnotationEligibility,
+  fetchAnnotationSchemas,
+  fetchAnnotationStatistics,
   fetchAnnotationTask,
   fetchAnnotationTasks,
+  fetchDatasetTasks,
   fetchManualQcContext,
+  publishAnnotationSchema,
   releaseAnnotationLock,
   saveAnnotationDraft,
+  setAnnotationPublicClaim,
   type AnnotationDraftRequest,
 } from '../api/client'
 import type {
   AnnotationDraft,
+  AnnotationEligibility,
+  AnnotationSchema,
+  AnnotationStatistics,
   AnnotationTask,
   AnnotationTaskOutcome,
+  Account,
   SubGoalInstanceStatus,
+  TaskType,
 } from '../types/qc'
 import { useSessionStore } from '../stores/session'
 
@@ -37,6 +52,18 @@ const pageSize = 20
 const filterStatus = ref('')
 const dirty = ref(false)
 const hydratingDraft = ref(false)
+const operationLoading = ref(false)
+const operationTaskTypeId = ref('')
+const taskTypes = ref<TaskType[]>([])
+const reviewers = ref<Account[]>([])
+const eligibility = ref<AnnotationEligibility | null>(null)
+const statistics = ref<AnnotationStatistics | null>(null)
+const schemas = ref<AnnotationSchema[]>([])
+const ensureLimit = ref(100)
+const selectedReviewerId = ref('')
+const assignmentNote = ref('')
+const schemaDialogVisible = ref(false)
+const schemaDefinitionsJson = ref('[\n  {\n    "sequenceNo": 1,\n    "code": "sub_goal",\n    "nameEn": "Sub goal",\n    "nameZh": "子目标",\n    "description": "",\n    "actionVerb": "",\n    "isRequired": true,\n    "isConditional": false,\n    "maxOccurrences": 1,\n    "objectRoleHints": {}\n  }\n]')
 let lockTimer: number | null = null
 
 const outcomes: Array<{ value: AnnotationTaskOutcome; label: string }> = [
@@ -81,6 +108,8 @@ const canEdit = computed(() => {
   return session.user?.role !== 'reviewer' || hasLock.value
 })
 const selectedSchema = computed(() => selectedTask.value?.schema)
+const isManager = computed(() => ['admin', 'qc_manager'].includes(session.user?.role ?? ''))
+const reviewerWorkload = computed(() => new Map(statistics.value?.byReviewer.map((item) => [item.reviewerId, item.count]) ?? []))
 const requiredCount = computed(() => selectedSchema.value?.definitions.filter((item) => item.isRequired && !item.isConditional).length ?? 0)
 const observedRequiredCount = computed(() => {
   const definitionIds = new Set(draft.occurrences.map((item) => item.definitionId))
@@ -112,7 +141,12 @@ async function loadTasks(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    const result = await fetchAnnotationTasks({ page: page.value, pageSize, workStatus: filterStatus.value || undefined })
+    const result = await fetchAnnotationTasks({
+      page: page.value,
+      pageSize,
+      workStatus: filterStatus.value || undefined,
+      taskTypeId: isManager.value ? operationTaskTypeId.value || undefined : undefined,
+    })
     tasks.value = result.items
     total.value = result.total
     if (!selectedTaskId.value && tasks.value.length) selectedTaskId.value = tasks.value[0].id
@@ -124,6 +158,121 @@ async function loadTasks(): Promise<void> {
     error.value = err instanceof Error ? err.message : '加载标注任务失败'
   } finally {
     loading.value = false
+  }
+}
+
+async function refreshOperations(): Promise<void> {
+  if (!isManager.value || !operationTaskTypeId.value) return
+  operationLoading.value = true
+  try {
+    const [nextEligibility, nextStatistics, nextSchemas] = await Promise.all([
+      fetchAnnotationEligibility(operationTaskTypeId.value),
+      fetchAnnotationStatistics(operationTaskTypeId.value),
+      fetchAnnotationSchemas(operationTaskTypeId.value),
+    ])
+    eligibility.value = nextEligibility
+    statistics.value = nextStatistics
+    schemas.value = nextSchemas
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '加载标注运营数据失败'
+  } finally {
+    operationLoading.value = false
+  }
+}
+
+async function loadOperations(): Promise<void> {
+  if (!isManager.value) return
+  try {
+    const [nextTaskTypes, accounts] = await Promise.all([fetchDatasetTasks(), fetchAccounts()])
+    taskTypes.value = nextTaskTypes
+    reviewers.value = accounts.accounts.filter((account) => account.role === 'reviewer' && account.isActive)
+    const taskTypeChanged = !operationTaskTypeId.value
+    if (taskTypeChanged) operationTaskTypeId.value = selectedTask.value?.taskTypeId || nextTaskTypes[0]?.id || ''
+    if (taskTypeChanged) await changeOperationTaskType()
+    else await refreshOperations()
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '加载标注运营配置失败'
+  }
+}
+
+async function changeOperationTaskType(): Promise<void> {
+  page.value = 1
+  selectedTaskId.value = ''
+  await Promise.all([refreshOperations(), loadTasks()])
+}
+
+async function ensureMissingTasks(): Promise<void> {
+  if (!operationTaskTypeId.value) return
+  operationLoading.value = true
+  try {
+    const result = await ensureAnnotationTasks({ taskTypeId: operationTaskTypeId.value, limit: ensureLimit.value })
+    ElMessage.success(result.createdCount ? `已创建 ${result.createdCount} 个标注任务` : '当前范围没有缺失标注任务')
+    await Promise.all([refreshOperations(), loadTasks()])
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '补漏创建标注任务失败')
+  } finally {
+    operationLoading.value = false
+  }
+}
+
+async function assignSelectedTask(): Promise<void> {
+  if (!selectedTask.value || !selectedReviewerId.value) return
+  try {
+    const updated = await assignAnnotationTask(selectedTask.value.id, selectedReviewerId.value, assignmentNote.value)
+    selectedTask.value = updated
+    tasks.value = tasks.value.map((item) => item.id === updated.id ? updated : item)
+    assignmentNote.value = ''
+    ElMessage.success('标注任务已分配')
+    await refreshOperations()
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '分配标注任务失败')
+  }
+}
+
+async function toggleSelectedPublicClaim(): Promise<void> {
+  if (!selectedTask.value) return
+  try {
+    const updated = await setAnnotationPublicClaim(selectedTask.value.id, !selectedTask.value.publicClaimEnabled)
+    selectedTask.value = updated
+    tasks.value = tasks.value.map((item) => item.id === updated.id ? updated : item)
+    ElMessage.success(updated.publicClaimEnabled ? '已开放公共领取' : '已关闭公共领取')
+    await refreshOperations()
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '设置公共领取失败')
+  }
+}
+
+async function createSchema(): Promise<void> {
+  if (!operationTaskTypeId.value) return
+  let definitions: AnnotationSchema['definitions']
+  try {
+    definitions = JSON.parse(schemaDefinitionsJson.value) as AnnotationSchema['definitions']
+    if (!Array.isArray(definitions)) throw new Error('Schema 必须是 Definition 数组')
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : 'Schema JSON 格式无效')
+    return
+  }
+  try {
+    const schema = await createAnnotationSchema({
+      taskTypeId: operationTaskTypeId.value,
+      definitions: definitions.map(({ id: _id, ...definition }) => definition),
+    })
+    schemaDialogVisible.value = false
+    ElMessage.success(`已创建 Schema v${schema.versionNo} 草稿`)
+    await refreshOperations()
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '创建 Schema 失败')
+  }
+}
+
+async function publishSchema(schema: AnnotationSchema): Promise<void> {
+  try {
+    await ElMessageBox.confirm(`发布 v${schema.versionNo} 会退休该 TaskType 当前 published Schema，是否继续？`, '发布 Schema', { type: 'warning' })
+    await publishAnnotationSchema(schema.id)
+    ElMessage.success(`Schema v${schema.versionNo} 已发布`)
+    await refreshOperations()
+  } catch (err) {
+    if (err !== 'cancel') ElMessage.error(err instanceof Error ? err.message : '发布 Schema 失败')
   }
 }
 
@@ -282,7 +431,10 @@ function statusType(status: string): 'success' | 'warning' | 'info' | 'danger' {
   return 'info'
 }
 
-onMounted(loadTasks)
+onMounted(async () => {
+  await loadTasks()
+  await loadOperations()
+})
 onBeforeUnmount(() => { if (lockTimer !== null) window.clearInterval(lockTimer) })
 </script>
 
@@ -303,6 +455,41 @@ onBeforeUnmount(() => { if (lockTimer !== null) window.clearInterval(lockTimer) 
       </section>
 
       <el-alert v-if="error" type="error" :closable="false" :title="error" />
+
+      <section v-if="isManager" class="annotation-operations" v-loading="operationLoading">
+        <el-card shadow="never" class="qc-card operations-overview">
+          <div class="operations-title">
+            <div>
+              <div class="eyebrow">ANNOTATION OPERATIONS</div>
+              <h2>标注运营面</h2>
+              <p>仅面向当前 TaskType 的 active-scope QUALIFIED 数据。补漏创建不会覆盖已有草稿或 revision。</p>
+            </div>
+            <el-select v-model="operationTaskTypeId" filterable class="operation-task-type" placeholder="选择 TaskType" @change="changeOperationTaskType">
+              <el-option v-for="taskType in taskTypes" :key="taskType.id" :label="taskType.name" :value="taskType.id" />
+            </el-select>
+          </div>
+          <div class="operations-metrics">
+            <div><span>可标注</span><strong>{{ eligibility?.eligibleCount ?? '-' }}</strong><small>QUALIFIED active scope</small></div>
+            <div><span>已建任务</span><strong>{{ eligibility?.taskCount ?? '-' }}</strong><small>含进行中与完成历史</small></div>
+            <div><span>待补漏</span><strong>{{ eligibility?.unannotatedCount ?? '-' }}</strong><small>尚未创建 annotation task</small></div>
+            <div><span>已完成</span><strong>{{ statistics?.completed ?? '-' }}</strong><small>完成率 {{ ((statistics?.completionRate ?? 0) * 100).toFixed(1) }}%</small></div>
+          </div>
+          <div class="operations-actions">
+            <el-input-number v-model="ensureLimit" :min="1" :max="1000" controls-position="right" />
+            <el-button type="primary" :disabled="!operationTaskTypeId" @click="ensureMissingTasks">补漏创建任务</el-button>
+            <el-button @click="refreshOperations">刷新统计</el-button>
+            <el-button plain @click="schemaDialogVisible = true">新建 Schema 草稿</el-button>
+          </div>
+          <div class="schema-list">
+            <span class="schema-list-label">Schema 生命周期</span>
+            <el-tag v-if="!schemas.length" type="info">暂无 Schema</el-tag>
+            <span v-for="schema in schemas" :key="schema.id" class="schema-chip">
+              <el-tag :type="schema.status === 'published' ? 'success' : schema.status === 'draft' ? 'warning' : 'info'">v{{ schema.versionNo }} · {{ schema.status }}</el-tag>
+              <el-button v-if="schema.status === 'draft'" link type="primary" @click="publishSchema(schema)">发布</el-button>
+            </span>
+          </div>
+        </el-card>
+      </section>
 
       <div class="annotation-layout" v-loading="loading">
         <el-card shadow="never" class="qc-card annotation-task-list">
@@ -360,6 +547,25 @@ onBeforeUnmount(() => { if (lockTimer !== null) window.clearInterval(lockTimer) 
                 <el-button v-if="!hasLock && session.user?.role !== 'viewer'" size="small" @click="lockTask">获取锁</el-button>
                 <el-button v-if="hasLock" size="small" @click="unlockTask">释放锁</el-button>
               </div>
+            </div>
+
+            <div v-if="isManager" class="manager-task-actions">
+              <el-select v-model="selectedReviewerId" filterable clearable placeholder="选择 reviewer 分配" class="manager-reviewer-select">
+                <el-option
+                  v-for="reviewer in reviewers"
+                  :key="reviewer.id"
+                  :label="`${reviewer.name} · 当前 ${reviewerWorkload.get(reviewer.id) ?? 0}`"
+                  :value="reviewer.id"
+                />
+              </el-select>
+              <el-input v-model="assignmentNote" placeholder="分配备注（可选）" class="manager-assignment-note" />
+              <el-button :disabled="!selectedReviewerId || !['pending', 'assigned'].includes(selectedTask.workStatus)" @click="assignSelectedTask">分配</el-button>
+              <el-button
+                :type="selectedTask.publicClaimEnabled ? 'warning' : 'info'"
+                :disabled="selectedTask.workStatus !== 'pending' || !!selectedTask.assignedTo"
+                @click="toggleSelectedPublicClaim"
+              >{{ selectedTask.publicClaimEnabled ? '关闭公共领取' : '开放公共领取' }}</el-button>
+              <small v-if="selectedTask.assignedName">当前归属：{{ selectedTask.assignedName }}</small>
             </div>
 
             <div v-if="mediaUrl" class="annotation-media">
@@ -447,12 +653,36 @@ onBeforeUnmount(() => { if (lockTimer !== null) window.clearInterval(lockTimer) 
           <div v-else class="empty-editor">从左侧选择一个标注任务开始</div>
         </el-card>
       </div>
+
+      <el-dialog v-model="schemaDialogVisible" title="新建标注 Schema 草稿" width="min(760px, 94vw)">
+        <p class="schema-dialog-hint">Definition 使用 JSON 数组。保存后仍为 draft，需在上方生命周期列表显式发布才会用于新任务。</p>
+        <el-input v-model="schemaDefinitionsJson" type="textarea" :rows="16" class="schema-json-editor" />
+        <template #footer>
+          <el-button @click="schemaDialogVisible = false">取消</el-button>
+          <el-button type="primary" :disabled="!operationTaskTypeId" @click="createSchema">创建草稿</el-button>
+        </template>
+      </el-dialog>
     </div>
   </AppLayout>
 </template>
 
 <style scoped>
 .annotation-page { max-width: 1680px; margin: 0 auto; }
+.annotation-operations { margin-bottom: 18px; }
+.operations-overview { background: linear-gradient(115deg, #f8fbff, #f6fffb); }
+.operations-title, .operations-actions, .operations-metrics, .schema-list, .manager-task-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.operations-title { justify-content: space-between; }
+.operations-title h2 { margin: 3px 0; color: #0f172a; font-size: 20px; }
+.operations-title p, .schema-dialog-hint { margin: 0; color: #64748b; font-size: 12px; }
+.operation-task-type { width: 240px; }
+.operations-metrics { margin: 18px 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.operations-metrics > div { min-width: 0; padding: 13px 16px; border: 1px solid #dbeafe; border-radius: 12px; background: rgba(255,255,255,.72); }
+.operations-metrics span, .operations-metrics small { display: block; color: #64748b; font-size: 12px; }
+.operations-metrics strong { display: block; margin: 4px 0; color: #0f766e; font-size: 24px; }
+.operations-actions { padding-top: 2px; }
+.schema-list { margin-top: 16px; padding-top: 14px; border-top: 1px solid #dbeafe; }
+.schema-list-label { color: #475569; font-size: 12px; font-weight: 700; }
+.schema-chip { display: inline-flex; align-items: center; gap: 5px; }
 .annotation-hero { background: linear-gradient(135deg, #fff 0%, #eef7ff 56%, #effcf8 100%); }
 .annotation-hero-meta { min-width: 180px; padding: 18px 22px; border-radius: 18px; background: rgba(255,255,255,.72); text-align: right; }
 .annotation-hero-meta span, .annotation-hero-meta small { display: block; color: #64748b; font-size: 12px; }
@@ -467,6 +697,10 @@ onBeforeUnmount(() => { if (lockTimer !== null) window.clearInterval(lockTimer) 
 .annotation-task-item > span, .annotation-task-item > small { display: block; margin-top: 7px; color: #64748b; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .annotation-task-item > .el-tag { margin-top: 8px; }
 .editor-header { padding-bottom: 16px; border-bottom: 1px solid #e2e8f0; }
+.manager-task-actions { margin: 14px 0; padding: 12px; border: 1px solid #dbeafe; border-radius: 12px; background: #f8fbff; }
+.manager-task-actions small { color: #64748b; font-size: 12px; }
+.manager-reviewer-select { width: 220px; }
+.manager-assignment-note { width: 240px; }
 .editor-header h2 { margin: 4px 0; color: #0f172a; font-size: 24px; }
 .editor-header p, .eyebrow { color: #64748b; font-size: 12px; }
 .eyebrow { font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
@@ -498,6 +732,7 @@ onBeforeUnmount(() => { if (lockTimer !== null) window.clearInterval(lockTimer) 
   .annotation-layout { grid-template-columns: 1fr; }
   .annotation-task-list { min-height: 0; }
   .annotation-task-item { display: inline-block; width: calc(50% - 6px); margin-right: 8px; vertical-align: top; }
+  .operations-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 700px) {
   .annotation-hero, .editor-header, .editor-footer { align-items: flex-start; flex-direction: column; }
@@ -505,5 +740,7 @@ onBeforeUnmount(() => { if (lockTimer !== null) window.clearInterval(lockTimer) 
   .form-grid { grid-template-columns: 1fr; gap: 0; }
   .annotation-task-item { width: 100%; margin-right: 0; }
   .occurrence-row { align-items: flex-start; }
+  .operation-task-type, .manager-reviewer-select, .manager-assignment-note { width: 100%; }
+  .operations-metrics { grid-template-columns: 1fr; }
 }
 </style>

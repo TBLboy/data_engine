@@ -281,6 +281,11 @@ def get_task(db: Session, task_id: str) -> AnnotationTask | None:
     ).filter(AnnotationTask.id == task_id).first()
 
 
+def get_task_for_update(db: Session, task_id: str) -> AnnotationTask | None:
+    """Lock task-state transitions so concurrent assignment or claim cannot overwrite ownership."""
+    return db.query(AnnotationTask).filter(AnnotationTask.id == task_id).with_for_update().first()
+
+
 def assert_task_editable(task: AnnotationTask, user: User, *, require_lock: bool = True) -> None:
     if user.role not in ANNOTATION_ROLES:
         raise PermissionError('无权限编辑标注')
@@ -408,6 +413,9 @@ def acquire_lock(db: Session, task: AnnotationTask, user: User) -> None:
     task.lock_owner = user.id
     task.lock_acquired_at = now
     task.lock_expires_at = now + timedelta(minutes=5)
+    # Re-editing a completed annotation starts a new pending revision cycle.
+    if task.work_status == 'completed':
+        task.work_status = 'pending'
     if task.work_status in {'pending', 'assigned'}:
         task.work_status = 'in_progress'
     task.row_version += 1

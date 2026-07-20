@@ -36,7 +36,9 @@ import type {
   AnnotationTask,
   AnnotationTaskListPayload,
   AnnotationDraft,
+  AnnotationEligibility,
   AnnotationSchema,
+  AnnotationStatistics,
 } from '../types/qc'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') || '/api'
@@ -624,6 +626,45 @@ export async function completeAnnotationTask(taskId: string) {
 export async function fetchAnnotationSchemas(taskTypeId?: string) {
   const suffix = taskTypeId ? `?task_type_id=${encodeURIComponent(taskTypeId)}` : ''
   return request<AnnotationSchema[]>(`/annotations/schemas${suffix}`)
+}
+
+export async function fetchAnnotationEligibility(taskTypeId?: string) {
+  const suffix = taskTypeId ? `?task_type_id=${encodeURIComponent(taskTypeId)}` : ''
+  return request<AnnotationEligibility>(`/annotations/eligible${suffix}`)
+}
+
+export async function fetchAnnotationStatistics(taskTypeId?: string) {
+  const suffix = taskTypeId ? `?task_type_id=${encodeURIComponent(taskTypeId)}` : ''
+  return request<AnnotationStatistics>(`/annotations/statistics${suffix}`)
+}
+
+export async function ensureAnnotationTasks(payload: { taskTypeId?: string; episodeIds?: string[]; limit?: number }) {
+  return request<{ createdCount: number; createdTaskIds: string[]; skipped: Array<{ episodeId: string; reason: string }> }>(
+    '/annotations/tasks/ensure', { method: 'POST', body: JSON.stringify(payload) }
+  )
+}
+
+export async function createAnnotationSchema(payload: {
+  taskTypeId: string
+  definitions: Omit<AnnotationSchema['definitions'][number], 'id'>[]
+}) {
+  return request<AnnotationSchema>('/annotations/schemas', { method: 'POST', body: JSON.stringify(payload) })
+}
+
+export async function publishAnnotationSchema(schemaId: string) {
+  return request<AnnotationSchema>(`/annotations/schemas/${encodeURIComponent(schemaId)}/publish`, { method: 'POST' })
+}
+
+export async function assignAnnotationTask(taskId: string, reviewerId: string, note = '') {
+  return request<AnnotationTask>(`/annotations/tasks/${encodeURIComponent(taskId)}/assign`, {
+    method: 'POST', body: JSON.stringify({ reviewerId, note })
+  })
+}
+
+export async function setAnnotationPublicClaim(taskId: string, enabled: boolean) {
+  return request<AnnotationTask>(`/annotations/tasks/${encodeURIComponent(taskId)}/public-claim`, {
+    method: 'POST', body: JSON.stringify({ enabled })
+  })
 }
 
 export async function refreshManualQcMedia(episodeId: string, payload: ManualQcMediaRefreshRequest) {

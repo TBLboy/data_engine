@@ -31,6 +31,41 @@
   - historical SQLite migration reached `20260718_0027`
 - Next step: commit this version, rebuild Compose images, then implement and validate Schema operations, bulk task generation, assignment/workload operations, and the training-export gate.
 
+## 2026-07-20 10:40 CST — T11 Compose/PostgreSQL/真实导出与 Ollama 验收
+
+- Type: verification / production acceptance
+- Status: done
+- Objective: 把统一导出与 annotation 相关 migration 部署到运行中的 Compose，并完成真实 HTTP + Ollama 验收。
+- Work completed:
+  - 重建 backend/frontend/scan-coordinator/scan-worker
+  - PostgreSQL migration：`20260717_0026 → 20260718_0027 → 20260720_0028`
+  - 真实验收：admin 登录；`/api/annotations/statistics`；`/api/dataset/tasks/task_type:luobo/summary`；JSONL 导出 169 条；`dataset_export_items=169`
+  - Ollama：本机 `qwen3-vl-thinking:32b` 可用；`/api/ai/explain` source=`llm`，`fallbackUsed=false`
+  - 前端产物确认含「质检合格 / 完成标注」「导出 JSONL 包」「是否完成标注」
+- Findings:
+  - 生产 annotation_tasks 仍为 0；导出增强字段目前全部 `not_created`，符合统一导出语义但运营面未跑通
+  - 容器默认 `OLLAMA_BASE_URL=localhost` 不可达，实际 AI 走 GeneralConfig 的 host/port 成功
+- Next steps: T12 运营面（Schema 管理、批量 ensure、分配 workload），再核对导出增强字段在真实完成标注后的表现。
+
+## 2026-07-20 11:10 CST — T12 标注运营面与真实 revision/export 闭环
+
+- Type: feature / production acceptance
+- Status: done
+- Objective: 使生产 QUALIFIED 数据通过 Schema、ensure、派发、reviewer 完成进入统一导出标注增强字段。
+- Work completed:
+  - 修复 TaskType eligibility/ensure 的重复 `Batch` join，避免 PostgreSQL `DuplicateAlias`；补齐 `Batch` import。
+  - assignment/claim/public-claim/lock 状态转换使用 PostgreSQL row lock，减少并发归属覆盖风险。
+  - completed task 获取编辑锁时明确进入新 revision 周期，完成后生成下一 immutable revision；历史 export item 不会变更。
+  - `/annotations` 增加管理运营区：TaskType pool 指标、bounded ensure、Schema draft/publish、reviewer workload、分配和公共领取。
+  - `task_type:luobo` 生产验收：169 eligible；ensure 创建 4 条；`reviewer01` 完成 1 条；JSONL job `56` 有 `annotationCompletedCount=1`、`trainingDefaultIncludedCount=1`，item 固定引用 revision 1 / Schema；重编辑为 revision 2 后 item 仍为 revision 1。
+- Verification:
+  - `tests/test_annotations.py`: 7/7 passed
+  - `tests/test_data_assets.py`: 11/11 passed
+  - backend compileall, frontend `npm run build`, `git diff --check` passed
+  - Compose backend/frontend healthy，alembic `20260720_0028 (head)`
+  - browser manager panel rendered; its dataset/accounts/annotations requests returned HTTP 200 and no console errors
+- Next step: T16 eligibility invalidation/recovery hook + persistent annotation rollups, then T13 VLM queue.
+
 ## 2026-07-20 10:25 CST — JSONL 数据包导出完成
 
 - Type: feature

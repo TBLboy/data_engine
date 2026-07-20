@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.security import verify_session_token
-from app.models import AnnotationTask, Episode, SubGoalSchema, User
+from app.models import AnnotationTask, Batch, Episode, SubGoalSchema, User
 from app.models import SubGoalDefinition
 from app.schemas.annotation import (
     AnnotationAssignmentRequest,
@@ -29,6 +29,7 @@ from app.services.annotation import (
     ensure_tasks_for_episodes,
     format_time,
     get_task,
+    get_task_for_update,
     publish_schema,
     release_lock,
     save_draft,
@@ -137,7 +138,8 @@ def annotation_eligibility(
     require_roles(current_user, 'admin', 'qc_manager', 'reviewer', 'viewer')
     query = active_qualified_episode_query(db)
     if task_type_id:
-        query = query.join(Episode.batch).filter(Episode.batch.has(task_type_id=task_type_id))
+        # active_qualified_episode_query already joins Batch; do not join batches again.
+        query = query.filter(Batch.task_type_id == task_type_id)
     total = query.count()
     task_count = db.query(AnnotationTask).filter(AnnotationTask.episode_id.in_(query.with_entities(Episode.id))).count() if total else 0
     return {'eligibleCount': total, 'taskCount': task_count, 'unannotatedCount': total - task_count}
@@ -162,7 +164,8 @@ def ensure_annotation_tasks(
     require_roles(current_user, 'admin', 'qc_manager')
     query = active_qualified_episode_query(db)
     if payload.taskTypeId:
-        query = query.join(Episode.batch).filter(Episode.batch.has(task_type_id=payload.taskTypeId))
+        # active_qualified_episode_query already joins Batch; filter on that join.
+        query = query.filter(Batch.task_type_id == payload.taskTypeId)
     if payload.episodeIds:
         query = query.filter(Episode.id.in_(payload.episodeIds))
     query = query.order_by(Episode.id.asc()).limit(payload.limit)
@@ -181,7 +184,7 @@ def set_public_claim(
     current_user: User = Depends(get_current_user),
 ):
     require_roles(current_user, 'admin', 'qc_manager')
-    task = get_task(db, task_id)
+    task = get_task_for_update(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail='标注任务不存在')
     if task.work_status != 'pending' or task.assigned_to:
@@ -247,16 +250,17 @@ def assign_annotation_task(
     current_user: User = Depends(get_current_user),
 ):
     require_roles(current_user, 'admin', 'qc_manager')
-    task = get_task(db, task_id)
+    task = get_task_for_update(db, task_id)
     reviewer = db.query(User).filter(User.id == payload.reviewerId, User.is_active == 1, User.role == 'reviewer').first()
     if not task:
         raise HTTPException(status_code=404, detail='标注任务不存在')
     if not reviewer:
         raise HTTPException(status_code=400, detail='目标用户不是有效 reviewer')
-    if task.work_status != 'pending':
-        raise HTTPException(status_code=409, detail='只有 pending 标注任务可以分配')
+    if task.work_status not in {'pending', 'assigned'}:
+        raise HTTPException(status_code=409, detail='只有 pending 或 assigned 标注任务可以分配')
     if task.lock_owner and task.lock_expires_at and task.lock_expires_at > utcnow():
         raise HTTPException(status_code=409, detail='任务存在有效编辑锁')
+    previous_reviewer_id = task.assigned_to
     task.assigned_to = reviewer.id
     task.assigned_by = current_user.id
     task.assigned_at = utcnow()
@@ -264,7 +268,13 @@ def assign_annotation_task(
     task.public_claim_enabled = False
     task.work_status = 'assigned'
     task.row_version += 1
-    audit(db, user=current_user, action='分配标注任务', target=task.id, detail=f'reviewer={reviewer.id}')
+    audit(
+        db,
+        user=current_user,
+        action='分配标注任务',
+        target=task.id,
+        detail=f'previous_reviewer={previous_reviewer_id or ""} reviewer={reviewer.id} row_version={task.row_version}',
+    )
     db.commit()
     return serialize_task(get_task(db, task.id) or task)
 
@@ -276,7 +286,7 @@ def claim_annotation_task(
     current_user: User = Depends(get_current_user),
 ):
     require_roles(current_user, 'reviewer')
-    task = get_task(db, task_id)
+    task = get_task_for_update(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail='标注任务不存在')
     if task.work_status != 'pending' or task.assigned_to or not task.public_claim_enabled:
@@ -298,12 +308,15 @@ def lock_annotation_task(
     current_user: User = Depends(get_current_user),
 ):
     require_roles(current_user, 'admin', 'qc_manager', 'reviewer')
-    task = get_task(db, task_id)
+    task = get_task_for_update(db, task_id)
     if not task:
         raise HTTPException(status_code=404, detail='标注任务不存在')
     try:
+        was_completed = task.work_status == 'completed'
         acquire_lock(db, task, current_user)
         audit(db, user=current_user, action='获取标注编辑锁', target=task.id)
+        if was_completed:
+            audit(db, user=current_user, action='重新编辑已完成标注', target=task.id, detail=f'revision={task.current_revision_no}')
         db.commit()
     except Exception as exc:
         db.rollback()

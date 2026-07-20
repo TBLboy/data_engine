@@ -218,6 +218,20 @@ export interface AnnotationTaskListPayload {
   total: number
 }
 
+export interface AnnotationEligibility {
+  eligibleCount: number
+  taskCount: number
+  unannotatedCount: number
+}
+
+export interface AnnotationStatistics {
+  total: number
+  completed: number
+  completionRate: number
+  byStatus: Record<string, number>
+  byReviewer: Array<{ reviewerId: string; count: number }>
+}
+
 export interface DispatchPreview {
   batchId: string
   candidateEpisodeCount: number

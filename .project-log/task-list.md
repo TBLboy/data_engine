@@ -1,69 +1,78 @@
-# Task List — 统一质检合格数据导出落地
+# Task List — 生产落地验收与剩余缺口
 
 ## Last Updated
 
-- 2026-07-20 10:11 CST
+- 2026-07-20 11:10 CST
 
-## 进度总览（对照业务逻辑 vs 代码）
+## 目标
 
-### 已完成
+确保当前已确认业务逻辑在代码与运行环境中完整落地：
+QC → 标注 → 统一 QUALIFIED 导出（含标注增强与 JSONL 包）→ 真实 PostgreSQL/Compose 验收。
+
+## 已完成
 
 | 能力 | 状态 | 证据 |
 |---|---|---|
-| Annotation V1 模型 / migration / API / 工作台 | done | commit `6c47362` |
-| 统一导出业务逻辑文档 | done | `.project-log/business-logic/*` + commit `7c32a91` |
-| task-list 建立与备份 commit | done | `7c32a91` |
-| 统一 QUALIFIED 导出门禁（未标注不阻断） | done | `DatasetExportService` 重构 |
-| 导出行标注增强字段 | done | `annotationCompleted` / status / revision / payload |
-| 路由语义对齐统一导出 | done | `/dataset/tasks/{id}/exports` |
-| 前端卡片「质检合格 / 完成标注」 | done | `dataset-management.vue` |
-| 前端表格「是否完成标注」列 | done | Episode 列表 API + UI |
-| `dataset_export_items` ORM + migration | done | `20260720_0028` + `DatasetExportItem` |
-| 创建 export job 时写入 item 快照 | done | `record_export(..., rows=)` |
+| Annotation V1 源码 | done | `6c47362` |
+| 统一 QUALIFIED 导出 + item 快照 | done | `11b33bb` |
+| JSONL 数据包导出 | done | `14b3130` |
+| Compose 重建 + migration head | done | alembic `20260720_0028` |
+| 真实 HTTP 导出验收 | done | admin 登录导出 luobo 169 条 JSONL，items=169 |
+| Ollama qwen 真实验收 | done | `/api/ai/explain` source=llm model=`qwen3-vl-thinking:32b` |
+| 前端新文案上线 | done | 质检合格/完成标注、JSONL 包、是否完成标注 |
 
-### 未完成
+## 仍开放缺口
 
-| 能力 | 状态 |
-|---|---|
-| JSONL 数据包（manifest / episodes / schemas） | done |
-| 历史导出不可变回归测试（新 revision 后旧 item 不变） | done |
-| 前端 build / 全量测试验收本批 | done |
-| 正式 commit 本批实现 | done (`11b33bb`) |
-| Compose / PostgreSQL / MinIO 真实导出验收 | todo |
-| Schema 管理 / 批量 ensure / 分配 workload 运营面 | todo |
+| 缺口 | 优先级 | 说明 |
+|---|---|---|
+| Schema 管理 / 批量 ensure / 分配 workload 运营面 | done | 生产 Schema/ensure/分配/reviewer 完成/JSONL snapshot 已真实验收 |
+| VLM annotation-worker 持久化队列 | P2 | 业务已定，代码未完整落地 |
+| 标注任务在生产数据中仍为 0 | P1 | 需运营面批量 ensure 或夜间流水线 |
+| Docker 内默认 `OLLAMA_BASE_URL=localhost` | P2 | 运行时 GeneralConfig 已指向可用 host；默认 env 仍误导 |
+| 导出 history 的 filters 含全量 snapshot | P2 | items 表已是权威；filters 可能膨胀 |
+| 标注资格失效未接入变更流水线 | P1 | `invalidate_ineligible_tasks` 已有实现但尚未在 QC/扫描状态变化后触发 |
+| 标注统计未使用持久化 rollup | P2 | 当前 statistics 是 task 查询；正式 `task_annotation_rollups` 仍未落地 |
 
 ---
 
 ## 任务表
 
-状态：`todo` | `in_progress` | `done` | `blocked` | `cancelled` | `partial`
-
-| ID | 任务 | 优先级 | 状态 | 依赖 | 验收标准 |
-|---|---|---|---|---|---|
-| T00 | 创建 task-list 并对齐业务逻辑与代码进度 | P0 | done | — | 本文档已写清完成/错误/未完成项 |
-| T01 | commit 备份：业务逻辑收口 + task-list + 当前 WIP 现场 | P0 | done | T00 | commit `7c32a91` |
-| T02 | 重构导出服务为统一 QUALIFIED 范围 | P0 | done | T01 | 全部 active-scope QUALIFIED 可导出；未标注不阻断 |
-| T03 | 导出行增加标注增强字段 | P0 | done | T02 | 含 completed/status/training_default_included/revision/Schema/payload |
-| T04 | 扩展 `DatasetExportJob` + 新增 `dataset_export_items` | P0 | done | T02 | migration + ORM；创建 job 时事务内冻结 item 快照 |
-| T05 | 导出产物：CSV 审计 + JSONL 数据包 | P1 | done | T03,T04 | CSV/JSON/JSONL zip 均支持；包内含 manifest/episodes/schemas |
-| T06 | 路由/权限/错误语义对齐统一导出 | P0 | done | T02 | 无“必须完成标注才导出”的阻断语义 |
-| T07 | 前端卡片与表格：质检合格/完成标注 + 是否完成标注列 | P0 | done | T03,T06 | 卡片双计数；表格有标注列；错误 alert 已移除 |
-| T08 | 回归测试覆盖统一导出与快照不可变 | P0 | done | T03,T04 | 无标注/完成/新 revision 后历史 item 不变已覆盖 |
-| T09 | 后端 compile + 测试 + 前端 build 验收本批 | P0 | done | T08 | annotation 6/6、data-assets 11/11、compile、frontend build 通过 |
-| T10 | commit 正式版本：统一导出落地 | P0 | done | T09 | commit `11b33bb` |
-| T11 | Compose 重建 + PostgreSQL migration + 真实导出验收 | P1 | todo | T10 | 运行容器 head 迁移；真实导出下载与历史可查 |
-| T12 | Schema 管理 / 批量 ensure / 分配 workload 运营面 | P2 | todo | T10 | 生产运营可独立完成标注闭环 |
-
----
+| ID | 任务 | 优先级 | 状态 | 验收标准 |
+|---|---|---|---|---|
+| T11 | Compose 重建 + PostgreSQL migration + 真实导出验收 | P0 | done | head=`20260720_0028`；真实导出/历史/items 可查 |
+| T11a | 重建 backend 并升级 migration | P0 | done | `20260717_0026 → 20260720_0028` |
+| T11b | 重建 frontend / worker / coordinator | P0 | done | 服务 healthy；前端含新导出 UI |
+| T11c | 真实 HTTP 验收 annotation + export API | P0 | done | statistics/summary/export/history/items |
+| T11d | Ollama qwen32b 真实验收 | P0 | done | explain source=llm，非 fallback |
+| T12 | Schema 管理 / 批量 ensure / 分配 workload 运营面 | P1 | done | 管理 UI + 路由修复；真实 ensure 4 条、reviewer 完成 1 条、JSONL/immutable item snapshot 验收完成 |
+| T13 | VLM annotation-worker 持久化队列落地 | P2 | todo | 对齐 final-decisions worker 规则 |
+| T14 | 修正 Docker 默认 Ollama 可达地址/文档 | P2 | todo | 容器默认可达 host Ollama 或文档明确依赖 GeneralConfig |
+| T15 | 导出 history 瘦身：filters 仅条件，明细只看 items | P2 | todo | 大任务导出历史 API 不返回上万 snapshot |
+| T16 | 标注资格失效/恢复接入 + annotation rollup | P1 | todo | QC/扫描改变资格时失效或恢复 task；首页统计使用持久化 task annotation rollup |
 
 ## 当前焦点
 
-1. commit T05 JSONL 数据包
-2. 后续 **T11** Compose / PostgreSQL 真实验收
-3. 后续 **T12** 运营面
+1. **T16** 标注资格失效/恢复与统计投影，补齐已确认生命周期规则
+2. 其后 T13/T14/T15
+
+## 本轮进行中（2026-07-20）
+
+- 修复 `GET /api/annotations/eligible?task_type_id=...` 与 `POST /api/annotations/tasks/ensure` 的重复 `Batch` join；PostgreSQL 不再报 `DuplicateAlias`。
+- 增加 manager 运营面：TaskType 资格/积压/完成率、补漏 ensure、Schema draft/publish、reviewer workload、分配与公共领取控制。
+- 生产真实闭环：`task_type:luobo` 169 个可标注 Episode；ensure 创建 4 条任务；`reviewer01` 完成 1 条，JSONL manifest 显示 `annotationCompletedCount=1`，导出 item 固定指向 revision 1；重编辑后 revision 2 不影响历史 item。
+
+## 本轮验收证据摘要
+
+```text
+alembic current: 20260720_0028 (head)
+OpenAPI: /api/annotations/* + /api/dataset/tasks/{id}/exports
+真实导出: task_type:luobo 169 QUALIFIED -> zip(manifest/episodes/schemas), items=169
+annotationCompletedCount=0 (尚无生产 annotation tasks)
+AI explain: source=llm model=qwen3-vl-thinking:32b fallbackUsed=false
+```
 
 ## 规则
 
-- 一次只推进一个 task 到完成态（可在同批内连做，但状态要逐项更新）。
-- 任务范围变化：先改本表，再改代码。
-- 每完成一项：更新本表状态 + `progress.md` / `current-session.md`。
+- 完成一批后重新核对代码与业务逻辑缺口
+- 先改 task-list，再改代码
+- 每完成一项更新 progress / current-session

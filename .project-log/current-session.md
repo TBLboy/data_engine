@@ -2,11 +2,11 @@
 
 ## Last Updated
 
-- 2026-07-20 10:25 CST（JSONL 数据包完成，准备 commit）
+- 2026-07-20 11:10 CST（T12 运营面与真实标注闭环完成）
 
 ## Current Objective
 
-- 统一导出主链路与 JSONL 数据包已完成；下一循环做 Compose/PostgreSQL 真实验收与运营面。
+- 已确认业务逻辑的运行环境落地。统一导出、JSONL 和标注运营面已在 PostgreSQL Compose 真实验收；下一步接入标注资格失效/恢复与持久化统计投影。
 
 ## Current Status
 
@@ -127,3 +127,18 @@
 - The dataset page must show `质检合格 / 完成标注` and row-level annotation status. One export must include every active-scope `QUALIFIED` Episode; completed annotations attach revision/Schema/payload, incomplete annotations remain null.
 - Implement `DatasetExportJob` + `dataset_export_items` snapshots before serving production training exports. JSONL package is the training format, CSV is audit-only, and `uncertain` is completed but default-excluded from training.
 - Real PostgreSQL/MinIO and browser acceptance remain required before calling the platform production-ready; the running Compose stack currently uses the pre-annotation backend image and the local Playwright Chrome binary is unavailable.
+
+## T12 Annotation Operations Acceptance (2026-07-20)
+
+- Fixed task-type eligibility/ensure queries: `active_qualified_episode_query()` already joins `Batch`; filtering now reuses that join and no longer creates PostgreSQL `DuplicateAlias` failures.
+- Added PostgreSQL row locks around annotation claim, assignment, public-claim changes and lock acquisition. Reassigning is allowed only for `pending`/`assigned` tasks without an active editor lock; audit includes old/new reviewer and row version.
+- Re-editing an already completed task now explicitly transitions it into a new pending revision cycle on lock acquisition and records a dedicated audit event. Completion creates the next immutable revision.
+- Added manager operations to `/annotations`: active QUALIFIED eligibility, task backlog/completion/workload, bounded ensure, Schema draft/publish lifecycle, reviewer assignment and public-claim toggles. Reviewer editor flow remains unchanged.
+- Real Compose/PostgreSQL acceptance using `task_type:luobo`:
+  - eligibility `169`, initial task count `0`; published Schema `sgs_f09b34db55834e9db2233b645378e333`.
+  - manager ensure created three initial tasks plus one 515-frame task for complete-path validation.
+  - assigned the validation task to `reviewer01`; lock, draft, required occurrences and completion produced revision `1`.
+  - JSONL export job `56`: `episodeCount=169`, `annotationCompletedCount=1`, `trainingDefaultIncludedCount=1`, and its `dataset_export_items` row stores the task/revision/schema snapshot.
+  - reviewer re-edit produced revision `2`; export job `56` item remains revision `1`, proving historical export immutability.
+- Verification: `tests/test_annotations.py` 7/7, `tests/test_data_assets.py` 11/11, backend compileall, `npm run build`, `git diff --check`, Compose backend/frontend healthy, and browser `/annotations` manager panel/API requests all passed.
+- Remaining formal gaps: eligibility invalidation is not invoked after QC/scan changes; annotation statistics are not yet persistent rollups; VLM generation queue is intentionally deferred to T13.
