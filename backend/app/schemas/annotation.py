@@ -27,6 +27,13 @@ class AnnotationTaskEnsureRequest(BaseModel):
     limit: int = Field(default=100, ge=1, le=1000)
 
 
+class AnnotationGenerationEnqueueRequest(BaseModel):
+    taskIds: list[str] = Field(default_factory=list)
+    taskTypeId: str | None = None
+    limit: int = Field(default=50, ge=1, le=500)
+    priority: int = Field(default=50, ge=1, le=1000)
+
+
 class AnnotationAssignmentRequest(BaseModel):
     reviewerId: str
     note: str = ''

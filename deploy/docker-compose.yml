@@ -14,7 +14,11 @@ services:
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       MINIO_DEFAULT_BUCKET: ${MINIO_DEFAULT_BUCKET:-yaocao}
       AI_EXPLAIN_ENABLED: ${AI_EXPLAIN_ENABLED:-true}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
+      # Containers cannot reach host Ollama via localhost. Prefer the Docker
+      # bridge gateway; override in deploy/.env when the host IP differs.
+      # Runtime GeneralConfig remains authoritative when set in the UI.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://172.17.0.1:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3-vl-thinking:32b}
       AI_EXPLAIN_TIMEOUT_SECONDS: ${AI_EXPLAIN_TIMEOUT_SECONDS:-120}
     depends_on:
       db:
@@ -87,6 +91,66 @@ services:
       SCAN_WORKER_HEARTBEAT_SECONDS: ${SCAN_WORKER_HEARTBEAT_SECONDS:-10}
       SCAN_SHARD_TIMEOUT_SECONDS: ${SCAN_SHARD_TIMEOUT_SECONDS:-600}
       SCAN_MISSING_CONFIRMATION_SECONDS: ${SCAN_MISSING_CONFIRMATION_SECONDS:-600}
+    depends_on:
+      backend:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: 5
+
+  annotation-coordinator:
+    build:
+      context: ../backend
+    container_name: robot-qc-annotation-coordinator
+    command: python -m app.services.annotation_coordinator
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg://robot_qc:${POSTGRES_PASSWORD}@db:5432/robot_qc
+      ANNOTATION_COORDINATOR_INTERVAL_SECONDS: ${ANNOTATION_COORDINATOR_INTERVAL_SECONDS:-60}
+      ANNOTATION_WORKER_LEASE_SECONDS: ${ANNOTATION_WORKER_LEASE_SECONDS:-300}
+      # Auto discovery window (Asia/Shanghai). Worker always drains already-queued jobs.
+      ANNOTATION_DISCOVERY_ENABLED: ${ANNOTATION_DISCOVERY_ENABLED:-true}
+      ANNOTATION_DISCOVERY_TIMEZONE: ${ANNOTATION_DISCOVERY_TIMEZONE:-Asia/Shanghai}
+      ANNOTATION_DISCOVERY_WINDOW_START: ${ANNOTATION_DISCOVERY_WINDOW_START:-00:00}
+      ANNOTATION_DISCOVERY_WINDOW_END: ${ANNOTATION_DISCOVERY_WINDOW_END:-06:00}
+      ANNOTATION_DISCOVERY_DAILY_LIMIT: ${ANNOTATION_DISCOVERY_DAILY_LIMIT:-100}
+    depends_on:
+      backend:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: 5
+
+  annotation-worker:
+    build:
+      context: ../backend
+    command: python -m app.services.annotation_worker
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg://robot_qc:${POSTGRES_PASSWORD}@db:5432/robot_qc
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_SECURE: ${MINIO_SECURE:-false}
+      MINIO_REGION: ${MINIO_REGION:-}
+      MINIO_DEFAULT_BUCKET: ${MINIO_DEFAULT_BUCKET:-yaocao}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://172.17.0.1:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3-vl-thinking:32b}
+      ANNOTATION_WORKER_POLL_SECONDS: ${ANNOTATION_WORKER_POLL_SECONDS:-2.0}
+      ANNOTATION_WORKER_LEASE_SECONDS: ${ANNOTATION_WORKER_LEASE_SECONDS:-300}
+      ANNOTATION_WORKER_HEARTBEAT_SECONDS: ${ANNOTATION_WORKER_HEARTBEAT_SECONDS:-15}
+      ANNOTATION_JOB_TIMEOUT_SECONDS: ${ANNOTATION_JOB_TIMEOUT_SECONDS:-900}
+      ANNOTATION_VLM_TIMEOUT_SECONDS: ${ANNOTATION_VLM_TIMEOUT_SECONDS:-300}
     depends_on:
       backend:
         condition: service_healthy

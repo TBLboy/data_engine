@@ -120,6 +120,41 @@ class AnnotationTask(Base):
     revisions: Mapped[list['AnnotationRevision']] = relationship(
         'AnnotationRevision', back_populates='task', order_by='AnnotationRevision.revision_no'
     )
+    generation_jobs: Mapped[list['AnnotationGenerationJob']] = relationship(
+        'AnnotationGenerationJob', back_populates='task', order_by='AnnotationGenerationJob.created_at.desc()'
+    )
+
+
+class TaskAnnotationRollup(Base):
+    __tablename__ = 'task_annotation_rollups'
+
+    task_type_id: Mapped[str] = mapped_column(ForeignKey('task_types.id'), primary_key=True)
+    eligible_episode_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    unannotated_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    active_completed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pending_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    assigned_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    in_progress_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    completed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    invalidated_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    source_task_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    calculation_version: Mapped[str] = mapped_column(String(64), default='task-annotation-rollup-v1', nullable=False)
+    refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+
+    task_type = relationship('TaskType')
+
+
+class ReviewerAnnotationRollup(Base):
+    __tablename__ = 'reviewer_annotation_rollups'
+
+    task_type_id: Mapped[str] = mapped_column(ForeignKey('task_types.id'), primary_key=True)
+    reviewer_id: Mapped[str] = mapped_column(ForeignKey('users.id'), primary_key=True)
+    task_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+
+    task_type = relationship('TaskType')
+    reviewer = relationship('User')
 
 
 class EpisodeAnnotation(Base):
@@ -199,3 +234,69 @@ class AnnotationRevision(Base):
 
     task: Mapped[AnnotationTask] = relationship('AnnotationTask', back_populates='revisions')
     annotation: Mapped[EpisodeAnnotation] = relationship('EpisodeAnnotation')
+
+
+class AnnotationGenerationJob(Base):
+    __tablename__ = 'annotation_generation_jobs'
+    __table_args__ = (
+        Index('ix_annotation_generation_jobs_claim', 'status', 'next_retry_at', 'priority', 'id'),
+        Index('ix_annotation_generation_jobs_task_id', 'annotation_task_id'),
+        Index('ix_annotation_generation_jobs_request_group', 'request_group_id'),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: _new_id('vlm'))
+    annotation_task_id: Mapped[str] = mapped_column(ForeignKey('annotation_tasks.id'), nullable=False)
+    request_group_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    job_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default='queued', nullable=False)
+    requested_draft_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    task_description_snapshot: Mapped[str] = mapped_column(Text, default='', nullable=False)
+    sub_goal_schema_id: Mapped[str] = mapped_column(ForeignKey('sub_goal_schemas.id'), nullable=False)
+    sub_goal_schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    sub_goal_schema_content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    lease_owner: Mapped[str] = mapped_column(String(128), default='', nullable=False)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    requested_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    error_detail: Mapped[str] = mapped_column(Text, default='', nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), default=_utcnow, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+
+    task = relationship('AnnotationTask', back_populates='generation_jobs')
+    schema = relationship('SubGoalSchema')
+    ai_runs: Mapped[list['AnnotationAiRun']] = relationship(
+        'AnnotationAiRun', back_populates='generation_job', order_by='AnnotationAiRun.attempt_no'
+    )
+
+
+class AnnotationAiRun(Base):
+    __tablename__ = 'annotation_ai_runs'
+    __table_args__ = (
+        Index('ix_annotation_ai_runs_generation_job_id', 'annotation_generation_job_id'),
+        Index('ix_annotation_ai_runs_task_id', 'annotation_task_id'),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    annotation_task_id: Mapped[str] = mapped_column(ForeignKey('annotation_tasks.id'), nullable=False)
+    annotation_generation_job_id: Mapped[str] = mapped_column(ForeignKey('annotation_generation_jobs.id'), nullable=False)
+    attempt_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    model_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(64), default='', nullable=False)
+    frame_sampler_version: Mapped[str] = mapped_column(String(64), default='', nullable=False)
+    input_summary_json: Mapped[str] = mapped_column(Text, default='{}', nullable=False)
+    raw_response_text: Mapped[str] = mapped_column(Text, default='', nullable=False)
+    parsed_response_json: Mapped[str] = mapped_column(Text, default='{}', nullable=False)
+    run_status: Mapped[str] = mapped_column(String(32), default='running', nullable=False)
+    error_detail: Mapped[str] = mapped_column(Text, default='', nullable=False)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), default=_utcnow, nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+
+    task = relationship('AnnotationTask')
+    generation_job = relationship('AnnotationGenerationJob', back_populates='ai_runs')

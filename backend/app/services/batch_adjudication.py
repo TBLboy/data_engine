@@ -1,10 +1,12 @@
 """Batch adjudication service — determines batch pass/fail from QC results."""
 
 from datetime import datetime
+import uuid
 from sqlalchemy.orm import Session
 
 from app.models import Batch, BatchDecisionLog, Episode, GeneralConfig, AuditEvent
 from app.services.data_assets import enqueue_batch_asset_recompute
+from app.services.annotation import reconcile_annotation_eligibility
 
 
 def adjudicate_batch(db: Session, batch_id: str, actor: str = 'system') -> BatchDecisionLog | None:
@@ -22,6 +24,7 @@ def adjudicate_batch(db: Session, batch_id: str, actor: str = 'system') -> Batch
         batch.batch_decision = 'PENDING'
         batch.batch_decision_reason = 'empty batch'
         _update_all_episodes_pending(db, batch_id)
+        reconcile_annotation_eligibility(db, episode_ids={episode.id for episode in episodes}, reason='batch_not_adjudicated')
         enqueue_batch_asset_recompute(db, batch_id, reason='episode_qc_changed')
         db.commit()
         return None
@@ -40,6 +43,7 @@ def adjudicate_batch(db: Session, batch_id: str, actor: str = 'system') -> Batch
         batch.manual_pass_count = manual_pass_count
         batch.manual_fail_count = manual_fail_count
         enqueue_batch_asset_recompute(db, batch_id, reason='episode_qc_changed')
+        reconcile_annotation_eligibility(db, episode_ids={episode.id for episode in episodes}, reason='batch_not_adjudicated')
         db.commit()
         return None
 
@@ -84,9 +88,8 @@ def adjudicate_batch(db: Session, batch_id: str, actor: str = 'system') -> Batch
     db.add(log)
     db.flush()
 
-    ts = int(datetime.utcnow().timestamp())
     db.add(AuditEvent(
-        id=f'audit_batch_{batch_id}_{ts}',
+        id=f'audit_batch_{batch_id}_{uuid.uuid4().hex}',
         operator=actor,
         action='批次判定',
         target=batch_id,
@@ -128,6 +131,7 @@ def adjudicate_batch(db: Session, batch_id: str, actor: str = 'system') -> Batch
         episode.batch_decision_log_id = log.id
 
     enqueue_batch_asset_recompute(db, batch_id, reason='episode_qc_changed')
+    reconcile_annotation_eligibility(db, episode_ids={episode.id for episode in episodes}, reason='batch_adjudicated')
     db.commit()
     return log
 

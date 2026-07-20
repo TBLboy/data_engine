@@ -667,6 +667,56 @@ export async function setAnnotationPublicClaim(taskId: string, enabled: boolean)
   })
 }
 
+export interface AnnotationGenerationJobQuery {
+  page?: number
+  pageSize?: number
+  status?: string
+  taskId?: string
+  taskTypeId?: string
+}
+
+export async function fetchAnnotationGenerationJobs(query: AnnotationGenerationJobQuery = {}) {
+  const params = new URLSearchParams()
+  if (query.page) params.set('page', String(query.page))
+  if (query.pageSize) params.set('page_size', String(query.pageSize))
+  if (query.status) params.set('status', query.status)
+  if (query.taskId) params.set('task_id', query.taskId)
+  if (query.taskTypeId) params.set('task_type_id', query.taskTypeId)
+  const suffix = params.size ? `?${params.toString()}` : ''
+  return request<import('../types/qc').AnnotationGenerationJobListPayload>(`/annotations/generation-jobs${suffix}`)
+}
+
+export async function enqueueAnnotationGenerationJobs(payload: {
+  taskIds?: string[]
+  taskTypeId?: string
+  limit?: number
+  priority?: number
+}) {
+  return request<{
+    requestGroupId: string
+    createdCount: number
+    createdJobIds: string[]
+    skipped: Array<{ taskId: string; reason: string }>
+  }>('/annotations/generation-jobs/enqueue', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function cancelAnnotationGenerationJob(jobId: string) {
+  return request<import('../types/qc').AnnotationGenerationJob>(
+    `/annotations/generation-jobs/${encodeURIComponent(jobId)}/cancel`,
+    { method: 'POST' },
+  )
+}
+
+export async function retryAnnotationGenerationJob(jobId: string) {
+  return request<import('../types/qc').AnnotationGenerationJob>(
+    `/annotations/generation-jobs/${encodeURIComponent(jobId)}/retry`,
+    { method: 'POST' },
+  )
+}
+
 export async function refreshManualQcMedia(episodeId: string, payload: ManualQcMediaRefreshRequest) {
   return request<ManualQcMediaRefreshResponse>(`/episodes/${episodeId}/media/refresh`, {
     method: 'POST',

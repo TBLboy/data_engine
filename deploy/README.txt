@@ -33,11 +33,25 @@
    MINIO_ENDPOINT=<公司内网 MinIO 地址:端口>
    MINIO_ACCESS_KEY=<MinIO Access Key>
    MINIO_SECRET_KEY=<MinIO Secret Key>
-   MINIO_DEFAULT_BUCKET=yaocao
-   FRONTEND_ORIGIN=http://localhost:8080
-   SESSION_COOKIE_SECURE=false
-   ```
-   设置权限: chmod 600 deploy/.env
+    MINIO_DEFAULT_BUCKET=yaocao
+    FRONTEND_ORIGIN=http://localhost:8080
+    SESSION_COOKIE_SECURE=false
+    # Optional: host Ollama reachable from containers (not localhost).
+    # Default in docker-compose is http://172.17.0.1:11434 and qwen3-vl-thinking:32b.
+    # OLLAMA_BASE_URL=http://172.17.0.1:11434
+    # OLLAMA_MODEL=qwen3-vl-thinking:32b
+    # Auto VLM discovery (annotation-coordinator). Worker always drains queue.
+    # ANNOTATION_DISCOVERY_ENABLED=true
+    # ANNOTATION_DISCOVERY_TIMEZONE=Asia/Shanghai
+    # ANNOTATION_DISCOVERY_WINDOW_START=00:00
+    # ANNOTATION_DISCOVERY_WINDOW_END=06:00
+    # ANNOTATION_DISCOVERY_DAILY_LIMIT=100
+    ```
+    设置权限: chmod 600 deploy/.env
+
+    说明：AI explain/chat 优先使用设置页 GeneralConfig（ai_model_host/port/name）。
+    若库中尚未配置，则回退到 OLLAMA_BASE_URL / OLLAMA_MODEL。容器内不要使用 localhost。
+    标注自动入队默认仅在北京时间 00:00–06:00 发现新任务，且受每日上限约束；窗口外 worker 仍处理已入队 job，手动 enqueue 不受窗口限制。
 
 ## 第二步：构建前端
 
@@ -218,13 +232,14 @@ After=network.target
 [Service]
 Type=simple
 User=<你的用户名>
-Environment="OLLAMA_MODELS=/home/<用户>/Project/models/qwen2.5"
+Environment="OLLAMA_MODELS=/home/<用户>/Project/models/Qwen3-VL-32B-Thinking"
 Environment="OLLAMA_HOST=0.0.0.0:11434"
 Environment="OLLAMA_KEEP_ALIVE=8760h"
 Environment="OLLAMA_NUM_PARALLEL=1"
 Environment="OLLAMA_CONTEXT_LENGTH=4096"
 ExecStart=/home/<用户>/.local/bin/ollama serve
-ExecStartPost=/bin/bash -c 'sleep 5 && /home/<用户>/.local/bin/ollama run <模型名> "" 2>/dev/null; echo "model warmed"'
+# 启动后确保 vision 模型 (weights + mmproj) 已注册并预热；也可用 scripts/start_ollama.sh ensure-model
+ExecStartPost=/bin/bash -c 'sleep 5 && /home/<用户>/Project/data_collect/software/scripts/start_ollama.sh ensure-model; /home/<用户>/.local/bin/ollama run qwen3-vl-thinking:32b "" 2>/dev/null; echo "model warmed"'
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
@@ -243,7 +258,7 @@ sudo systemctl status ollama
 
 | 变量 | 作用 | 默认值 | 推荐值 |
 |------|------|--------|--------|
-| OLLAMA_MODELS | 模型文件存储目录 | ~/.ollama/models | /home/xxx/Project/models/qwen2.5 |
+| OLLAMA_MODELS | 模型文件存储目录 | ~/.ollama/models | /home/xxx/Project/models/Qwen3-VL-32B-Thinking |
 | OLLAMA_HOST | 监听地址和端口 | 127.0.0.1:11434 | 0.0.0.0:11434 |
 | OLLAMA_KEEP_ALIVE | 模型驻留时间 | 5m | 8760h（1年，即常驻）|
 | OLLAMA_NUM_PARALLEL | 并发请求数 | 1 | 1（节省显存）|

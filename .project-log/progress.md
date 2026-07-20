@@ -1,4 +1,118 @@
-## 2026-07-18 CST — 第一阶段数据标注实施启动
+## 2026-07-20 17:55 CST — T19 night window + export re-verify
+
+- Type: coordinator policy / export acceptance
+- Status: **T19 done**; confirmed annotation+export business logic verified on real Compose/PG
+- Work:
+  - Config: `ANNOTATION_DISCOVERY_ENABLED/TIMEZONE/WINDOW_START/END/DAILY_LIMIT`
+  - `is_discovery_window_open`, daily auto-quota on `request_group_id like auto-%`
+  - Coordinator still reclaims leases always; discovery gated; manual enqueue unaffected
+  - compose + deploy README env docs; default 00:00–06:00 Asia/Shanghai, daily 100
+- Tests: `test_annotations` 16/16 (window overnight + daily limit + manual bypass)
+- Real evidence:
+  - 17:52 CST window_open=False; discover_daytime=0; coordinator log "outside configured window"
+  - export `task_type:luobo` JSONL ZIP 169; pending=168 completed=1; job 58 items=169
+  - unannotated QUALIFIED still included (no second gate)
+- Remaining optional: commit when asked; occurrence quality tuning
+
+## 2026-07-20 17:45 CST — T18c vision + 2-pass JSON acceptance
+
+- Type: backend worker / ollama vision / real acceptance
+- Status: **T18c done** — media path + mmproj + draft instruction/occurrences verified on production Compose/PG/Ollama
+- Root causes fixed this round:
+  1. `scripts/start_ollama.sh` / deploy README still pointed at `models/qwen2.5`; aligned to `Qwen3-VL-32B-Thinking` + dual-FROM mmproj registration (`ensure-model`).
+  2. Thinking VLMs dump analysis into `thinking` / prose and exhaust `num_predict` before JSON → empty drafts.
+  3. Chat path with `think=false` still often empty content; **`/api/generate` + think=false** returns clean JSON.
+- Work:
+  - Prompt `subgoal-occurrence-v6` shortened (codes/max only).
+  - `call_ollama` prefers JSON-looking content/thinking; optional `think` flag; new `call_ollama_generate`.
+  - Worker: pass1 vision chat (`num_predict=8192`, images_b64) → if unusable, pass2 text JSON convert via generate.
+  - Publish still blank-only / not `human_modified`.
+- Real evidence:
+  - task `ann_0f7529ad12b945b49387f3b1571b0f72` job `vlm_7c05f3c09da34793910ff314e5a54c2d` succeeded ~25s.
+  - `media_image_count=5`, `media_camera=cam_top.mp4`.
+  - draft: `Collect one radish.` / `采集一根萝卜` / `completed_normally` / 2 occurrences.
+  - offline `test_annotations` 15/15 OK.
+- Remaining: commit T13–T18c when user asks; optional night window; optional occurrence quality tuning.
+
+## 2026-07-20 16:15 CST — T18b MinIO media sampling + Ollama image fallback
+
+- Type: backend worker / media / real acceptance
+- Status: media pipeline implemented and verified; vision model mmproj missing so text-only fallback used
+- Work:
+  - `annotation_frame_sampler.py`: resolve preferred RGB mp4 from inventory, download MinIO, ffmpeg (via `imageio-ffmpeg` static binary) extract JPEGs at sample steps.
+  - `annotation-worker` compose env: MinIO credentials; `requirements.txt` + imageio-ffmpeg (apt ffmpeg blocked by offline Debian mirrors).
+  - `call_ollama(..., images_b64=...)`; on `image input is not supported / mmproj` auto retry text-only.
+  - Cap media frames at 6; record media_* in `annotation_ai_runs.input_summary_json`.
+  - Duration probe via ffmpeg stderr when ffprobe absent; optional episode.duration_sec fallback.
+- Real evidence:
+  - media_image_count=5, camera=cam_top.mp4, sample_steps metadata present.
+  - Ollama 500 mmproj → text-only 200 → job `succeeded`.
+  - offline tests 15/15.
+- Open: deploy vision-capable Ollama model/mmproj (T18c); commit batch when requested.
+
+## 2026-07-20 15:45 CST — T18a occurrence path + publish PG fix
+
+- Type: backend worker / real acceptance
+- Status: T18a done (Schema prompt + normalize + blank draft occurrence write); T18b media frames still open
+- Work:
+  - New `annotation_vlm.py`: `uniform-steps-v1` sample metadata, `subgoal-occurrence-v3` prompt, parse/normalize helpers.
+  - Worker publish uses Schema definitions; only blank non-`human_modified` drafts get instruction/outcome/occurrences with `source=vlm_initial`.
+  - Fixed PostgreSQL publish crash: `joinedload` + `with_for_update()` on outer joins → lock task row only.
+  - `call_ollama(..., format='json')` for structured output; reject meta/placeholder instruction text.
+  - Offline: `test_annotations` 14/14 including sample/normalize/nested JSON parse.
+- Real Compose/Ollama evidence:
+  - `annotation_ai_runs.input_summary_json` includes `frame_count` + `sample_steps` + prompt/sampler versions.
+  - Controlled publish: 2 normalized occurrences written; invented codes dropped; `human_modified` blocks overwrite.
+- Quality note: without media pixels, live model often returns empty/placeholder JSON; media sampler remains T18b.
+- Next: T18b MinIO frame sampling into Ollama; commit batch when user requests.
+
+## 2026-07-20 15:00 CST — T17 frontend VLM generation ops
+
+- Type: frontend ops
+- Status: implemented + npm build OK; frontend image rebuild
+- Work:
+  - types: `AnnotationGenerationJob*` in `qc.ts`
+  - client: `fetchAnnotationGenerationJobs` / `enqueueAnnotationGenerationJobs` / `cancel` / `retry`
+  - `/annotations` manager panel: queue table, status filter, enqueue limit, cancel/retry actions
+- Verification: `npm run build` OK; backend tests still 13/13 + 11/11
+- Next: T18 media/occurrence；explicit commit of T13–T17 batch
+
+## 2026-07-20 14:45 CST — T13 real VLM invoke + generation API
+
+- Type: acceptance / bugfix / API
+- Status: real Compose/PostgreSQL/Ollama path verified
+- Fixes:
+  - `discover_eligible_tasks` 原先错误查询 `AnnotationTask` 判断 job 是否存在，导致永不入队；改为按 `annotation_generation_jobs` 幂等创建/跳过。
+  - Path2 补齐已有 task 缺 initial job 的补漏；`enqueue_initial_job_for_task` 返回 existing queued/running/succeeded job。
+  - Worker：`call_ollama` 返回 `LlmResult`（无 `.parsed`/`.raw_text`）导致发布失败 → 本地 `_parse_vlm_payload` + 安全草稿填充。
+  - thinking 模型偶发 content 空：`llm_client` 回退读取 `message.thinking`。
+  - 失效时 queued 立即 cancel，running 写 `cancel_requested_at`；publish 前 re-check。
+- API：`GET/POST /api/annotations/generation-jobs`、`enqueue`、`cancel`、`retry`。
+- 离线：`test_annotations` 13/13（含 claim/complete/idempotent enqueue + invalidate cancel）；`test_data_assets` 11/11。
+- 真实验收证据：
+  - Ollama `192.168.20.147:11434` / `qwen3-vl-thinking:32b` HTTP 200。
+  - jobs：`succeeded>=3`，draft 写入 e.g. `Collect one radish.` / `采集一个萝卜`，`human_modified=false`。
+  - `annotation_ai_runs` 有 succeeded/failed 审计行与 duration_ms。
+  - statistics `task_type:luobo`：`total=169`（coordinator 全量 ensure）、`eligible=169`、`completed=1`。
+  - list API `status=succeeded` 返回 3 条；enqueue 幂等跳过已有 job。
+- Remaining: 夜间窗口配置/媒体抽帧/SubGoal occurrence 对齐、前端 VLM 运营面、本批未 commit。
+
+## 2026-07-20 14:20 CST — T13 VLM annotation generation queue
+
+- Type: infrastructure / backend worker
+- Status: implemented; Compose deployed; later real VLM invoke acceptance closed in 14:45 entry
+- Objective: 持久化 annotation generation 队列、worker、coordinator，与现有资格/统计/导出链路集成。
+- Work completed:
+  - Migration `20260720_0033`：`annotation_generation_jobs` + `annotation_ai_runs`；claim/retry/cancel/mutating 索引。
+  - ORM + models export in `__init__.py`；AnnotationTask.generation_jobs 关系。
+  - `annotation_generation_queue.py`：create/claim/heartbeat/complete/fail/cancel/reclaim，GLOBAL_CONCURRENCY_LIMIT=1，mutating job per-task 互斥。
+  - `annotation_worker.py`：poll → claim → execute VLM → publish result；eligibility re-check，timeout，heartbeat，cancel 检查。
+  - `annotation_coordinator.py`：periodic discovery + lease reclamation。
+  - `reconcile_annotation_eligibility()` 失效时同步 cancel pending generation jobs。
+  - Compose: `annotation-coordinator` + `annotation-worker` 服务，bridge gateway Ollama 默认。
+- Verification: SQLite/PostgreSQL alembic to `0033`；tests + Compose tables。
+
+## 2026-07-20 CST — T14/T15 acceptance closure
 
 - Type: implementation plan
 - Status: in progress
@@ -65,6 +179,42 @@
   - Compose backend/frontend healthy，alembic `20260720_0028 (head)`
   - browser manager panel rendered; its dataset/accounts/annotations requests returned HTTP 200 and no console errors
 - Next step: T16 eligibility invalidation/recovery hook + persistent annotation rollups, then T13 VLM queue.
+
+## 2026-07-20 13:45 CST — T16a/T16b Compose/PostgreSQL 真实验收
+
+- Type: lifecycle + operational projection / production acceptance
+- Status: done (code uncommitted)
+- Objective: 完成标注资格状态机与持久化运营投影，并在真实 Compose/PostgreSQL 验证导出/标注链路一致。
+- Work completed:
+  - T16a: `reconcile_annotation_eligibility()` with explicit `db.flush()` under production `autoflush=False`; batch adjudication and scan-v3 list publish call it in-transaction.
+  - Invalidation: `work_status=invalidated`, preserve prior status, clear lock/public claim, keep drafts/revisions/export history.
+  - Restoration: no new task; prior `in_progress` becomes `assigned`/`pending` without lock resurrection.
+  - T16b: `task_annotation_rollups` + `reviewer_annotation_rollups`; migrations `20260720_0029`–`20260720_0032`.
+  - Statistics API preserves historical `total`/`byStatus`/`completed`, and adds `activeTaskCount`/`eligibleEpisodeCount`/`activeCompletedCount` with coverage over active QUALIFIED scope.
+  - Frontend operations KPI and invalidated read-only UX; lock refresh 30s.
+- Verification:
+  - offline: `test_annotations.py` 11/11; `test_data_assets.py` 11/11; SQLite alembic to `20260720_0032`; compileall; `npm run build`; `git diff --check`.
+  - Compose rebuild: backend/frontend/coordinator/worker healthy; PostgreSQL head `20260720_0032`.
+  - HTTP `task_type:luobo`: statistics `{total:4, activeTaskCount:4, eligibleEpisodeCount:169, completed:1, activeCompletedCount:1, byStatus:{pending:3,completed:1}}`; eligible `{169,4,165}`; SQL fact match.
+  - PostgreSQL rollback-only lifecycle: in_progress+lock → invalidated → assigned; eligibility/stats/workload consistent; no production pollution.
+- Next step: commit this batch when requested; then T13 VLM queue / T14 Ollama defaults / T15 export history slimming.
+
+## 2026-07-20 11:25 CST — T16a 标注资格失效/恢复接入
+
+- Type: lifecycle consistency / regression fix
+- Status: implemented and tested; later accepted under 13:45 entry
+- Objective: 让已有 annotation task 在 QC 裁决或 scan-v3 active scope 变化后，严格随 canonical active-scope QUALIFIED 资格失效或恢复，不影响 immutable revision 历史。
+- Work completed:
+  - Added bounded `reconcile_annotation_eligibility()` for existing tasks, using Episode/List scope plus canonical `active_qualified_episode_query()` rather than duplicating qualification rules.
+  - Invalidated tasks retain their previous status, disable public claim, release an active editor lock, increment the CAS version and emit audit evidence. Recovered tasks restore that previous status and clear invalidation metadata; neither path creates a task or alters revisions.
+  - Integrated reconciliation into every `batch_adjudication.adjudicate_batch()` outcome after final episode status updates and before its commit.
+  - Integrated reconciliation into scan-v3 `_publish_list()` before shard completion/commit, covering List or Episode soft-deactivation and recovery performed by `business_resolver`.
+  - Replaced second-granularity batch-decision audit IDs with UUID IDs after a back-to-back adjudication regression test exposed a collision.
+- Verification:
+  - `tests/test_annotations.py`: 10/10, including empty bounded scope, direct QUALIFIED departure/recovery, and `ACCEPTED -> REJECTED -> ACCEPTED` batch adjudication.
+  - `tests/test_data_assets.py`: 11/11.
+  - backend `compileall`, frontend `npm run build`, `git diff --check` passed.
+- Next step: implement T16b persistent annotation rollup, then deploy/rebuild Compose and verify actual QC and scan scope state changes against PostgreSQL.
 
 ## 2026-07-20 10:25 CST — JSONL 数据包导出完成
 

@@ -2,11 +2,13 @@
 
 ## Last Updated
 
-- 2026-07-20 11:10 CST（T12 运营面与真实标注闭环完成）
+- 2026-07-20 17:55 CST（T19 夜间窗口 + 导出再验收；已确认业务逻辑闭环可验证）
 
 ## Current Objective
 
-- 已确认业务逻辑的运行环境落地。统一导出、JSONL 和标注运营面已在 PostgreSQL Compose 真实验收；下一步接入标注资格失效/恢复与持久化统计投影。
+- 已确认业务逻辑的运行环境落地：QC → 标注（VLM 队列/媒体/视觉/草稿）→ 统一 QUALIFIED 导出（JSONL+items，未标注仍导出）→ Compose/PG/Ollama 真实验收。
+- 夜间自动 discovery 窗口与每日上限已部署配置化。
+- 下一步：用户明确要求后 commit T13–T19；可选 occurrence 质量再校准。
 
 ## Current Status
 
@@ -142,3 +144,53 @@
   - reviewer re-edit produced revision `2`; export job `56` item remains revision `1`, proving historical export immutability.
 - Verification: `tests/test_annotations.py` 7/7, `tests/test_data_assets.py` 11/11, backend compileall, `npm run build`, `git diff --check`, Compose backend/frontend healthy, and browser `/annotations` manager panel/API requests all passed.
 - Remaining formal gaps: eligibility invalidation is not invoked after QC/scan changes; annotation statistics are not yet persistent rollups; VLM generation queue is intentionally deferred to T13.
+
+## T16a Annotation Eligibility Reconciliation (2026-07-20)
+
+- Added `reconcile_annotation_eligibility()` as the single lifecycle synchronizer for existing annotation tasks. It derives eligibility from the canonical active-scope `QUALIFIED` query, never creates tasks implicitly, and supports bounded Episode/List reconciliation under row locks.
+- Batch adjudication calls it after final-status updates in the same transaction. A task is invalidated when an Episode leaves the gate and restored to its prior work status when it re-enters; immutable revisions are preserved.
+- scan-v3 List publication calls it before the shard transaction completes, covering confirmed missing/recovered List and Episode scope changes from `business_resolver`.
+- Invalidation clears editor locks and public claim availability, records an audit event, increments CAS row version, and retains `status_before_invalidation`; restoration clears invalidation metadata and also increments the version.
+- Fixed an unrelated integration defect exposed by the recovery test: batch-decision audit IDs previously used seconds and collided when the same batch was adjudicated twice in a second. They now use UUIDs.
+- Verification: `tests/test_annotations.py` 10/10 including direct and batch-adjudication invalidation/recovery; `tests/test_data_assets.py` 11/11; backend compileall; frontend `npm run build`; `git diff --check`.
+- Remaining at that time: PostgreSQL/Compose acceptance for real scope departure/recovery and T16b persistent `task_annotation_rollups`.
+
+## T16b Annotation Rollups And Final Acceptance (2026-07-20)
+
+- Added persistent projections:
+  - `task_annotation_rollups`: per-TaskType historical status counts + active eligible/unannotated/active-completed coverage.
+  - `reviewer_annotation_rollups`: current actionable workload only (`assigned` / `in_progress`).
+- Migrations: `20260720_0029` → `20260720_0030` → `20260720_0031` → `20260720_0032` (active completion coverage).
+- Domain writes recompute affected TaskType rollups synchronously inside the same transaction (no async annotation rollup worker).
+- API semantics:
+  - `total` = all historical tasks, equals sum of `byStatus`.
+  - `activeTaskCount` = total − invalidated.
+  - `eligibleEpisodeCount` / eligibility `taskCount` / `unannotatedCount` = active QUALIFIED scope.
+  - `completed` = historical completed tasks; `activeCompletedCount` and `completionRate` use active-scope completed coverage.
+- Frontend `/annotations` shows current active task/completion coverage; invalidated tasks are read-only; lock refresh interval is 30s.
+- Compose rebuild + PostgreSQL upgrade reached `20260720_0032 (head)`.
+- Real HTTP acceptance for `task_type:luobo`:
+  - statistics: `total=4`, `activeTaskCount=4`, `eligibleEpisodeCount=169`, `completed=1`, `activeCompletedCount=1`, `completionRate≈0.0059`, `byStatus={pending:3,completed:1}`.
+  - eligible: `eligibleCount=169`, `taskCount=4`, `unannotatedCount=165`.
+  - SQL fact query matches rollup and API payload.
+- Real PostgreSQL rollback-only lifecycle acceptance:
+  - task `ann_c414ab1f3adf4419ac4a386c6a7ae1fc`: `in_progress` + reviewer lock → `invalidated` (lock cleared, revision unchanged) → `assigned` (reviewer retained, no lock).
+  - eligibility/statistics/reviewer workload updated consistently; transaction rolled back.
+- Offline gates: `test_annotations.py` 11/11, `test_data_assets.py` 11/11, fresh SQLite alembic to `0032`, backend compileall, frontend `npm run build`, `git diff --check`.
+- Remaining open gaps at that point: T13 VLM queue, T14 Docker Ollama defaults, T15 export history snapshot slimming; uncommitted workspace.
+
+## T13 VLM Queue Real Acceptance (2026-07-20)
+
+- Fixed coordinator discovery: no longer wrongly treats AnnotationTask as generation job; idempotent `enqueue_initial_job_for_task` returns existing queued/running/succeeded initial job.
+- Worker corrected for real `LlmResult` shape; JSON parse + blank-draft-only instruction fill; thinking-model empty-content fallback in `llm_client`.
+- Generation management API: list / enqueue / cancel / retry under `/api/annotations/generation-jobs*`.
+- Invalidation cancels queued jobs immediately and marks running with `cancel_requested_at`.
+- Real Compose evidence: worker POSTs Ollama `qwen3-vl-thinking:32b` → `annotation_ai_runs` → job `succeeded` → draft `Collect one radish.` / `采集一个萝卜` with `human_modified=false`.
+- Offline: `test_annotations` 13/13, `test_data_assets` 11/11.
+- Remaining after T13: frontend VLM ops UI (T17), media/occurrence alignment (T18), explicit commit of workspace.
+
+## T17 Frontend VLM Generation Ops (2026-07-20)
+
+- Wired generation queue into `/annotations` manager operations: list/filter, enqueue limit, cancel queued/running, retry failed/timeout/cancelled.
+- Client + types added; `npm run build` passes; frontend Compose image rebuilt.
+- Remaining: T18 VLM frame sampling + SubGoal occurrence alignment; explicit commit of T13–T17 batch when requested.

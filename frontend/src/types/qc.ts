@@ -226,10 +226,48 @@ export interface AnnotationEligibility {
 
 export interface AnnotationStatistics {
   total: number
+  activeTaskCount: number
+  eligibleEpisodeCount: number
   completed: number
+  activeCompletedCount: number
   completionRate: number
   byStatus: Record<string, number>
   byReviewer: Array<{ reviewerId: string; count: number }>
+}
+
+export type AnnotationGenerationJobStatus =
+  | 'queued'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'superseded'
+  | 'timeout'
+
+export interface AnnotationGenerationJob {
+  id: string
+  annotationTaskId: string
+  requestGroupId: string | null
+  jobType: string
+  status: AnnotationGenerationJobStatus
+  priority: number
+  attemptCount: number
+  maxAttempts: number
+  leaseOwner: string | null
+  requestedBy: string | null
+  errorDetail: string
+  createdAt: string | null
+  startedAt: string | null
+  finishedAt: string | null
+  nextRetryAt: string | null
+  cancelRequestedAt: string | null
+}
+
+export interface AnnotationGenerationJobListPayload {
+  items: AnnotationGenerationJob[]
+  page: number
+  pageSize: number
+  total: number
 }
 
 export interface DispatchPreview {
@@ -694,17 +732,9 @@ export interface DatasetExportJob {
     taskTypeId?: string
     batchIds?: string[]
     episodeCount?: number
-    annotationRevisionSnapshots?: Array<{
-      episode_id: string
-      annotation_task_id: string
-      annotation_revision_id: number
-      annotation_revision_no: number
-      annotation_revision_hash: string
-      annotation_schema_id: string
-      annotation_schema_version: number
-      annotation_schema_hash: string
-    }>
   }
+  annotationCompletedCount: number
+  trainingDefaultIncludedCount: number
   createdBy: string | null
   createdAt: string | null
 }

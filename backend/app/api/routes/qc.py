@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.config import BUG_REPORT_UPLOAD_DIR, get_settings
 from app.core.db import get_db
 from app.core.security import create_session_token, hash_password, verify_password, verify_session_token
-from app.models import AuditEvent, Batch, BugReport, Episode, EpisodeInventory, EpisodeObject, GeneralConfig, L3V2Config, ListRecord, QcRereviewRequest, QcReviewRevision, QcTask, ScanJob, TaskType, User
+from app.models import AuditEvent, Batch, BugReport, DatasetExportJob, Episode, EpisodeInventory, EpisodeObject, GeneralConfig, L3V2Config, ListRecord, QcRereviewRequest, QcReviewRevision, QcTask, ScanJob, TaskType, User
 from app.schemas.qc import (
     AccountListPayloadSchema,
     AccountSchema,
@@ -2263,6 +2263,20 @@ def dataset_export_history(
 ):
     from app.services.dataset_service import DatasetExportService
     return DatasetExportService.export_history(db, task_type_id)
+
+
+@router.get('/dataset/exports/{export_job_id}/items')
+def dataset_export_items(
+    export_job_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Read the immutable per-Episode facts for one historical export."""
+    from app.services.dataset_service import DatasetExportService
+    job = db.query(DatasetExportJob).filter(DatasetExportJob.id == export_job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail='导出记录不存在')
+    return {'items': DatasetExportService.export_items(db, export_job_id)}
 
 
 # ── RDDQF v1.2: 管理员任务池管理 ──

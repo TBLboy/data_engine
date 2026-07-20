@@ -17,6 +17,7 @@ from app.services.business_resolver import (
     mark_list_not_found,
     resolve_list_snapshot,
 )
+from app.services.annotation import reconcile_annotation_eligibility
 from app.services.list_snapshot import build_list_snapshot
 from app.services.minio_client import get_minio_service
 from app.services.namespace_discovery import discover_namespaces
@@ -175,6 +176,18 @@ def _publish_list(shard_id: int, worker_id: str, snapshot) -> None:
                     next_retry_at=_utcnow() + timedelta(seconds=settings.scan_missing_confirmation_seconds),
                     suffix=f'confirm-after-{shard.id}',
                 )
+        if existing_list is not None:
+            reconcile_annotation_eligibility(
+                db,
+                list_ids={existing_list.id},
+                reason='scan_source_scope_changed',
+            )
+        elif snapshot.episodes:
+            reconcile_annotation_eligibility(
+                db,
+                list_ids={resolution.list_id},
+                reason='scan_source_scope_changed',
+            )
         if not complete_shard(
             db,
             shard_id=shard.id,

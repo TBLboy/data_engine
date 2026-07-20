@@ -397,23 +397,6 @@ class DatasetExportService:
             'episodeCount': len(serialized),
             'annotationCompletedCount': completed_count,
             'trainingDefaultIncludedCount': default_training_count,
-            'annotationRevisionSnapshots': [
-                {
-                    'episode_id': item['episode_id'],
-                    'annotation_completed': item['annotation_completed'],
-                    'annotation_status': item['annotation_status'],
-                    'training_default_included': item['training_default_included'],
-                    'annotation_task_id': item['annotation_task_id'] or None,
-                    'annotation_revision_id': item['annotation_revision_id'] or None,
-                    'annotation_revision_no': item['annotation_revision_no'] or None,
-                    'annotation_revision_hash': item['annotation_revision_hash'] or None,
-                    'annotation_schema_id': item['annotation_schema_id'] or None,
-                    'annotation_schema_version': item['annotation_schema_version'] or None,
-                    'annotation_schema_hash': item['annotation_schema_hash'] or None,
-                    'task_outcome': item['task_outcome'] or None,
-                }
-                for item in serialized
-            ],
         }
 
         if fmt == 'json':
@@ -464,7 +447,6 @@ class DatasetExportService:
         rows: list[dict] | None = None,
     ) -> DatasetExportJob:
         payload = filters or {}
-        snapshots = payload.get('annotationRevisionSnapshots') or []
         job = DatasetExportJob(
             task_type_id=task_type_id,
             export_type=str(payload.get('exportType') or 'qualified_dataset'),
@@ -478,31 +460,24 @@ class DatasetExportService:
         db.add(job)
         db.flush()
 
-        row_by_episode = {item.get('episode_id'): item for item in (rows or [])}
-        for snapshot in snapshots:
-            episode_id = snapshot.get('episode_id')
-            episode_snapshot = row_by_episode.get(episode_id) or {
-                'episode_id': episode_id,
-                'annotation_completed': snapshot.get('annotation_completed'),
-                'annotation_status': snapshot.get('annotation_status'),
-                'training_default_included': snapshot.get('training_default_included'),
-            }
+        for episode_snapshot in rows or []:
+            episode_id = episode_snapshot.get('episode_id')
             db.add(DatasetExportItem(
                 export_job_id=job.id,
                 episode_id=str(episode_id or ''),
                 inclusion_status='included',
                 episode_snapshot_json=json.dumps(episode_snapshot, ensure_ascii=False, sort_keys=True),
-                annotation_completed=bool(snapshot.get('annotation_completed')),
-                annotation_status=str(snapshot.get('annotation_status') or 'not_created'),
-                training_default_included=bool(snapshot.get('training_default_included')),
-                annotation_task_id=snapshot.get('annotation_task_id'),
-                annotation_revision_id=snapshot.get('annotation_revision_id'),
-                revision_no=snapshot.get('annotation_revision_no'),
-                content_hash=snapshot.get('annotation_revision_hash'),
-                schema_id=snapshot.get('annotation_schema_id'),
-                schema_version=snapshot.get('annotation_schema_version'),
-                schema_content_hash=snapshot.get('annotation_schema_hash'),
-                task_outcome=snapshot.get('task_outcome'),
+                annotation_completed=bool(episode_snapshot.get('annotation_completed')),
+                annotation_status=str(episode_snapshot.get('annotation_status') or 'not_created'),
+                training_default_included=bool(episode_snapshot.get('training_default_included')),
+                annotation_task_id=episode_snapshot.get('annotation_task_id') or None,
+                annotation_revision_id=episode_snapshot.get('annotation_revision_id') or None,
+                revision_no=episode_snapshot.get('annotation_revision_no') or None,
+                content_hash=episode_snapshot.get('annotation_revision_hash') or None,
+                schema_id=episode_snapshot.get('annotation_schema_id') or None,
+                schema_version=episode_snapshot.get('annotation_schema_version') or None,
+                schema_content_hash=episode_snapshot.get('annotation_schema_hash') or None,
+                task_outcome=episode_snapshot.get('task_outcome') or None,
             ))
 
         ts = int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -528,15 +503,48 @@ class DatasetExportService:
         if task_type_id:
             query = query.filter(DatasetExportJob.task_type_id == task_type_id)
         jobs = query.limit(50).all()
+        result = []
+        for job in jobs:
+            filters = json.loads(job.filters_json or '{}')
+            # Old jobs contain a duplicate per-Episode snapshot in filters_json.
+            # DatasetExportItem is the immutable source of truth and the history
+            # list must remain bounded regardless of export size.
+            filters.pop('annotationRevisionSnapshots', None)
+            result.append({
+                'id': job.id,
+                'taskTypeId': job.task_type_id,
+                'exportFormat': job.export_format,
+                'episodeCount': job.episode_count,
+                'annotationCompletedCount': job.annotation_completed_count,
+                'trainingDefaultIncludedCount': job.training_default_included_count,
+                'filters': filters,
+                'createdBy': job.created_by,
+                'createdAt': job.created_at.isoformat() if job.created_at else None,
+            })
+        return result
+
+    @classmethod
+    def export_items(cls, db: Session, export_job_id: int) -> list[dict]:
+        """Return immutable per-Episode export facts only when requested."""
+        items = db.query(DatasetExportItem).filter(
+            DatasetExportItem.export_job_id == export_job_id
+        ).order_by(DatasetExportItem.id).all()
         return [
             {
-                'id': j.id,
-                'taskTypeId': j.task_type_id,
-                'exportFormat': j.export_format,
-                'episodeCount': j.episode_count,
-                'filters': json.loads(j.filters_json or '{}'),
-                'createdBy': j.created_by,
-                'createdAt': j.created_at.isoformat() if j.created_at else None,
+                'episodeId': item.episode_id,
+                'inclusionStatus': item.inclusion_status,
+                'episodeSnapshot': json.loads(item.episode_snapshot_json or '{}'),
+                'annotationCompleted': item.annotation_completed,
+                'annotationStatus': item.annotation_status,
+                'trainingDefaultIncluded': item.training_default_included,
+                'annotationTaskId': item.annotation_task_id,
+                'annotationRevisionId': item.annotation_revision_id,
+                'revisionNo': item.revision_no,
+                'contentHash': item.content_hash,
+                'schemaId': item.schema_id,
+                'schemaVersion': item.schema_version,
+                'schemaContentHash': item.schema_content_hash,
+                'taskOutcome': item.task_outcome,
             }
-            for j in jobs
+            for item in items
         ]

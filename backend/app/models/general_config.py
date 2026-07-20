@@ -5,12 +5,33 @@ from sqlalchemy import Column, Integer, Text, DateTime, func
 from app.core.db import Base
 
 
+def _ollama_host_port_from_settings() -> tuple[str, int, str]:
+    """Prefer env/settings defaults so Docker can reach host Ollama without UI setup."""
+    try:
+        from app.core.config import get_settings
+        settings = get_settings()
+        model = settings.ollama_model or 'qwen2.5:7b'
+        base = (settings.ollama_base_url or 'http://127.0.0.1:11434').rstrip('/')
+        if '://' in base:
+            base = base.split('://', 1)[1]
+        host, _, port_text = base.partition(':')
+        host = host or '127.0.0.1'
+        try:
+            port = int(port_text or '11434')
+        except ValueError:
+            port = 11434
+        return host, port, model
+    except Exception:
+        return '127.0.0.1', 11434, 'qwen2.5:7b'
+
+
 def default_general_config() -> dict:
+    host, port, model = _ollama_host_port_from_settings()
     return {
         'batch_reject_threshold': 0.10,
-        'ai_model_host': '127.0.0.1',
-        'ai_model_port': 11434,
-        'ai_model_name': 'qwen2.5:7b',
+        'ai_model_host': host,
+        'ai_model_port': port,
+        'ai_model_name': model,
         'scan_worker_replicas': 1,
         'scan_cron_hour': 0,
         'scan_cron_minute': 0,

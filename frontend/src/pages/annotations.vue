@@ -5,12 +5,15 @@ import AppLayout from '../components/AppLayout.vue'
 import {
   acquireAnnotationLock,
   assignAnnotationTask,
+  cancelAnnotationGenerationJob,
   claimAnnotationTask,
   completeAnnotationTask,
   createAnnotationSchema,
+  enqueueAnnotationGenerationJobs,
   ensureAnnotationTasks,
   fetchAccounts,
   fetchAnnotationEligibility,
+  fetchAnnotationGenerationJobs,
   fetchAnnotationSchemas,
   fetchAnnotationStatistics,
   fetchAnnotationTask,
@@ -19,6 +22,7 @@ import {
   fetchManualQcContext,
   publishAnnotationSchema,
   releaseAnnotationLock,
+  retryAnnotationGenerationJob,
   saveAnnotationDraft,
   setAnnotationPublicClaim,
   type AnnotationDraftRequest,
@@ -26,6 +30,7 @@ import {
 import type {
   AnnotationDraft,
   AnnotationEligibility,
+  AnnotationGenerationJob,
   AnnotationSchema,
   AnnotationStatistics,
   AnnotationTask,
@@ -64,6 +69,13 @@ const selectedReviewerId = ref('')
 const assignmentNote = ref('')
 const schemaDialogVisible = ref(false)
 const schemaDefinitionsJson = ref('[\n  {\n    "sequenceNo": 1,\n    "code": "sub_goal",\n    "nameEn": "Sub goal",\n    "nameZh": "子目标",\n    "description": "",\n    "actionVerb": "",\n    "isRequired": true,\n    "isConditional": false,\n    "maxOccurrences": 1,\n    "objectRoleHints": {}\n  }\n]')
+const generationJobs = ref<AnnotationGenerationJob[]>([])
+const generationTotal = ref(0)
+const generationPage = ref(1)
+const generationPageSize = 10
+const generationStatusFilter = ref('')
+const generationLoading = ref(false)
+const generationEnqueueLimit = ref(20)
 let lockTimer: number | null = null
 
 const outcomes: Array<{ value: AnnotationTaskOutcome; label: string }> = [
@@ -104,6 +116,7 @@ const hasLock = computed(() => {
 })
 const canEdit = computed(() => {
   if (!selectedTask.value) return false
+  if (selectedTask.value.workStatus === 'invalidated') return false
   if (!['admin', 'qc_manager', 'reviewer'].includes(session.user?.role ?? '')) return false
   return session.user?.role !== 'reviewer' || hasLock.value
 })
@@ -173,11 +186,80 @@ async function refreshOperations(): Promise<void> {
     eligibility.value = nextEligibility
     statistics.value = nextStatistics
     schemas.value = nextSchemas
+    await loadGenerationJobs()
   } catch (err) {
     error.value = err instanceof Error ? err.message : '加载标注运营数据失败'
   } finally {
     operationLoading.value = false
   }
+}
+
+async function loadGenerationJobs(): Promise<void> {
+  if (!isManager.value || !operationTaskTypeId.value) return
+  generationLoading.value = true
+  try {
+    const result = await fetchAnnotationGenerationJobs({
+      page: generationPage.value,
+      pageSize: generationPageSize,
+      status: generationStatusFilter.value || undefined,
+      taskTypeId: operationTaskTypeId.value,
+    })
+    generationJobs.value = result.items
+    generationTotal.value = result.total
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '加载 VLM generation 队列失败'
+  } finally {
+    generationLoading.value = false
+  }
+}
+
+async function enqueueVlmJobs(): Promise<void> {
+  if (!operationTaskTypeId.value) return
+  generationLoading.value = true
+  try {
+    const result = await enqueueAnnotationGenerationJobs({
+      taskTypeId: operationTaskTypeId.value,
+      limit: generationEnqueueLimit.value,
+      priority: 50,
+    })
+    ElMessage.success(
+      result.createdCount
+        ? `已入队 ${result.createdCount} 个 initial VLM job`
+        : `无新 job（跳过 ${result.skipped.length}）`,
+    )
+    await loadGenerationJobs()
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '入队 VLM 任务失败')
+  } finally {
+    generationLoading.value = false
+  }
+}
+
+async function cancelVlmJob(jobId: string): Promise<void> {
+  try {
+    await cancelAnnotationGenerationJob(jobId)
+    ElMessage.success('已请求取消 generation job')
+    await loadGenerationJobs()
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '取消失败')
+  }
+}
+
+async function retryVlmJob(jobId: string): Promise<void> {
+  try {
+    await retryAnnotationGenerationJob(jobId)
+    ElMessage.success('已重新入队 generation job')
+    await loadGenerationJobs()
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '重试失败')
+  }
+}
+
+function generationStatusType(status: string): 'success' | 'warning' | 'info' | 'danger' {
+  if (status === 'succeeded') return 'success'
+  if (status === 'running' || status === 'queued') return 'warning'
+  if (status === 'failed' || status === 'timeout' || status === 'cancelled' || status === 'superseded') return 'danger'
+  return 'info'
 }
 
 async function loadOperations(): Promise<void> {
@@ -294,7 +376,7 @@ async function openTask(taskId: string): Promise<void> {
     } catch {
       // Annotation remains usable when the optional media preview is unavailable.
     }
-    if (session.user?.role !== 'viewer' && task.workStatus !== 'completed') await lockTask()
+    if (session.user?.role !== 'viewer' && !['completed', 'invalidated'].includes(task.workStatus)) await lockTask()
   } catch (err) {
     error.value = err instanceof Error ? err.message : '加载标注任务详情失败'
   } finally {
@@ -320,7 +402,7 @@ function startLockRefresh(): void {
     } catch {
       // The save operation will surface an expired or stolen lock explicitly.
     }
-  }, 180000)
+  }, 30000)
 }
 
 async function unlockTask(): Promise<void> {
@@ -470,9 +552,9 @@ onBeforeUnmount(() => { if (lockTimer !== null) window.clearInterval(lockTimer) 
           </div>
           <div class="operations-metrics">
             <div><span>可标注</span><strong>{{ eligibility?.eligibleCount ?? '-' }}</strong><small>QUALIFIED active scope</small></div>
-            <div><span>已建任务</span><strong>{{ eligibility?.taskCount ?? '-' }}</strong><small>含进行中与完成历史</small></div>
+            <div><span>当前已建任务</span><strong>{{ statistics?.activeTaskCount ?? eligibility?.taskCount ?? '-' }}</strong><small>active scope 内已有任务</small></div>
             <div><span>待补漏</span><strong>{{ eligibility?.unannotatedCount ?? '-' }}</strong><small>尚未创建 annotation task</small></div>
-            <div><span>已完成</span><strong>{{ statistics?.completed ?? '-' }}</strong><small>完成率 {{ ((statistics?.completionRate ?? 0) * 100).toFixed(1) }}%</small></div>
+            <div><span>当前已完成</span><strong>{{ statistics?.activeCompletedCount ?? '-' }}</strong><small>覆盖率 {{ ((statistics?.completionRate ?? 0) * 100).toFixed(1) }}%</small></div>
           </div>
           <div class="operations-actions">
             <el-input-number v-model="ensureLimit" :min="1" :max="1000" controls-position="right" />
@@ -488,6 +570,75 @@ onBeforeUnmount(() => { if (lockTimer !== null) window.clearInterval(lockTimer) 
               <el-button v-if="schema.status === 'draft'" link type="primary" @click="publishSchema(schema)">发布</el-button>
             </span>
           </div>
+          <div class="generation-ops" v-loading="generationLoading">
+            <div class="operations-title generation-ops-title">
+              <div>
+                <div class="eyebrow">VLM GENERATION QUEUE</div>
+                <h3>VLM 生成队列</h3>
+                <p>全局并发 1；initial 仅填充空白草稿，不覆盖人工修改。失败可重试，queued 可立即取消。</p>
+              </div>
+              <div class="operations-actions">
+                <el-input-number v-model="generationEnqueueLimit" :min="1" :max="500" controls-position="right" />
+                <el-button type="primary" :disabled="!operationTaskTypeId" @click="enqueueVlmJobs">补漏入队 VLM</el-button>
+                <el-select
+                  v-model="generationStatusFilter"
+                  clearable
+                  placeholder="全部状态"
+                  style="width: 130px"
+                  @change="generationPage = 1; loadGenerationJobs()"
+                >
+                  <el-option label="queued" value="queued" />
+                  <el-option label="running" value="running" />
+                  <el-option label="succeeded" value="succeeded" />
+                  <el-option label="failed" value="failed" />
+                  <el-option label="cancelled" value="cancelled" />
+                  <el-option label="timeout" value="timeout" />
+                  <el-option label="superseded" value="superseded" />
+                </el-select>
+                <el-button @click="loadGenerationJobs">刷新队列</el-button>
+              </div>
+            </div>
+            <el-table :data="generationJobs" size="small" empty-text="当前 TaskType 无 generation job">
+              <el-table-column prop="id" label="Job" min-width="160" show-overflow-tooltip />
+              <el-table-column prop="annotationTaskId" label="Task" min-width="150" show-overflow-tooltip />
+              <el-table-column prop="jobType" label="Type" width="90" />
+              <el-table-column label="Status" width="110">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="generationStatusType(row.status)">{{ row.status }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="Attempts" width="90">
+                <template #default="{ row }">{{ row.attemptCount }}/{{ row.maxAttempts }}</template>
+              </el-table-column>
+              <el-table-column prop="errorDetail" label="Error" min-width="140" show-overflow-tooltip />
+              <el-table-column label="操作" width="150" fixed="right">
+                <template #default="{ row }">
+                  <el-button
+                    v-if="row.status === 'queued' || row.status === 'running'"
+                    link
+                    type="danger"
+                    @click="cancelVlmJob(row.id)"
+                  >取消</el-button>
+                  <el-button
+                    v-if="['failed', 'timeout', 'cancelled'].includes(row.status)"
+                    link
+                    type="primary"
+                    @click="retryVlmJob(row.id)"
+                  >重试</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-pagination
+              v-if="generationTotal > generationPageSize"
+              v-model:current-page="generationPage"
+              :page-size="generationPageSize"
+              :total="generationTotal"
+              layout="prev, pager, next, total"
+              small
+              class="generation-pagination"
+              @current-change="loadGenerationJobs"
+            />
+          </div>
         </el-card>
       </section>
 
@@ -501,6 +652,7 @@ onBeforeUnmount(() => { if (lockTimer !== null) window.clearInterval(lockTimer) 
                 <el-option label="已分配" value="assigned" />
                 <el-option label="进行中" value="in_progress" />
                 <el-option label="已完成" value="completed" />
+                <el-option label="已失效" value="invalidated" />
               </el-select>
             </div>
           </template>
@@ -573,6 +725,7 @@ onBeforeUnmount(() => { if (lockTimer !== null) window.clearInterval(lockTimer) 
               <span>可选预览，不改变现有 QC 表单</span>
             </div>
             <el-alert v-if="session.user?.role === 'reviewer' && !canEdit" type="warning" :closable="false" title="请先获取编辑锁，再修改和保存标注" />
+            <el-alert v-if="selectedTask.workStatus === 'invalidated'" type="error" :closable="false" title="该 Episode 已退出 active QUALIFIED scope，标注任务已失效且不可编辑；恢复资格后可重新领取编辑锁。" />
 
             <el-form label-position="top" class="annotation-form" @change="markDirty">
               <div class="form-grid">
@@ -683,6 +836,11 @@ onBeforeUnmount(() => { if (lockTimer !== null) window.clearInterval(lockTimer) 
 .schema-list { margin-top: 16px; padding-top: 14px; border-top: 1px solid #dbeafe; }
 .schema-list-label { color: #475569; font-size: 12px; font-weight: 700; }
 .schema-chip { display: inline-flex; align-items: center; gap: 5px; }
+.generation-ops { margin-top: 18px; padding-top: 16px; border-top: 1px solid #dbeafe; }
+.generation-ops-title { margin-bottom: 12px; }
+.generation-ops-title h3 { margin: 3px 0; color: #0f172a; font-size: 16px; }
+.generation-ops-title p { margin: 0; color: #64748b; font-size: 12px; }
+.generation-pagination { margin-top: 12px; justify-content: flex-end; }
 .annotation-hero { background: linear-gradient(135deg, #fff 0%, #eef7ff 56%, #effcf8 100%); }
 .annotation-hero-meta { min-width: 180px; padding: 18px 22px; border-radius: 18px; background: rgba(255,255,255,.72); text-align: right; }
 .annotation-hero-meta span, .annotation-hero-meta small { display: block; color: #64748b; font-size: 12px; }

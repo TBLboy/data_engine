@@ -4,7 +4,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import (
@@ -18,6 +18,8 @@ from app.models import (
     ListRecord,
     SubGoalDefinition,
     SubGoalSchema,
+    ReviewerAnnotationRollup,
+    TaskAnnotationRollup,
     TaskType,
     User,
 )
@@ -34,6 +36,7 @@ INSTANCE_STATUSES = {'observed', 'failed', 'skipped', 'not_observed', 'not_appli
 RANGED_INSTANCE_STATUSES = {'observed', 'failed'}
 NO_RANGE_INSTANCE_STATUSES = {'skipped', 'not_observed', 'not_applicable'}
 ANNOTATION_ROLES = {'admin', 'qc_manager', 'reviewer'}
+ANNOTATION_ROLLUP_VERSION = 'task-annotation-rollup-v1'
 
 
 def utcnow() -> datetime:
@@ -316,10 +319,20 @@ def ensure_task_for_episode(db: Session, episode: Episode, *, initial_source: st
     existing = db.query(AnnotationTask).filter(AnnotationTask.episode_id == episode.id).first()
     if existing:
         if existing.work_status == 'invalidated':
-            existing.work_status = existing.status_before_invalidation or 'pending'
+            previous_status = existing.status_before_invalidation or 'pending'
+            existing.work_status = restored_annotation_work_status(existing, previous_status)
             existing.status_before_invalidation = None
             existing.invalidated_at = None
             existing.invalidation_reason = None
+            existing.row_version += 1
+            audit(
+                db,
+                user=_system_annotation_user(),
+                action='恢复标注任务资格',
+                target=existing.id,
+                detail=f'stored_status={previous_status} restored_status={existing.work_status} reason=ensure_eligible_task',
+            )
+            recompute_annotation_rollup(db, existing.task_type_id)
         return existing
     batch = db.query(Batch).filter(Batch.id == episode.batch_id).first()
     if not batch:
@@ -343,6 +356,7 @@ def ensure_task_for_episode(db: Session, episode: Episode, *, initial_source: st
     db.add(task)
     db.flush()
     create_draft(db, task)
+    recompute_annotation_rollup(db, task.task_type_id)
     return task
 
 
@@ -363,46 +377,312 @@ def ensure_tasks_for_episodes(
     return tasks, skipped
 
 
-def annotation_statistics(db: Session, *, task_type_id: str | None = None) -> dict:
-    """Return operational counts without expanding annotation payloads."""
-    query = db.query(AnnotationTask)
-    if task_type_id:
-        query = query.filter(AnnotationTask.task_type_id == task_type_id)
-    total = query.count()
-    status_rows = query.with_entities(
-        AnnotationTask.work_status,
-        func.count(AnnotationTask.id),
-    ).group_by(AnnotationTask.work_status).all()
-    assigned_rows = query.filter(AnnotationTask.assigned_to.is_not(None)).with_entities(
+def recompute_annotation_rollup(db: Session, task_type_id: str) -> TaskAnnotationRollup | None:
+    """Refresh one TaskType's operational projection in the caller's transaction."""
+    if not task_type_id:
+        return None
+    db.flush()
+    now = utcnow()
+    aggregate = db.query(
+        func.count(AnnotationTask.id).label('total_count'),
+        func.coalesce(func.sum(case((AnnotationTask.work_status == 'pending', 1), else_=0)), 0).label('pending_count'),
+        func.coalesce(func.sum(case((AnnotationTask.work_status == 'assigned', 1), else_=0)), 0).label('assigned_count'),
+        func.coalesce(func.sum(case((AnnotationTask.work_status == 'in_progress', 1), else_=0)), 0).label('in_progress_count'),
+        func.coalesce(func.sum(case((AnnotationTask.work_status == 'completed', 1), else_=0)), 0).label('completed_count'),
+        func.coalesce(func.sum(case((AnnotationTask.work_status == 'invalidated', 1), else_=0)), 0).label('invalidated_count'),
+    ).filter(AnnotationTask.task_type_id == task_type_id).one()
+    eligible_aggregate = active_qualified_episode_query(db).filter(
+        Batch.task_type_id == task_type_id
+    ).outerjoin(
+        AnnotationTask, AnnotationTask.episode_id == Episode.id
+    ).with_entities(
+        func.count(Episode.id).label('eligible_episode_count'),
+        func.coalesce(func.sum(case((AnnotationTask.id.is_(None), 1), else_=0)), 0).label('unannotated_count'),
+        func.coalesce(func.sum(case((AnnotationTask.work_status == 'completed', 1), else_=0)), 0).label(
+            'active_completed_count'
+        ),
+    ).one()
+    rollup = db.query(TaskAnnotationRollup).filter(TaskAnnotationRollup.task_type_id == task_type_id).first()
+    if rollup is None:
+        rollup = TaskAnnotationRollup(task_type_id=task_type_id, refreshed_at=now)
+        db.add(rollup)
+    rollup.eligible_episode_count = int(eligible_aggregate.eligible_episode_count or 0)
+    rollup.unannotated_count = int(eligible_aggregate.unannotated_count or 0)
+    rollup.active_completed_count = int(eligible_aggregate.active_completed_count or 0)
+    rollup.total_count = int(aggregate.total_count or 0)
+    rollup.pending_count = int(aggregate.pending_count or 0)
+    rollup.assigned_count = int(aggregate.assigned_count or 0)
+    rollup.in_progress_count = int(aggregate.in_progress_count or 0)
+    rollup.completed_count = int(aggregate.completed_count or 0)
+    rollup.invalidated_count = int(aggregate.invalidated_count or 0)
+    rollup.source_task_count = rollup.total_count
+    rollup.calculation_version = ANNOTATION_ROLLUP_VERSION
+    rollup.refreshed_at = now
+
+    db.query(ReviewerAnnotationRollup).filter(
+        ReviewerAnnotationRollup.task_type_id == task_type_id
+    ).delete(synchronize_session='fetch')
+    reviewer_rows = db.query(
         AnnotationTask.assigned_to,
         func.count(AnnotationTask.id),
+    ).filter(
+        AnnotationTask.task_type_id == task_type_id,
+        AnnotationTask.assigned_to.is_not(None),
+        AnnotationTask.work_status.in_({'assigned', 'in_progress'}),
     ).group_by(AnnotationTask.assigned_to).all()
-    completed = query.filter(AnnotationTask.work_status == 'completed').count()
+    for reviewer_id, task_count in reviewer_rows:
+        db.add(ReviewerAnnotationRollup(
+            task_type_id=task_type_id,
+            reviewer_id=reviewer_id,
+            task_count=int(task_count or 0),
+            refreshed_at=now,
+        ))
+    db.flush()
+    return rollup
+
+
+def rebuild_all_annotation_rollups(db: Session) -> int:
+    task_type_ids = {
+        task_type_id
+        for (task_type_id,) in db.query(AnnotationTask.task_type_id).distinct().all()
+        if task_type_id
+    }
+    task_type_ids.update(
+        task_type_id
+        for (task_type_id,) in active_qualified_episode_query(db).with_entities(Batch.task_type_id).distinct().all()
+        if task_type_id
+    )
+    for task_type_id in task_type_ids:
+        recompute_annotation_rollup(db, task_type_id)
+    return len(task_type_ids)
+
+
+def annotation_eligibility(db: Session, *, task_type_id: str | None = None) -> dict:
+    """Read active-scope eligibility counts from the operational projection."""
+    if task_type_id:
+        rollup = db.query(TaskAnnotationRollup).filter(TaskAnnotationRollup.task_type_id == task_type_id).first()
+        if rollup is None:
+            rollup = recompute_annotation_rollup(db, task_type_id)
+        eligible_count = int(rollup.eligible_episode_count or 0) if rollup else 0
+        unannotated_count = int(rollup.unannotated_count or 0) if rollup else 0
+        return {
+            'eligibleCount': eligible_count,
+            # This is the number of tasks inside the current active qualified
+            # scope, not historical invalidated tasks for the TaskType.
+            'taskCount': eligible_count - unannotated_count,
+            'unannotatedCount': unannotated_count,
+        }
+    aggregate = db.query(
+        func.coalesce(func.sum(TaskAnnotationRollup.eligible_episode_count), 0),
+        func.coalesce(func.sum(TaskAnnotationRollup.unannotated_count), 0),
+    ).one()
     return {
+        'eligibleCount': int(aggregate[0] or 0),
+        'taskCount': int(aggregate[0] or 0) - int(aggregate[1] or 0),
+        'unannotatedCount': int(aggregate[1] or 0),
+    }
+
+
+def annotation_statistics(db: Session, *, task_type_id: str | None = None) -> dict:
+    """Read operation statistics from persistent annotation rollups."""
+    if task_type_id:
+        rollup = db.query(TaskAnnotationRollup).filter(TaskAnnotationRollup.task_type_id == task_type_id).first()
+        if rollup is None:
+            rollup = recompute_annotation_rollup(db, task_type_id)
+        total = int(rollup.total_count or 0) if rollup else 0
+        completed = int(rollup.completed_count or 0) if rollup else 0
+        eligible_count = int(rollup.eligible_episode_count or 0) if rollup else 0
+        active_completed_count = int(rollup.active_completed_count or 0) if rollup else 0
+        by_status = {
+            status: count
+            for status, count in {
+                'pending': int(rollup.pending_count or 0) if rollup else 0,
+                'assigned': int(rollup.assigned_count or 0) if rollup else 0,
+                'in_progress': int(rollup.in_progress_count or 0) if rollup else 0,
+                'completed': completed,
+                'invalidated': int(rollup.invalidated_count or 0) if rollup else 0,
+            }.items()
+            if count
+        }
+        reviewer_rows = db.query(
+            ReviewerAnnotationRollup.reviewer_id,
+            ReviewerAnnotationRollup.task_count,
+        ).filter(ReviewerAnnotationRollup.task_type_id == task_type_id).all()
+    else:
+        aggregate = db.query(
+            func.coalesce(func.sum(TaskAnnotationRollup.total_count), 0),
+            func.coalesce(func.sum(TaskAnnotationRollup.pending_count), 0),
+            func.coalesce(func.sum(TaskAnnotationRollup.assigned_count), 0),
+            func.coalesce(func.sum(TaskAnnotationRollup.in_progress_count), 0),
+            func.coalesce(func.sum(TaskAnnotationRollup.completed_count), 0),
+            func.coalesce(func.sum(TaskAnnotationRollup.invalidated_count), 0),
+            func.coalesce(func.sum(TaskAnnotationRollup.active_completed_count), 0),
+        ).one()
+        total = int(aggregate[0] or 0)
+        completed = int(aggregate[4] or 0)
+        eligible_count = int(db.query(func.coalesce(func.sum(TaskAnnotationRollup.eligible_episode_count), 0)).scalar() or 0)
+        active_completed_count = int(aggregate[6] or 0)
+        by_status = {
+            status: count
+            for status, count in {
+                'pending': int(aggregate[1] or 0),
+                'assigned': int(aggregate[2] or 0),
+                'in_progress': int(aggregate[3] or 0),
+                'completed': completed,
+                'invalidated': int(aggregate[5] or 0),
+            }.items()
+            if count
+        }
+        reviewer_rows = db.query(
+            ReviewerAnnotationRollup.reviewer_id,
+            func.coalesce(func.sum(ReviewerAnnotationRollup.task_count), 0),
+        ).group_by(ReviewerAnnotationRollup.reviewer_id).all()
+    invalidated_count = int(
+        (rollup.invalidated_count if task_type_id and rollup else aggregate[5] if not task_type_id else 0) or 0
+    )
+    return {
+        # Preserve total as all persisted task history so it remains the sum of
+        # byStatus. Active operational counts are explicit separate fields.
         'total': total,
+        'activeTaskCount': total - invalidated_count,
+        'eligibleEpisodeCount': eligible_count,
         'completed': completed,
-        'completionRate': completed / total if total else 0,
-        'byStatus': {status: count for status, count in status_rows},
+        'activeCompletedCount': active_completed_count,
+        # Coverage uses the unified export scope as denominator. Invalidated
+        # task history never dilutes the active annotation completion rate.
+        'completionRate': active_completed_count / eligible_count if eligible_count else 0,
+        'byStatus': by_status,
         'byReviewer': [
-            {'reviewerId': reviewer_id, 'count': count}
-            for reviewer_id, count in assigned_rows
+            {'reviewerId': reviewer_id, 'count': int(count or 0)}
+            for reviewer_id, count in reviewer_rows
         ],
     }
 
 
-def invalidate_ineligible_tasks(db: Session, *, reason: str = 'episode_left_active_scope') -> int:
-    tasks = db.query(AnnotationTask).join(Episode, AnnotationTask.episode_id == Episode.id).filter(
-        AnnotationTask.work_status != 'invalidated',
-        ~active_qualified_episode_query(db).with_entities(Episode.id).filter(Episode.id == AnnotationTask.episode_id).exists(),
-    ).all()
+def reconcile_annotation_eligibility(
+    db: Session,
+    *,
+    episode_ids: set[str] | None = None,
+    list_ids: set[str] | None = None,
+    reason: str = 'episode_left_active_scope',
+) -> dict[str, int]:
+    """Synchronize existing task lifecycle with the canonical active QUALIFIED scope.
+
+    This deliberately does not create missing tasks. New eligible data enters the
+    annotation pool only through the explicit ensure flow or the future VLM queue.
+    """
+    # Core production sessions disable autoflush. Publish an adjudication or scan
+    # mutation before querying the canonical scope, otherwise task invalidation
+    # observes the previous Episode eligibility until a later transaction.
+    db.flush()
+    task_query = db.query(AnnotationTask).join(Episode, AnnotationTask.episode_id == Episode.id).join(
+        Batch, Episode.batch_id == Batch.id
+    )
+    if episode_ids is not None:
+        task_query = task_query.filter(AnnotationTask.episode_id.in_(episode_ids))
+    if list_ids is not None:
+        task_query = task_query.filter(Batch.list_id.in_(list_ids))
+    tasks = task_query.with_for_update().all()
+    affected_task_type_ids = {task.task_type_id for task in tasks if task.task_type_id}
+    if episode_ids is not None:
+        affected_task_type_ids.update(
+            task_type_id
+            for (task_type_id,) in db.query(Batch.task_type_id).join(
+                Episode, Episode.batch_id == Batch.id
+            ).filter(Episode.id.in_(episode_ids)).distinct().all()
+            if task_type_id
+        )
+    if list_ids is not None:
+        affected_task_type_ids.update(
+            task_type_id
+            for (task_type_id,) in db.query(Batch.task_type_id).filter(Batch.list_id.in_(list_ids)).distinct().all()
+            if task_type_id
+        )
+    if episode_ids is None and list_ids is None:
+        affected_task_type_ids.update(
+            task_type_id
+            for (task_type_id,) in active_qualified_episode_query(db).with_entities(Batch.task_type_id).distinct().all()
+            if task_type_id
+        )
+    if not tasks:
+        for task_type_id in affected_task_type_ids:
+            recompute_annotation_rollup(db, task_type_id)
+        return {'invalidated': 0, 'restored': 0}
+
+    candidate_ids = {task.episode_id for task in tasks}
+    eligible_ids = {
+        episode_id
+        for (episode_id,) in active_qualified_episode_query(db).with_entities(Episode.id).filter(
+            Episode.id.in_(candidate_ids)
+        ).all()
+    }
     now = utcnow()
+    invalidated = 0
+    restored = 0
     for task in tasks:
+        if task.episode_id in eligible_ids:
+            if task.work_status == 'invalidated':
+                previous_status = task.status_before_invalidation or 'pending'
+                # Invalidation revokes the edit lease. Do not resurrect an
+                # in-progress task without a lock; keep its assignment and
+                # require the reviewer to acquire a fresh lease.
+                restored_status = restored_annotation_work_status(task, previous_status)
+                task.work_status = restored_status
+                task.status_before_invalidation = None
+                task.invalidated_at = None
+                task.invalidation_reason = None
+                task.row_version += 1
+                audit(
+                    db,
+                    user=_system_annotation_user(),
+                    action='恢复标注任务资格',
+                    target=task.id,
+                    detail=f'stored_status={previous_status} restored_status={restored_status} reason={reason}',
+                )
+                restored += 1
+            continue
+        if task.work_status == 'invalidated':
+            continue
         task.status_before_invalidation = task.work_status
         task.work_status = 'invalidated'
         task.invalidated_at = now
         task.invalidation_reason = reason
         task.public_claim_enabled = False
-    return len(tasks)
+        task.lock_owner = None
+        task.lock_acquired_at = None
+        task.lock_expires_at = None
+        task.row_version += 1
+        audit(
+            db,
+            user=_system_annotation_user(),
+            action='标注任务资格失效',
+            target=task.id,
+            detail=f'status={task.status_before_invalidation} reason={reason}',
+        )
+        # Cancel pending VLM generation jobs for this task; running jobs
+        # will observe task invalidation via re-check on publication.
+        from app.services.annotation_generation_queue import cancel_pending_jobs_for_task
+        cancel_pending_jobs_for_task(db, annotation_task_id=task.id)
+        invalidated += 1
+    for task_type_id in affected_task_type_ids:
+        recompute_annotation_rollup(db, task_type_id)
+    return {'invalidated': invalidated, 'restored': restored}
+
+
+def restored_annotation_work_status(task: AnnotationTask, previous_status: str) -> str:
+    """Restore an invalidated task without recreating its revoked edit lease."""
+    if previous_status == 'in_progress':
+        return 'assigned' if task.assigned_to else 'pending'
+    return previous_status
+
+
+def _system_annotation_user() -> User:
+    return User(id='system', username='system', name='system', role='admin', avatar='S', password_hash='')
+
+
+def invalidate_ineligible_tasks(db: Session, *, reason: str = 'episode_left_active_scope') -> int:
+    """Compatibility entry point for full-scope reconciliation callers."""
+    return reconcile_annotation_eligibility(db, reason=reason)['invalidated']
 
 
 def acquire_lock(db: Session, task: AnnotationTask, user: User) -> None:
@@ -419,6 +699,7 @@ def acquire_lock(db: Session, task: AnnotationTask, user: User) -> None:
     if task.work_status in {'pending', 'assigned'}:
         task.work_status = 'in_progress'
     task.row_version += 1
+    recompute_annotation_rollup(db, task.task_type_id)
 
 
 def release_lock(db: Session, task: AnnotationTask, user: User, *, force: bool = False) -> None:
@@ -598,6 +879,7 @@ def complete_task(db: Session, task: AnnotationTask, user: User) -> AnnotationRe
     task.lock_expires_at = None
     task.row_version += 1
     db.flush()
+    recompute_annotation_rollup(db, task.task_type_id)
     return revision
 
 

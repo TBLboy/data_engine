@@ -53,6 +53,21 @@ class Settings(BaseSettings):
     ollama_base_url: str = Field(default='http://localhost:11434', alias='OLLAMA_BASE_URL')
     ollama_model: str = Field(default='qwen2.5:7b', alias='OLLAMA_MODEL')
     ai_explain_timeout_seconds: int = Field(default=10, alias='AI_EXPLAIN_TIMEOUT_SECONDS')
+    # Annotation VLM worker
+    annotation_worker_poll_seconds: float = Field(default=2.0, alias='ANNOTATION_WORKER_POLL_SECONDS')
+    annotation_worker_lease_seconds: int = Field(default=300, alias='ANNOTATION_WORKER_LEASE_SECONDS')
+    annotation_worker_heartbeat_seconds: int = Field(default=15, alias='ANNOTATION_WORKER_HEARTBEAT_SECONDS')
+    annotation_job_timeout_seconds: int = Field(default=900, alias='ANNOTATION_JOB_TIMEOUT_SECONDS')
+    annotation_vlm_timeout_seconds: int = Field(default=300, alias='ANNOTATION_VLM_TIMEOUT_SECONDS')
+    annotation_coordinator_interval_seconds: int = Field(default=60, alias='ANNOTATION_COORDINATOR_INTERVAL_SECONDS')
+    # Auto VLM discovery (night window). Worker always drains queue regardless of window.
+    annotation_discovery_enabled: bool = Field(default=True, alias='ANNOTATION_DISCOVERY_ENABLED')
+    annotation_discovery_timezone: str = Field(default='Asia/Shanghai', alias='ANNOTATION_DISCOVERY_TIMEZONE')
+    # Local wall-clock HH:MM inclusive start / exclusive end. Equal values = 24h open.
+    annotation_discovery_window_start: str = Field(default='00:00', alias='ANNOTATION_DISCOVERY_WINDOW_START')
+    annotation_discovery_window_end: str = Field(default='06:00', alias='ANNOTATION_DISCOVERY_WINDOW_END')
+    # Max auto-created initial jobs per local calendar day (0 = unlimited within window).
+    annotation_discovery_daily_limit: int = Field(default=100, alias='ANNOTATION_DISCOVERY_DAILY_LIMIT')
     database_url: str = Field(
         default=f'sqlite:///{DEFAULT_SQLITE_PATH}',
         alias='DATABASE_URL'
