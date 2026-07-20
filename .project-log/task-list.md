@@ -25,10 +25,10 @@
 
 | 能力 | 状态 |
 |---|---|
-| JSONL 数据包（manifest / episodes / schemas） | partial（CSV/JSON 已有，zip JSONL 未做） |
+| JSONL 数据包（manifest / episodes / schemas） | done |
 | 历史导出不可变回归测试（新 revision 后旧 item 不变） | done |
 | 前端 build / 全量测试验收本批 | done |
-| 正式 commit 本批实现 | in_progress |
+| 正式 commit 本批实现 | done (`11b33bb`) |
 | Compose / PostgreSQL / MinIO 真实导出验收 | todo |
 | Schema 管理 / 批量 ensure / 分配 workload 运营面 | todo |
 
@@ -45,12 +45,12 @@
 | T02 | 重构导出服务为统一 QUALIFIED 范围 | P0 | done | T01 | 全部 active-scope QUALIFIED 可导出；未标注不阻断 |
 | T03 | 导出行增加标注增强字段 | P0 | done | T02 | 含 completed/status/training_default_included/revision/Schema/payload |
 | T04 | 扩展 `DatasetExportJob` + 新增 `dataset_export_items` | P0 | done | T02 | migration + ORM；创建 job 时事务内冻结 item 快照 |
-| T05 | 导出产物：CSV 审计 + JSONL 数据包 | P1 | partial | T03,T04 | CSV/JSON 已支持；独立 JSONL zip 数据包延后 |
+| T05 | 导出产物：CSV 审计 + JSONL 数据包 | P1 | done | T03,T04 | CSV/JSON/JSONL zip 均支持；包内含 manifest/episodes/schemas |
 | T06 | 路由/权限/错误语义对齐统一导出 | P0 | done | T02 | 无“必须完成标注才导出”的阻断语义 |
 | T07 | 前端卡片与表格：质检合格/完成标注 + 是否完成标注列 | P0 | done | T03,T06 | 卡片双计数；表格有标注列；错误 alert 已移除 |
 | T08 | 回归测试覆盖统一导出与快照不可变 | P0 | done | T03,T04 | 无标注/完成/新 revision 后历史 item 不变已覆盖 |
 | T09 | 后端 compile + 测试 + 前端 build 验收本批 | P0 | done | T08 | annotation 6/6、data-assets 11/11、compile、frontend build 通过 |
-| T10 | commit 正式版本：统一导出落地 | P0 | in_progress | T09 | 干净 diff、明确 commit message |
+| T10 | commit 正式版本：统一导出落地 | P0 | done | T09 | commit `11b33bb` |
 | T11 | Compose 重建 + PostgreSQL migration + 真实导出验收 | P1 | todo | T10 | 运行容器 head 迁移；真实导出下载与历史可查 |
 | T12 | Schema 管理 / 批量 ensure / 分配 workload 运营面 | P2 | todo | T10 | 生产运营可独立完成标注闭环 |
 
@@ -58,9 +58,9 @@
 
 ## 当前焦点
 
-1. **T10** 正式 commit 本批统一导出实现
-2. 后续 **T05** 完整 JSONL 数据包
-3. 后续 **T11** Compose / PostgreSQL 真实验收
+1. commit T05 JSONL 数据包
+2. 后续 **T11** Compose / PostgreSQL 真实验收
+3. 后续 **T12** 运营面
 
 ## 规则
 

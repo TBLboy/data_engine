@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import io
 import sys
 import tempfile
 import unittest
 import json
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -286,6 +288,55 @@ class AnnotationServiceTests(unittest.TestCase):
             self.assertEqual(items[0].annotation_revision_id, revision.id)
             self.assertEqual(items[0].revision_no, 1)
             self.assertEqual(items[0].content_hash, revision.content_hash)
+
+    def test_dataset_export_jsonl_package_contains_manifest_episodes_and_schemas(self) -> None:
+        with self.SessionLocal() as db:
+            admin = db.get(User, 'user_admin')
+            reviewer = db.get(User, 'user_reviewer')
+            schema = self.create_published_schema(db, admin)
+            task = ensure_task_for_episode(db, db.get(Episode, 'episode_qualified'))
+            task.assigned_to = reviewer.id
+            acquire_lock(db, task, reviewer)
+            save_draft(db, task, reviewer, {
+                'rowVersion': task.row_version,
+                'canonicalInstructionEn': 'Pick the object',
+                'taskOutcome': 'completed_normally',
+                'occurrences': [{
+                    'definitionId': schema.definitions[0].id,
+                    'occurrenceNo': 1,
+                    'status': 'observed',
+                    'startStep': 1,
+                    'endStepExclusive': 5,
+                    'representativeStep': 3,
+                }],
+            })
+            complete_task(db, task, reviewer)
+            db.commit()
+
+            content, mime, count, filters, _ = DatasetExportService.prepare_export(
+                db, 'task_type_pick', 'jsonl'
+            )
+            self.assertEqual(mime, 'application/zip')
+            self.assertEqual(count, 1)
+            self.assertEqual(filters['packageFiles'], ['manifest.json', 'episodes.jsonl', 'schemas.json'])
+            self.assertTrue(filters.get('packageSha256'))
+
+            with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                names = set(archive.namelist())
+                self.assertEqual(names, {'manifest.json', 'episodes.jsonl', 'schemas.json'})
+                manifest = json.loads(archive.read('manifest.json'))
+                episodes = [
+                    json.loads(line)
+                    for line in archive.read('episodes.jsonl').decode('utf-8').splitlines()
+                    if line.strip()
+                ]
+                schemas = json.loads(archive.read('schemas.json'))
+            self.assertEqual(manifest['exportType'], 'qualified_dataset')
+            self.assertEqual(manifest['episodeCount'], 1)
+            self.assertEqual(manifest['annotationCompletedCount'], 1)
+            self.assertEqual(len(episodes), 1)
+            self.assertTrue(episodes[0]['annotationCompleted'])
+            self.assertIn(task.sub_goal_schema_content_hash, schemas)
 
 
 if __name__ == '__main__':

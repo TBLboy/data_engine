@@ -2,11 +2,11 @@
 
 ## Last Updated
 
-- 2026-07-20 10:15 CST（统一导出主实现已完成，准备正式 commit）
+- 2026-07-20 10:25 CST（JSONL 数据包完成，准备 commit）
 
 ## Current Objective
 
-- 完成统一质检合格数据导出主链路：QUALIFIED 全量导出 + 可选标注增强 + export item 快照 + 前端双计数/标注列。
+- 统一导出主链路与 JSONL 数据包已完成；下一循环做 Compose/PostgreSQL 真实验收与运营面。
 
 ## Current Status
 

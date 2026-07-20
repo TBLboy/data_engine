@@ -140,7 +140,8 @@ async function doExport(format: string) {
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `qualified_episodes_${selectedTaskId.value}.${format}`
+    const ext = format === 'jsonl' ? 'zip' : format
+    link.download = `qualified_episodes_${selectedTaskId.value}.${ext}`
     link.click()
     URL.revokeObjectURL(url)
     ElMessage.success('导出完成')
@@ -283,6 +284,7 @@ onMounted(async () => {
                   <span v-if="selectedBatches.length" style="color:#909399;font-size:13px;margin-right:8px">已选 {{ selectedBatches.length }} 个批次</span>
                   <el-button :loading="exportLoading" @click="doExport('csv')">导出 CSV</el-button>
                   <el-button :loading="exportLoading" @click="doExport('json')">导出 JSON</el-button>
+                  <el-button :loading="exportLoading" type="primary" @click="doExport('jsonl')">导出 JSONL 包</el-button>
                 </div>
               </div>
             </template>

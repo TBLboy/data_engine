@@ -2223,11 +2223,12 @@ def dataset_export_episodes(
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    filename_ext = 'zip' if fmt == 'jsonl' else fmt
     return StreamingResponse(
         io.BytesIO(content),
         media_type=mime_type,
         headers={
-            'Content-Disposition': f"attachment; filename*=UTF-8''{quote(f'qualified_episodes_{task_type_id}.{fmt}')}",
+            'Content-Disposition': f"attachment; filename*=UTF-8''{quote(f'qualified_episodes_{task_type_id}.{filename_ext}')}",
         },
     )
 

@@ -31,6 +31,19 @@
   - historical SQLite migration reached `20260718_0027`
 - Next step: commit this version, rebuild Compose images, then implement and validate Schema operations, bulk task generation, assignment/workload operations, and the training-export gate.
 
+## 2026-07-20 10:25 CST — JSONL 数据包导出完成
+
+- Type: feature
+- Status: implemented, tested
+- Objective: 完成统一导出的 JSONL 训练主产物格式。
+- Work completed:
+  - `format=jsonl` 生成 zip 包：`manifest.json` + `episodes.jsonl` + `schemas.json`
+  - manifest 记录门禁、计数、training default policy、文件 hash
+  - 前端增加「导出 JSONL 包」按钮，下载扩展名为 `.zip`
+  - 回归测试覆盖包内容与 schema 快照
+- Verification: annotation 7/7、compile、frontend build 通过
+- Next steps: commit 本批；T11 容器/PostgreSQL 真实验收。
+
 ## 2026-07-20 10:15 CST — 统一 QUALIFIED 导出主链路落地
 
 - Type: feature

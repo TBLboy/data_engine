@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
+import zipfile
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session, joinedload
@@ -18,6 +20,7 @@ from app.models import (
     DatasetExportJob,
     Episode,
     ListRecord,
+    SubGoalSchema,
     TaskType,
 )
 
@@ -274,6 +277,96 @@ class DatasetExportService:
         return row
 
     @classmethod
+    @classmethod
+    def _schema_snapshots(cls, db: Session, serialized: list[dict]) -> dict[str, dict]:
+        schema_ids = sorted({
+            item['annotation_schema_id']
+            for item in serialized
+            if item.get('annotation_schema_id')
+        })
+        if not schema_ids:
+            return {}
+        schemas = db.query(SubGoalSchema).options(
+            joinedload(SubGoalSchema.definitions)
+        ).filter(SubGoalSchema.id.in_(schema_ids)).all()
+        result: dict[str, dict] = {}
+        for schema in schemas:
+            definitions = sorted(schema.definitions, key=lambda item: item.sequence_no)
+            payload = {
+                'id': schema.id,
+                'taskTypeId': schema.task_type_id,
+                'versionNo': schema.version_no,
+                'status': schema.status,
+                'contentHash': schema.content_hash,
+                'definitions': [
+                    {
+                        'id': item.id,
+                        'sequenceNo': item.sequence_no,
+                        'code': item.code,
+                        'nameEn': item.name_en,
+                        'nameZh': item.name_zh,
+                        'description': item.description,
+                        'actionVerb': item.action_verb,
+                        'isRequired': item.is_required,
+                        'isConditional': item.is_conditional,
+                        'maxOccurrences': item.max_occurrences,
+                        'objectRoleHints': item.object_role_hints or {},
+                    }
+                    for item in definitions
+                ],
+            }
+            result[schema.content_hash] = payload
+        return result
+
+    @classmethod
+    def _build_jsonl_package(
+        cls,
+        *,
+        task_type_id: str,
+        serialized: list[dict],
+        filters: dict,
+        schemas: dict[str, dict],
+    ) -> bytes:
+        episodes_jsonl = '\n'.join(
+            json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+            for item in serialized
+        )
+        if episodes_jsonl:
+            episodes_jsonl += '\n'
+        schemas_body = json.dumps(schemas, ensure_ascii=False, indent=2, sort_keys=True)
+        manifest = {
+            'exportType': 'qualified_dataset',
+            'taskTypeId': task_type_id,
+            'format': 'jsonl_package',
+            'qualificationGate': filters.get('qualificationGate') or [],
+            'batchIds': filters.get('batchIds') or [],
+            'episodeCount': len(serialized),
+            'annotationCompletedCount': filters.get('annotationCompletedCount') or 0,
+            'trainingDefaultIncludedCount': filters.get('trainingDefaultIncludedCount') or 0,
+            'trainingDefaultPolicy': {
+                'includeCompletedNormally': True,
+                'includeCompletedWithRetry': True,
+                'includePartiallyCompleted': True,
+                'includeFailed': True,
+                'includeUncertain': False,
+            },
+            'schemaHashes': sorted(schemas.keys()),
+            'createdAt': datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        }
+        episodes_hash = hashlib.sha256(episodes_jsonl.encode('utf-8')).hexdigest()
+        schemas_hash = hashlib.sha256(schemas_body.encode('utf-8')).hexdigest()
+        manifest['episodesSha256'] = episodes_hash
+        manifest['schemasSha256'] = schemas_hash
+        manifest_body = json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
+
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, mode='w', compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr('manifest.json', manifest_body)
+            archive.writestr('episodes.jsonl', episodes_jsonl)
+            archive.writestr('schemas.json', schemas_body)
+        return buffer.getvalue()
+
+    @classmethod
     def prepare_export(
         cls,
         db: Session,
@@ -281,8 +374,8 @@ class DatasetExportService:
         fmt: str = 'csv',
         batch_ids: list[str] | None = None,
     ) -> tuple[bytes, str, int, dict, list[dict]]:
-        if fmt not in {'csv', 'json'}:
-            raise ValueError('仅支持 csv 或 json 导出格式')
+        if fmt not in {'csv', 'json', 'jsonl'}:
+            raise ValueError('仅支持 csv、json 或 jsonl 导出格式')
 
         episodes = cls._qualified_episode_query(db, task_type_id, batch_ids=batch_ids).all()
         annotation_map = cls._annotation_lookup(db, task_type_id, [item.id for item in episodes])
@@ -326,6 +419,18 @@ class DatasetExportService:
         if fmt == 'json':
             content = json.dumps(serialized, ensure_ascii=False, indent=2).encode('utf-8')
             return content, 'application/json', len(serialized), filters, serialized
+
+        if fmt == 'jsonl':
+            schemas = cls._schema_snapshots(db, serialized)
+            content = cls._build_jsonl_package(
+                task_type_id=task_type_id,
+                serialized=serialized,
+                filters=filters,
+                schemas=schemas,
+            )
+            filters['packageFiles'] = ['manifest.json', 'episodes.jsonl', 'schemas.json']
+            filters['packageSha256'] = hashlib.sha256(content).hexdigest()
+            return content, 'application/zip', len(serialized), filters, serialized
 
         output = io.StringIO()
         fields = [field for field, _ in cls.EXPORT_FIELDS] + cls.ANNOTATION_EXPORT_FIELDS
