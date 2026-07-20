@@ -27,7 +27,16 @@ from app.models.l3_v2_config import L3V2Config
 from app.models.audit import AuditEvent
 from app.models.batch import Batch
 from app.models.episode import Episode
-from app.models.qc import BatchDecisionLog, BugReport, DatasetExportJob, QcRereviewRequest, QcReviewRevision, QcTask, TaskOperationLog
+from app.models.qc import (
+    BatchDecisionLog,
+    BugReport,
+    DatasetExportItem,
+    DatasetExportJob,
+    QcRereviewRequest,
+    QcReviewRevision,
+    QcTask,
+    TaskOperationLog,
+)
 from app.models.task_type import TaskType
 from app.models.user import User
 
@@ -56,6 +65,7 @@ __all__ = [
     'BatchDecisionLog',
     'BugReport',
     'DatasetExportJob',
+    'DatasetExportItem',
     'QcRereviewRequest',
     'QcReviewRevision',
     'QcTask',

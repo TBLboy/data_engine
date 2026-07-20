@@ -2,11 +2,11 @@
 
 ## Last Updated
 
-- 2026-07-20 10:02 CST（task-list 已建立，准备 commit 备份后重构统一导出）
+- 2026-07-20 10:15 CST（统一导出主实现已完成，准备正式 commit）
 
 ## Current Objective
 
-- 按 `.project-log/task-list.md` 落地统一质检合格数据导出：先 commit 备份，再重构错误门禁，逐项实现 job/item 快照、导出行字段、前端展示与测试。
+- 完成统一质检合格数据导出主链路：QUALIFIED 全量导出 + 可选标注增强 + export item 快照 + 前端双计数/标注列。
 
 ## Current Status
 

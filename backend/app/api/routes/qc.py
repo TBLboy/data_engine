@@ -2138,7 +2138,40 @@ def dataset_task_episodes(
     total = query.count()
     items = query.order_by(Episode.id).offset((page - 1) * page_size).limit(page_size).all()
 
+    from app.models import AnnotationRevision, AnnotationTask
+    annotation_lookup: dict[str, tuple[str, bool]] = {}
+    if items:
+        episode_ids = [item.id for item in items]
+        tasks = db.query(AnnotationTask).filter(
+            AnnotationTask.episode_id.in_(episode_ids),
+            AnnotationTask.task_type_id == task_type_id,
+        ).all()
+        revision_ids = {
+            (task.id, task.current_revision_no)
+            for task in tasks
+            if task.work_status == 'completed' and task.current_revision_no > 0
+        }
+        revision_set: set[tuple[str, int]] = set()
+        if revision_ids:
+            task_ids = [task_id for task_id, _ in revision_ids]
+            revisions = db.query(AnnotationRevision).filter(
+                AnnotationRevision.annotation_task_id.in_(task_ids)
+            ).all()
+            revision_set = {(item.annotation_task_id, item.revision_no) for item in revisions}
+        for task in tasks:
+            status = task.work_status or 'pending'
+            completed = (
+                task.work_status == 'completed'
+                and (task.id, task.current_revision_no) in revision_set
+            )
+            if task.work_status == 'completed' and not completed:
+                status = 'revision_missing'
+            elif completed:
+                status = 'completed'
+            annotation_lookup[task.episode_id] = (status, completed)
+
     def _serialize(e: Episode) -> dict:
+        annotation_status, annotation_completed = annotation_lookup.get(e.id, ('not_created', False))
         return {
             'episodeId': e.id,
             'taskName': e.task_name,
@@ -2151,6 +2184,8 @@ def dataset_task_episodes(
             'frameCount': e.frame_count,
             'reasonCode': e.reason_code,
             'finalDecidedAt': e.final_decided_at.isoformat() if e.final_decided_at else None,
+            'annotationCompleted': annotation_completed,
+            'annotationStatus': annotation_status,
         }
 
     return {
@@ -2168,12 +2203,12 @@ def dataset_export_episodes(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """导出通过 QC 且已完成最终标注 revision 的 episode 清单."""
+    """导出 active scope 内全部 QUALIFIED episode，并附带可选标注增强字段."""
     from app.services.dataset_service import DatasetExportService
     fmt = payload.get('format', 'csv')
     batch_ids = payload.get('batchIds') or None
     try:
-        content, mime_type, count, filters = DatasetExportService.prepare_export(
+        content, mime_type, count, filters, rows = DatasetExportService.prepare_export(
             db, task_type_id, fmt, batch_ids=batch_ids
         )
         DatasetExportService.record_export(
@@ -2183,6 +2218,7 @@ def dataset_export_episodes(
             count,
             created_by=current_user.name,
             filters=filters,
+            rows=rows,
         )
     except ValueError as exc:
         db.rollback()

@@ -144,9 +144,8 @@ async function doExport(format: string) {
     link.click()
     URL.revokeObjectURL(url)
     ElMessage.success('导出完成')
-  } catch (error) {
-    const message = error instanceof Error && error.message ? error.message : '导出失败'
-    ElMessage.error(message.includes('没有满足导出门禁') ? message : '导出失败')
+  } catch {
+    ElMessage.error('导出失败')
   } finally {
     exportLoading.value = false
   }
@@ -184,6 +183,19 @@ const statusLabel = (s: string) => {
   if (s === 'QUALIFIED') return '可用于训练'
   if (s === 'UNQUALIFIED') return '不可用于训练'
   return '待最终判定'
+}
+
+const annotationStatusLabel = (s: string) => {
+  const map: Record<string, string> = {
+    not_created: '未创建',
+    pending: '待标注',
+    assigned: '已分配',
+    in_progress: '标注中',
+    completed: '已完成',
+    invalidated: '已失效',
+    revision_missing: 'revision 缺失',
+  }
+  return map[s] || s
 }
 
 const sourceLabel = (s: string) => {
@@ -233,8 +245,11 @@ onMounted(async () => {
       <el-row :gutter="18" v-loading="loading" v-if="summary">
         <el-col :span="6">
           <el-card shadow="never" class="qc-card qc-stat-card qc-stat-card-green">
-            <span>合格可用数据</span>
-            <strong>{{ summary.qualifiedEpisodeCount }}</strong>
+            <span>质检合格 / 完成标注</span>
+            <strong>{{ summary.qualifiedEpisodeCount }} / {{ summary.annotationCompletedEpisodeCount }}</strong>
+            <small v-if="summary.annotationCoverageRate != null" style="display:block;margin-top:6px;color:#909399">
+              标注覆盖率 {{ (summary.annotationCoverageRate * 100).toFixed(1) }}%
+            </small>
           </el-card>
         </el-col>
         <el-col :span="6">
@@ -281,11 +296,10 @@ onMounted(async () => {
               <el-descriptions-item label="待完成标注">{{ summary.annotationPendingEpisodeCount }}</el-descriptions-item>
             </el-descriptions>
             <el-alert
-              v-if="summary.annotationPendingEpisodeCount > 0"
-              type="warning"
+              type="info"
               :closable="false"
               show-icon
-              title="导出门禁未满足：所有 QUALIFIED Episode 必须先完成标注任务。"
+              title="导出范围：全部质检合格 Episode。未完成标注的数据仍会导出，并标记 annotationCompleted=false。"
               style="margin-top: 14px"
             />
           </el-card>
@@ -385,6 +399,16 @@ onMounted(async () => {
                 <template #default="{ row }">
                   <el-tag :type="statusTagType(row.finalDatasetStatus)">{{ statusLabel(row.finalDatasetStatus) }}</el-tag>
                 </template>
+              </el-table-column>
+              <el-table-column label="是否完成标注" width="120">
+                <template #default="{ row }">
+                  <el-tag :type="row.annotationCompleted ? 'success' : 'info'" size="small">
+                    {{ row.annotationCompleted ? '是' : '否' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="标注状态" width="120">
+                <template #default="{ row }">{{ annotationStatusLabel(row.annotationStatus) }}</template>
               </el-table-column>
               <el-table-column label="判定来源" min-width="180">
                 <template #default="{ row }">{{ sourceLabel(row.finalDecisionSource) }}</template>

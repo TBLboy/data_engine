@@ -31,6 +31,27 @@
   - historical SQLite migration reached `20260718_0027`
 - Next step: commit this version, rebuild Compose images, then implement and validate Schema operations, bulk task generation, assignment/workload operations, and the training-export gate.
 
+## 2026-07-20 10:15 CST — 统一 QUALIFIED 导出主链路落地
+
+- Type: feature
+- Status: implemented, tested, ready to commit
+- Objective: 将错误的“必须完成标注才导出”重构为统一质检合格数据导出，并补齐标注增强字段与 export item 快照。
+- Work completed:
+  - `DatasetExportService` 导出全部 active-scope QUALIFIED Episode；未标注不阻断。
+  - 导出行增加 `annotationCompleted` / `annotationStatus` / `trainingDefaultIncluded` / revision / Schema / payload。
+  - 新增 migration `20260720_0028`、`DatasetExportItem`；`record_export` 事务内写入 item 快照。
+  - 前端卡片改为「质检合格 / 完成标注」；Episode 列表增加是否完成标注与标注状态列。
+  - 回归测试覆盖无标注导出、完成标注导出、历史 item 在新 revision 后不变。
+- Verification:
+  - `tests/test_annotations.py` 6/6
+  - `tests/test_data_assets.py` 11/11
+  - backend compileall 通过
+  - frontend `npm run build` 通过
+- Deferred:
+  - 独立 JSONL zip（manifest/episodes/schemas）作为 T05 后续
+  - Compose/PostgreSQL/MinIO 真实验收作为 T11
+- Next steps: 正式 commit 本批，再做 JSONL 数据包与容器验收。
+
 ## 2026-07-20 10:02 CST — 代码进度盘点 + task-list 建立
 
 - Type: planning / progress audit

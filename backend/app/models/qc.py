@@ -1,4 +1,4 @@
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Float, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Float, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
@@ -74,11 +74,40 @@ class DatasetExportJob(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     task_type_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    export_type: Mapped[str] = mapped_column(String(32), default='qualified_dataset', nullable=False)
     export_format: Mapped[str] = mapped_column(String(16), nullable=False)
     episode_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    annotation_completed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    training_default_included_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     filters_json: Mapped[str] = mapped_column(Text, default='{}', nullable=False)
     created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), server_default=func.now())
+
+    items = relationship('DatasetExportItem', back_populates='export_job', cascade='all, delete-orphan')
+
+
+class DatasetExportItem(Base):
+    __tablename__ = 'dataset_export_items'
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    export_job_id: Mapped[int] = mapped_column(ForeignKey('dataset_export_jobs.id'), nullable=False, index=True)
+    episode_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    inclusion_status: Mapped[str] = mapped_column(String(32), default='included', nullable=False)
+    episode_snapshot_json: Mapped[str] = mapped_column(Text, default='{}', nullable=False)
+    annotation_completed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    annotation_status: Mapped[str] = mapped_column(String(32), default='not_created', nullable=False)
+    training_default_included: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    annotation_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    annotation_revision_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    revision_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    schema_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    schema_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    schema_content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    task_outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[DateTime] = mapped_column(DateTime(timezone=False), server_default=func.now())
+
+    export_job = relationship('DatasetExportJob', back_populates='items')
 
 
 class TaskOperationLog(Base):

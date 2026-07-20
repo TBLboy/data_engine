@@ -1,17 +1,20 @@
-"""Dataset summary and export services."""
+"""Dataset summary and unified QUALIFIED export services."""
+
+from __future__ import annotations
 
 import csv
 import io
 import json
 from datetime import datetime, timezone
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.models import (
     AnnotationRevision,
     AnnotationTask,
     AuditEvent,
     Batch,
+    DatasetExportItem,
     DatasetExportJob,
     Episode,
     ListRecord,
@@ -44,7 +47,7 @@ class DatasetSummaryService:
 
         qualified = [e for e in episodes if e.final_dataset_status == 'QUALIFIED']
         qualified_ids = [e.id for e in qualified]
-        completed_annotation_ids = set()
+        completed_annotation_ids: set[str] = set()
         if qualified_ids:
             completed_annotation_ids = {
                 episode_id for episode_id, in db.query(AnnotationTask.episode_id).join(
@@ -63,15 +66,17 @@ class DatasetSummaryService:
         rejected = sum(1 for b in batches if b.batch_decision == 'REJECTED')
         pending = sum(1 for b in batches if b.batch_decision == 'PENDING')
 
-        source_counts = {}
+        source_counts: dict[str, int] = {}
         for e in episodes:
             src = e.final_decision_source
             source_counts[src] = source_counts.get(src, 0) + 1
 
+        completed_count = len(completed_annotation_ids)
+        qualified_count = len(qualified_ids)
         return {
             'taskId': task_type.id,
             'taskName': task_type.name,
-            'qualifiedEpisodeCount': len(qualified),
+            'qualifiedEpisodeCount': qualified_count,
             'totalEpisodeCount': total,
             'batchCount': batch_count,
             'acceptedBatchCount': accepted,
@@ -83,8 +88,9 @@ class DatasetSummaryService:
             'propagatedFailCount': source_counts.get('BATCH_REJECT_PROPAGATED_FAIL', 0),
             'overrideManualPassFailCount': source_counts.get('BATCH_REJECT_OVERRIDE_MANUAL_PASS', 0),
             'exportableEpisodeCount': sum(1 for e in episodes if e.is_exportable),
-            'annotationCompletedEpisodeCount': len(completed_annotation_ids),
-            'annotationPendingEpisodeCount': len(qualified_ids) - len(completed_annotation_ids),
+            'annotationCompletedEpisodeCount': completed_count,
+            'annotationPendingEpisodeCount': qualified_count - completed_count,
+            'annotationCoverageRate': (completed_count / qualified_count) if qualified_count else None,
         }
 
     @staticmethod
@@ -119,7 +125,7 @@ class DatasetSummaryService:
 
 
 class DatasetExportService:
-    """Export only QC-qualified episodes with an immutable completed annotation revision."""
+    """Export all active-scope QUALIFIED episodes with optional annotation enhancements."""
 
     EXPORT_FIELDS = [
         ('episode_id', lambda e: e.id),
@@ -139,6 +145,9 @@ class DatasetExportService:
     ]
 
     ANNOTATION_EXPORT_FIELDS = [
+        'annotation_completed',
+        'annotation_status',
+        'training_default_included',
         'annotation_task_id',
         'annotation_revision_id',
         'annotation_revision_no',
@@ -146,21 +155,16 @@ class DatasetExportService:
         'annotation_schema_id',
         'annotation_schema_version',
         'annotation_schema_hash',
+        'task_outcome',
         'annotation_payload_json',
     ]
 
     @classmethod
-    def _get_export_rows(cls, db: Session, task_type_id: str, batch_ids: list[str] | None = None):
-        query = db.query(Episode, AnnotationTask, AnnotationRevision).join(
+    def _qualified_episode_query(cls, db: Session, task_type_id: str, batch_ids: list[str] | None = None):
+        query = db.query(Episode).options(joinedload(Episode.batch)).join(
             Batch, Episode.batch_id == Batch.id
         ).join(
             ListRecord, Batch.list_id == ListRecord.id
-        ).join(
-            AnnotationTask, AnnotationTask.episode_id == Episode.id
-        ).join(
-            AnnotationRevision,
-            (AnnotationRevision.annotation_task_id == AnnotationTask.id)
-            & (AnnotationRevision.revision_no == AnnotationTask.current_revision_no),
         ).filter(
             Batch.task_type_id == task_type_id,
             Batch.is_active == True,
@@ -168,56 +172,104 @@ class DatasetExportService:
             Batch.list_id.is_not(None),
             Episode.is_active == True,
             Episode.final_dataset_status == 'QUALIFIED',
-            AnnotationTask.task_type_id == task_type_id,
-            AnnotationTask.work_status == 'completed',
         )
         if batch_ids:
             query = query.filter(Episode.batch_id.in_(batch_ids))
-        rows = query.order_by(Episode.id).all()
-        if not rows:
-            raise ValueError(
-                '没有满足导出门禁的 Episode：必须同时满足 QUALIFIED 且拥有 completed annotation revision'
-            )
-        return rows
-
-    @staticmethod
-    def _annotation_snapshot(task: AnnotationTask, revision: AnnotationRevision) -> dict:
-        return {
-            'annotationTaskId': task.id,
-            'annotationRevisionId': revision.id,
-            'annotationRevisionNo': revision.revision_no,
-            'annotationRevisionHash': revision.content_hash,
-            'annotationSchemaId': task.sub_goal_schema_id,
-            'annotationSchemaVersion': task.sub_goal_schema_version,
-            'annotationSchemaHash': task.sub_goal_schema_content_hash,
-        }
+        return query.order_by(Episode.id)
 
     @classmethod
-    def _serialize_row(cls, episode: Episode, task: AnnotationTask, revision: AnnotationRevision) -> dict:
+    def _annotation_lookup(
+        cls,
+        db: Session,
+        task_type_id: str,
+        episode_ids: list[str],
+    ) -> dict[str, tuple[AnnotationTask, AnnotationRevision | None]]:
+        if not episode_ids:
+            return {}
+        tasks = db.query(AnnotationTask).options(
+            joinedload(AnnotationTask.revisions),
+        ).filter(
+            AnnotationTask.episode_id.in_(episode_ids),
+            AnnotationTask.task_type_id == task_type_id,
+        ).all()
+        result: dict[str, tuple[AnnotationTask, AnnotationRevision | None]] = {}
+        for task in tasks:
+            revision = None
+            if task.work_status == 'completed' and task.current_revision_no > 0:
+                revision = next(
+                    (item for item in task.revisions if item.revision_no == task.current_revision_no),
+                    None,
+                )
+            result[task.episode_id] = (task, revision)
+        return result
+
+    @staticmethod
+    def _annotation_status(task: AnnotationTask | None, revision: AnnotationRevision | None) -> str:
+        if task is None:
+            return 'not_created'
+        if task.work_status == 'invalidated':
+            return 'invalidated'
+        if task.work_status == 'completed' and revision is not None:
+            return 'completed'
+        if task.work_status == 'completed' and revision is None:
+            return 'revision_missing'
+        if task.work_status == 'in_progress':
+            return 'in_progress'
+        if task.work_status == 'assigned':
+            return 'assigned'
+        return task.work_status or 'pending'
+
+    @classmethod
+    def _serialize_row(
+        cls,
+        episode: Episode,
+        task: AnnotationTask | None,
+        revision: AnnotationRevision | None,
+    ) -> dict:
         row = {field: fn(episode) for field, fn in cls.EXPORT_FIELDS}
-        snapshot = cls._annotation_snapshot(task, revision)
+        annotation_status = cls._annotation_status(task, revision)
+        annotation_completed = annotation_status == 'completed'
+        task_outcome = None
+        if revision and isinstance(revision.annotation_payload, dict):
+            task_outcome = revision.annotation_payload.get('taskOutcome')
+        training_default_included = bool(
+            annotation_completed and task_outcome and task_outcome != 'uncertain'
+        )
+
         row.update({
-            'annotation_task_id': snapshot['annotationTaskId'],
-            'annotation_revision_id': snapshot['annotationRevisionId'],
-            'annotation_revision_no': snapshot['annotationRevisionNo'],
-            'annotation_revision_hash': snapshot['annotationRevisionHash'],
-            'annotation_schema_id': snapshot['annotationSchemaId'],
-            'annotation_schema_version': snapshot['annotationSchemaVersion'],
-            'annotation_schema_hash': snapshot['annotationSchemaHash'],
+            'annotation_completed': annotation_completed,
+            'annotation_status': annotation_status,
+            'training_default_included': training_default_included,
+            'annotation_task_id': task.id if task else '',
+            'annotation_revision_id': revision.id if revision else '',
+            'annotation_revision_no': revision.revision_no if revision else '',
+            'annotation_revision_hash': revision.content_hash if revision else '',
+            'annotation_schema_id': task.sub_goal_schema_id if task and revision else '',
+            'annotation_schema_version': task.sub_goal_schema_version if task and revision else '',
+            'annotation_schema_hash': task.sub_goal_schema_content_hash if task and revision else '',
+            'task_outcome': task_outcome or '',
             'annotation_payload_json': json.dumps(
-                revision.annotation_payload or {}, ensure_ascii=False, sort_keys=True, separators=(',', ':')
-            ),
-            'annotation': revision.annotation_payload or {},
+                revision.annotation_payload or {},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(',', ':'),
+            ) if revision else '',
+            'annotationCompleted': annotation_completed,
+            'annotationStatus': annotation_status,
+            'trainingDefaultIncluded': training_default_included,
+            'annotationTaskId': task.id if task else None,
             'annotationRevision': {
-                'id': snapshot['annotationRevisionId'],
-                'revisionNo': snapshot['annotationRevisionNo'],
-                'contentHash': snapshot['annotationRevisionHash'],
-            },
+                'id': revision.id,
+                'revisionNo': revision.revision_no,
+                'contentHash': revision.content_hash,
+            } if revision else None,
             'annotationSchema': {
-                'id': snapshot['annotationSchemaId'],
-                'versionNo': snapshot['annotationSchemaVersion'],
-                'contentHash': snapshot['annotationSchemaHash'],
-            },
+                'id': task.sub_goal_schema_id,
+                'versionNo': task.sub_goal_schema_version,
+                'contentHash': task.sub_goal_schema_content_hash,
+            } if task and revision else None,
+            'annotation': revision.annotation_payload if revision else None,
+            'taskOutcome': task_outcome,
         })
         return row
 
@@ -228,43 +280,52 @@ class DatasetExportService:
         task_type_id: str,
         fmt: str = 'csv',
         batch_ids: list[str] | None = None,
-    ) -> tuple[bytes, str, int, dict]:
+    ) -> tuple[bytes, str, int, dict, list[dict]]:
         if fmt not in {'csv', 'json'}:
             raise ValueError('仅支持 csv 或 json 导出格式')
-        rows = cls._get_export_rows(db, task_type_id, batch_ids=batch_ids)
-        serialized = [cls._serialize_row(episode, task, revision) for episode, task, revision in rows]
-        revision_snapshots = [
-            {
-                key: item[key]
-                for key in (
-                    'episode_id',
-                    'annotation_task_id',
-                    'annotation_revision_id',
-                    'annotation_revision_no',
-                    'annotation_revision_hash',
-                    'annotation_schema_id',
-                    'annotation_schema_version',
-                    'annotation_schema_hash',
-                )
-            }
-            for item in serialized
-        ]
+
+        episodes = cls._qualified_episode_query(db, task_type_id, batch_ids=batch_ids).all()
+        annotation_map = cls._annotation_lookup(db, task_type_id, [item.id for item in episodes])
+        serialized = []
+        for episode in episodes:
+            task, revision = annotation_map.get(episode.id, (None, None))
+            serialized.append(cls._serialize_row(episode, task, revision))
+
+        completed_count = sum(1 for item in serialized if item['annotation_completed'])
+        default_training_count = sum(1 for item in serialized if item['training_default_included'])
         filters = {
+            'exportType': 'qualified_dataset',
             'qualificationGate': [
                 "episode.final_dataset_status = 'QUALIFIED'",
-                "annotation_tasks.work_status = 'completed'",
-                'annotation_revisions.revision_no = annotation_tasks.current_revision_no',
                 'active_list_active_batch_indexed_episodes',
             ],
             'taskTypeId': task_type_id,
             'batchIds': sorted(batch_ids) if batch_ids else [],
             'episodeCount': len(serialized),
-            'annotationRevisionSnapshots': revision_snapshots,
+            'annotationCompletedCount': completed_count,
+            'trainingDefaultIncludedCount': default_training_count,
+            'annotationRevisionSnapshots': [
+                {
+                    'episode_id': item['episode_id'],
+                    'annotation_completed': item['annotation_completed'],
+                    'annotation_status': item['annotation_status'],
+                    'training_default_included': item['training_default_included'],
+                    'annotation_task_id': item['annotation_task_id'] or None,
+                    'annotation_revision_id': item['annotation_revision_id'] or None,
+                    'annotation_revision_no': item['annotation_revision_no'] or None,
+                    'annotation_revision_hash': item['annotation_revision_hash'] or None,
+                    'annotation_schema_id': item['annotation_schema_id'] or None,
+                    'annotation_schema_version': item['annotation_schema_version'] or None,
+                    'annotation_schema_hash': item['annotation_schema_hash'] or None,
+                    'task_outcome': item['task_outcome'] or None,
+                }
+                for item in serialized
+            ],
         }
 
         if fmt == 'json':
             content = json.dumps(serialized, ensure_ascii=False, indent=2).encode('utf-8')
-            return content, 'application/json', len(serialized), filters
+            return content, 'application/json', len(serialized), filters, serialized
 
         output = io.StringIO()
         fields = [field for field, _ in cls.EXPORT_FIELDS] + cls.ANNOTATION_EXPORT_FIELDS
@@ -273,11 +334,17 @@ class DatasetExportService:
         for item in serialized:
             writer.writerow([item[field] for field in fields])
         content = output.getvalue().encode('utf-8-sig')
-        return content, 'text/csv', len(serialized), filters
+        return content, 'text/csv', len(serialized), filters, serialized
 
     @classmethod
-    def export_episodes(cls, db: Session, task_type_id: str, fmt: str = 'csv', batch_ids: list[str] | None = None) -> tuple[bytes, str, int]:
-        content, mime_type, count, _ = cls.prepare_export(db, task_type_id, fmt, batch_ids=batch_ids)
+    def export_episodes(
+        cls,
+        db: Session,
+        task_type_id: str,
+        fmt: str = 'csv',
+        batch_ids: list[str] | None = None,
+    ) -> tuple[bytes, str, int]:
+        content, mime_type, count, _, _ = cls.prepare_export(db, task_type_id, fmt, batch_ids=batch_ids)
         return content, mime_type, count
 
     @classmethod
@@ -289,16 +356,49 @@ class DatasetExportService:
         episode_count: int,
         created_by: str = '',
         filters: dict | None = None,
+        rows: list[dict] | None = None,
     ) -> DatasetExportJob:
+        payload = filters or {}
+        snapshots = payload.get('annotationRevisionSnapshots') or []
         job = DatasetExportJob(
             task_type_id=task_type_id,
+            export_type=str(payload.get('exportType') or 'qualified_dataset'),
             export_format=fmt,
             episode_count=episode_count,
-            filters_json=json.dumps(filters or {}, ensure_ascii=False, sort_keys=True),
+            annotation_completed_count=int(payload.get('annotationCompletedCount') or 0),
+            training_default_included_count=int(payload.get('trainingDefaultIncludedCount') or 0),
+            filters_json=json.dumps(payload, ensure_ascii=False, sort_keys=True),
             created_by=created_by or 'system',
         )
         db.add(job)
         db.flush()
+
+        row_by_episode = {item.get('episode_id'): item for item in (rows or [])}
+        for snapshot in snapshots:
+            episode_id = snapshot.get('episode_id')
+            episode_snapshot = row_by_episode.get(episode_id) or {
+                'episode_id': episode_id,
+                'annotation_completed': snapshot.get('annotation_completed'),
+                'annotation_status': snapshot.get('annotation_status'),
+                'training_default_included': snapshot.get('training_default_included'),
+            }
+            db.add(DatasetExportItem(
+                export_job_id=job.id,
+                episode_id=str(episode_id or ''),
+                inclusion_status='included',
+                episode_snapshot_json=json.dumps(episode_snapshot, ensure_ascii=False, sort_keys=True),
+                annotation_completed=bool(snapshot.get('annotation_completed')),
+                annotation_status=str(snapshot.get('annotation_status') or 'not_created'),
+                training_default_included=bool(snapshot.get('training_default_included')),
+                annotation_task_id=snapshot.get('annotation_task_id'),
+                annotation_revision_id=snapshot.get('annotation_revision_id'),
+                revision_no=snapshot.get('annotation_revision_no'),
+                content_hash=snapshot.get('annotation_revision_hash'),
+                schema_id=snapshot.get('annotation_schema_id'),
+                schema_version=snapshot.get('annotation_schema_version'),
+                schema_content_hash=snapshot.get('annotation_schema_hash'),
+                task_outcome=snapshot.get('task_outcome'),
+            ))
 
         ts = int(datetime.now(timezone.utc).timestamp() * 1000)
         db.add(AuditEvent(
@@ -306,7 +406,7 @@ class DatasetExportService:
             operator=created_by or 'system',
             action='导出数据集',
             target=task_type_id,
-            detail=f'{fmt.upper()} 导出 {episode_count} 条 episode',
+            detail=f'{fmt.upper()} 导出 {episode_count} 条 QUALIFIED episode',
             time=datetime.now(timezone.utc),
             event_type='business_action',
             severity='info',

@@ -628,6 +628,7 @@ export interface DatasetTaskSummary {
   exportableEpisodeCount: number
   annotationCompletedEpisodeCount: number
   annotationPendingEpisodeCount: number
+  annotationCoverageRate: number | null
 }
 
 export interface DatasetBatchRow {
@@ -657,6 +658,8 @@ export interface DatasetEpisodeRow {
   frameCount: number
   reasonCode: string
   finalDecidedAt: string | null
+  annotationCompleted: boolean
+  annotationStatus: string
 }
 
 export interface DatasetEpisodeListPayload {
