@@ -2,11 +2,11 @@
 
 ## Last Updated
 
-- 2026-07-18 CST（data_label 分支启动数据标注 V1 第一阶段）
+- 2026-07-20 10:02 CST（task-list 已建立，准备 commit 备份后重构统一导出）
 
 ## Current Objective
 
-- 按已确认边界落地数据标注 V1 第一阶段：只处理现有 `QUALIFIED` 且位于统一 active scope 的 Episode；`task_outcome` 在标注阶段填写；不改现有 QC 表单、批次裁决或历史 `UNQUALIFIED` 迁移。
+- 按 `.project-log/task-list.md` 落地统一质检合格数据导出：先 commit 备份，再重构错误门禁，逐项实现 job/item 快照、导出行字段、前端展示与测试。
 
 ## Current Status
 
@@ -21,6 +21,7 @@
 - `data_label` 跟踪 `origin/data_label`。
 - annotation V1 已落地；不修改现有 QC 表单、批次裁决或历史 `UNQUALIFIED` 迁移。
 - 已有 project-log 文档修改保留；不修改现有 QC 逻辑。
+- 当前导出实验代码尚未提交：它错误地把既有导出接口收紧为仅已完成标注，必须在实施统一导出方案前撤销或重构，不能直接提交。
 
 ### 已完成
 
@@ -122,6 +123,7 @@
 
 ## Next Cycle Decision
 
-- Keep the existing QC and batch adjudication boundaries unchanged. Annotation remains downstream of `QUALIFIED` episodes and upstream of training export.
-- Before any export is allowed, operations must be able to inspect Schema versions, ensure tasks in bulk, assign/claim work, and see completion/exception counts. These are the next production-facing capabilities.
+- Keep the existing QC and batch adjudication boundaries unchanged. Annotation remains downstream of `QUALIFIED` episodes and is exported as an optional, immutable Episode enhancement rather than a second export gate.
+- The dataset page must show `质检合格 / 完成标注` and row-level annotation status. One export must include every active-scope `QUALIFIED` Episode; completed annotations attach revision/Schema/payload, incomplete annotations remain null.
+- Implement `DatasetExportJob` + `dataset_export_items` snapshots before serving production training exports. JSONL package is the training format, CSV is audit-only, and `uncertain` is completed but default-excluded from training.
 - Real PostgreSQL/MinIO and browser acceptance remain required before calling the platform production-ready; the running Compose stack currently uses the pre-annotation backend image and the local Playwright Chrome binary is unavailable.

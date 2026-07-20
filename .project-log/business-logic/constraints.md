@@ -143,7 +143,10 @@
 
 ## Export Enhancement Constraints
 
-- 导出仅包含 final_dataset_status = QUALIFIED 的 episode
+- 统一导出仅包含位于 `active_list_active_batch_indexed_episodes` 且 `final_dataset_status = QUALIFIED` 的 Episode；标注未完成不得阻断该 Episode 的基础数据导出
 - 导出字段必须包含 MinIO 原始/处理后路径、L3 v2 各维度分数
-- 每次导出记录到 DatasetExportJob 表
-- 导出格式支持 CSV 和 JSON
+- 每条导出记录必须包含 `annotation_completed`、`annotation_status`、`training_default_included`；已完成标注时附带 immutable revision、Schema 引用与 payload，未完成时标注内容为 `null`
+- `annotation_completed` 只能由 `annotation_tasks.work_status = completed` 加当前 immutable revision 存在共同确定；不得以草稿存在、任务创建或前端布尔状态替代
+- 每次导出记录到 `DatasetExportJob` 和 `dataset_export_items`；`filters_json` 不得作为逐 Episode 快照的唯一事实源
+- 历史导出 item 绑定的 revision、Schema 与 Episode 快照不可因后续标注编辑而改变
+- 导出格式支持 CSV 审计格式和 JSONL 训练数据包；LeRobot 格式只能经转换器生成，不反向约束内部数据库模型

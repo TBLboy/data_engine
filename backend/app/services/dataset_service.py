@@ -7,7 +7,16 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.models import AuditEvent, Batch, DatasetExportJob, Episode, ListRecord, TaskType
+from app.models import (
+    AnnotationRevision,
+    AnnotationTask,
+    AuditEvent,
+    Batch,
+    DatasetExportJob,
+    Episode,
+    ListRecord,
+    TaskType,
+)
 
 
 class DatasetSummaryService:
@@ -34,6 +43,20 @@ class DatasetSummaryService:
         ).all()
 
         qualified = [e for e in episodes if e.final_dataset_status == 'QUALIFIED']
+        qualified_ids = [e.id for e in qualified]
+        completed_annotation_ids = set()
+        if qualified_ids:
+            completed_annotation_ids = {
+                episode_id for episode_id, in db.query(AnnotationTask.episode_id).join(
+                    AnnotationRevision,
+                    (AnnotationRevision.annotation_task_id == AnnotationTask.id)
+                    & (AnnotationRevision.revision_no == AnnotationTask.current_revision_no),
+                ).filter(
+                    AnnotationTask.episode_id.in_(qualified_ids),
+                    AnnotationTask.task_type_id == task_type_id,
+                    AnnotationTask.work_status == 'completed',
+                ).all()
+            }
         total = len(episodes)
         batch_count = len(batches)
         accepted = sum(1 for b in batches if b.batch_decision == 'ACCEPTED')
@@ -60,6 +83,8 @@ class DatasetSummaryService:
             'propagatedFailCount': source_counts.get('BATCH_REJECT_PROPAGATED_FAIL', 0),
             'overrideManualPassFailCount': source_counts.get('BATCH_REJECT_OVERRIDE_MANUAL_PASS', 0),
             'exportableEpisodeCount': sum(1 for e in episodes if e.is_exportable),
+            'annotationCompletedEpisodeCount': len(completed_annotation_ids),
+            'annotationPendingEpisodeCount': len(qualified_ids) - len(completed_annotation_ids),
         }
 
     @staticmethod
@@ -94,7 +119,7 @@ class DatasetSummaryService:
 
 
 class DatasetExportService:
-    """Export qualified episode metadata as CSV or JSON with full v1.2 fields."""
+    """Export only QC-qualified episodes with an immutable completed annotation revision."""
 
     EXPORT_FIELDS = [
         ('episode_id', lambda e: e.id),
@@ -113,54 +138,171 @@ class DatasetExportService:
         ('updated_at', lambda e: e.updated_at.isoformat() if e.updated_at else ''),
     ]
 
+    ANNOTATION_EXPORT_FIELDS = [
+        'annotation_task_id',
+        'annotation_revision_id',
+        'annotation_revision_no',
+        'annotation_revision_hash',
+        'annotation_schema_id',
+        'annotation_schema_version',
+        'annotation_schema_hash',
+        'annotation_payload_json',
+    ]
+
     @classmethod
-    def _get_episodes(cls, db: Session, task_type_id: str, batch_ids: list[str] | None = None):
-        query = db.query(Episode).join(Batch, Episode.batch_id == Batch.id).join(
+    def _get_export_rows(cls, db: Session, task_type_id: str, batch_ids: list[str] | None = None):
+        query = db.query(Episode, AnnotationTask, AnnotationRevision).join(
+            Batch, Episode.batch_id == Batch.id
+        ).join(
             ListRecord, Batch.list_id == ListRecord.id
+        ).join(
+            AnnotationTask, AnnotationTask.episode_id == Episode.id
+        ).join(
+            AnnotationRevision,
+            (AnnotationRevision.annotation_task_id == AnnotationTask.id)
+            & (AnnotationRevision.revision_no == AnnotationTask.current_revision_no),
         ).filter(
             Batch.task_type_id == task_type_id,
             Batch.is_active == True,
             ListRecord.is_active == True,
+            Batch.list_id.is_not(None),
             Episode.is_active == True,
             Episode.final_dataset_status == 'QUALIFIED',
+            AnnotationTask.task_type_id == task_type_id,
+            AnnotationTask.work_status == 'completed',
         )
         if batch_ids:
             query = query.filter(Episode.batch_id.in_(batch_ids))
-        return query.order_by(Episode.id).all()
+        rows = query.order_by(Episode.id).all()
+        if not rows:
+            raise ValueError(
+                '没有满足导出门禁的 Episode：必须同时满足 QUALIFIED 且拥有 completed annotation revision'
+            )
+        return rows
+
+    @staticmethod
+    def _annotation_snapshot(task: AnnotationTask, revision: AnnotationRevision) -> dict:
+        return {
+            'annotationTaskId': task.id,
+            'annotationRevisionId': revision.id,
+            'annotationRevisionNo': revision.revision_no,
+            'annotationRevisionHash': revision.content_hash,
+            'annotationSchemaId': task.sub_goal_schema_id,
+            'annotationSchemaVersion': task.sub_goal_schema_version,
+            'annotationSchemaHash': task.sub_goal_schema_content_hash,
+        }
+
+    @classmethod
+    def _serialize_row(cls, episode: Episode, task: AnnotationTask, revision: AnnotationRevision) -> dict:
+        row = {field: fn(episode) for field, fn in cls.EXPORT_FIELDS}
+        snapshot = cls._annotation_snapshot(task, revision)
+        row.update({
+            'annotation_task_id': snapshot['annotationTaskId'],
+            'annotation_revision_id': snapshot['annotationRevisionId'],
+            'annotation_revision_no': snapshot['annotationRevisionNo'],
+            'annotation_revision_hash': snapshot['annotationRevisionHash'],
+            'annotation_schema_id': snapshot['annotationSchemaId'],
+            'annotation_schema_version': snapshot['annotationSchemaVersion'],
+            'annotation_schema_hash': snapshot['annotationSchemaHash'],
+            'annotation_payload_json': json.dumps(
+                revision.annotation_payload or {}, ensure_ascii=False, sort_keys=True, separators=(',', ':')
+            ),
+            'annotation': revision.annotation_payload or {},
+            'annotationRevision': {
+                'id': snapshot['annotationRevisionId'],
+                'revisionNo': snapshot['annotationRevisionNo'],
+                'contentHash': snapshot['annotationRevisionHash'],
+            },
+            'annotationSchema': {
+                'id': snapshot['annotationSchemaId'],
+                'versionNo': snapshot['annotationSchemaVersion'],
+                'contentHash': snapshot['annotationSchemaHash'],
+            },
+        })
+        return row
+
+    @classmethod
+    def prepare_export(
+        cls,
+        db: Session,
+        task_type_id: str,
+        fmt: str = 'csv',
+        batch_ids: list[str] | None = None,
+    ) -> tuple[bytes, str, int, dict]:
+        if fmt not in {'csv', 'json'}:
+            raise ValueError('仅支持 csv 或 json 导出格式')
+        rows = cls._get_export_rows(db, task_type_id, batch_ids=batch_ids)
+        serialized = [cls._serialize_row(episode, task, revision) for episode, task, revision in rows]
+        revision_snapshots = [
+            {
+                key: item[key]
+                for key in (
+                    'episode_id',
+                    'annotation_task_id',
+                    'annotation_revision_id',
+                    'annotation_revision_no',
+                    'annotation_revision_hash',
+                    'annotation_schema_id',
+                    'annotation_schema_version',
+                    'annotation_schema_hash',
+                )
+            }
+            for item in serialized
+        ]
+        filters = {
+            'qualificationGate': [
+                "episode.final_dataset_status = 'QUALIFIED'",
+                "annotation_tasks.work_status = 'completed'",
+                'annotation_revisions.revision_no = annotation_tasks.current_revision_no',
+                'active_list_active_batch_indexed_episodes',
+            ],
+            'taskTypeId': task_type_id,
+            'batchIds': sorted(batch_ids) if batch_ids else [],
+            'episodeCount': len(serialized),
+            'annotationRevisionSnapshots': revision_snapshots,
+        }
+
+        if fmt == 'json':
+            content = json.dumps(serialized, ensure_ascii=False, indent=2).encode('utf-8')
+            return content, 'application/json', len(serialized), filters
+
+        output = io.StringIO()
+        fields = [field for field, _ in cls.EXPORT_FIELDS] + cls.ANNOTATION_EXPORT_FIELDS
+        writer = csv.writer(output)
+        writer.writerow(fields)
+        for item in serialized:
+            writer.writerow([item[field] for field in fields])
+        content = output.getvalue().encode('utf-8-sig')
+        return content, 'text/csv', len(serialized), filters
 
     @classmethod
     def export_episodes(cls, db: Session, task_type_id: str, fmt: str = 'csv', batch_ids: list[str] | None = None) -> tuple[bytes, str, int]:
-        episodes = cls._get_episodes(db, task_type_id, batch_ids=batch_ids)
-
-        if fmt == 'json':
-            data = []
-            for e in episodes:
-                row = {field: fn(e) for field, fn in cls.EXPORT_FIELDS}
-                data.append(row)
-            content = json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8')
-            return content, 'application/json', len(episodes)
-        else:
-            output = io.StringIO()
-            writer = csv.writer(output)
-            writer.writerow([field for field, _ in cls.EXPORT_FIELDS])
-            for e in episodes:
-                writer.writerow([fn(e) for _, fn in cls.EXPORT_FIELDS])
-            content = output.getvalue().encode('utf-8-sig')
-            return content, 'text/csv', len(episodes)
+        content, mime_type, count, _ = cls.prepare_export(db, task_type_id, fmt, batch_ids=batch_ids)
+        return content, mime_type, count
 
     @classmethod
-    def record_export(cls, db: Session, task_type_id: str, fmt: str, episode_count: int, created_by: str = '') -> DatasetExportJob:
+    def record_export(
+        cls,
+        db: Session,
+        task_type_id: str,
+        fmt: str,
+        episode_count: int,
+        created_by: str = '',
+        filters: dict | None = None,
+    ) -> DatasetExportJob:
         job = DatasetExportJob(
             task_type_id=task_type_id,
             export_format=fmt,
             episode_count=episode_count,
+            filters_json=json.dumps(filters or {}, ensure_ascii=False, sort_keys=True),
             created_by=created_by or 'system',
         )
         db.add(job)
+        db.flush()
 
-        ts = int(datetime.now(timezone.utc).timestamp())
+        ts = int(datetime.now(timezone.utc).timestamp() * 1000)
         db.add(AuditEvent(
-            id=f'audit_export_{task_type_id}_{ts}',
+            id=f'audit_export_{job.id}_{ts}',
             operator=created_by or 'system',
             action='导出数据集',
             target=task_type_id,
@@ -187,6 +329,7 @@ class DatasetExportService:
                 'taskTypeId': j.task_type_id,
                 'exportFormat': j.export_format,
                 'episodeCount': j.episode_count,
+                'filters': json.loads(j.filters_json or '{}'),
                 'createdBy': j.created_by,
                 'createdAt': j.created_at.isoformat() if j.created_at else None,
             }

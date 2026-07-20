@@ -80,6 +80,9 @@ A → B1 + B2 + B3 → C → F → D → G → E
 - 标注结果的内部存储格式与导出格式解耦：PostgreSQL 存内部模型，LeRobot 格式通过导出转换器生成
 - 标注训练语义固定为 TaskType 版本化 Sub Goal Schema；VLM 仅对固定 Definition 生成 occurrence 时间对齐，reviewer 不创建自由 Segment 标签。任务行为 `task_outcome` 与数据质量 `final_dataset_status` 分离，数据质量合格的失败 Episode 是正式标注与训练样本
 - 标注不新增 `annotator` 角色；沿用现有单角色体系，reviewer 处理本人标注任务，后台 worker 负责自动预标注
+- 训练数据集页面只保留一套统一导出：导出 active scope 内全部 `final_dataset_status = QUALIFIED` 的 Episode；标注完成度是每条 Episode 的增强属性，不构成第二道导出门禁
+- 统一导出必须明确 `annotation_completed`、标注状态、可选 immutable revision/Schema/payload 与 `training_default_included`；未标注数据仍导出基础资产信息，绝不以当前草稿作为训练事实
+- 训练默认子集为完成标注且存在当前 immutable revision 的 Episode，包含 `failed`，默认排除 `uncertain`；完整导出快照按 job/item 固化，后续编辑不得改变历史导出内容
 
 ## 数据总库资产画像升级 — 已确认业务逻辑
 

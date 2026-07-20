@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from app.services.annotation import (
     publish_schema,
     save_draft,
 )
+from app.services.dataset_service import DatasetExportService
 
 
 class AnnotationServiceTests(unittest.TestCase):
@@ -179,6 +181,53 @@ class AnnotationServiceTests(unittest.TestCase):
             self.assertEqual(stats['byStatus'], {'pending': 1})
             self.assertEqual(stats['completionRate'], 0)
             self.assertEqual(task.task_type_id, 'task_type_pick')
+
+    def test_dataset_export_requires_completed_annotation_and_snapshots_revision(self) -> None:
+        with self.SessionLocal() as db:
+            admin = db.get(User, 'user_admin')
+            reviewer = db.get(User, 'user_reviewer')
+            schema = self.create_published_schema(db, admin)
+            task = ensure_task_for_episode(db, db.get(Episode, 'episode_qualified'))
+            task.assigned_to = reviewer.id
+            acquire_lock(db, task, reviewer)
+            save_draft(db, task, reviewer, {
+                'rowVersion': task.row_version,
+                'canonicalInstructionEn': 'Pick the object',
+                'taskOutcome': 'completed_normally',
+                'occurrences': [{
+                    'definitionId': schema.definitions[0].id,
+                    'occurrenceNo': 1,
+                    'status': 'observed',
+                    'startStep': 1,
+                    'endStepExclusive': 5,
+                    'representativeStep': 3,
+                }],
+            })
+            revision = complete_task(db, task, reviewer)
+            db.commit()
+
+            content, mime, count, filters = DatasetExportService.prepare_export(
+                db, 'task_type_pick', 'json'
+            )
+            rows = json.loads(content)
+            self.assertEqual(mime, 'application/json')
+            self.assertEqual(count, 1)
+            self.assertEqual(rows[0]['annotationRevision']['id'], revision.id)
+            self.assertEqual(rows[0]['annotationRevision']['contentHash'], revision.content_hash)
+            self.assertEqual(rows[0]['annotationSchema']['id'], task.sub_goal_schema_id)
+            self.assertEqual(filters['qualificationGate'][0], "episode.final_dataset_status = 'QUALIFIED'")
+            self.assertEqual(filters['annotationRevisionSnapshots'][0]['annotation_revision_no'], 1)
+
+            DatasetExportService.record_export(
+                db, 'task_type_pick', 'json', count, created_by='Admin', filters=filters
+            )
+            history = DatasetExportService.export_history(db, 'task_type_pick')
+            self.assertEqual(history[0]['filters']['annotationRevisionSnapshots'][0]['annotation_revision_id'], revision.id)
+
+    def test_dataset_export_rejects_qualified_episode_without_annotation_revision(self) -> None:
+        with self.SessionLocal() as db:
+            with self.assertRaisesRegex(ValueError, 'completed annotation revision'):
+                DatasetExportService.prepare_export(db, 'task_type_pick', 'csv')
 
 
 if __name__ == '__main__':

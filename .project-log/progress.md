@@ -31,6 +31,35 @@
   - historical SQLite migration reached `20260718_0027`
 - Next step: commit this version, rebuild Compose images, then implement and validate Schema operations, bulk task generation, assignment/workload operations, and the training-export gate.
 
+## 2026-07-20 10:02 CST — 代码进度盘点 + task-list 建立
+
+- Type: planning / progress audit
+- Status: done for audit; implementation next
+- Objective: 对照统一导出业务逻辑盘点代码落地进度，建立可执行 task-list，commit 备份后再改代码。
+- Work completed:
+  - 审计确认 Annotation V1 主链路已完成；统一导出业务逻辑文档已收口。
+  - 确认当前 WIP 导出实现方向错误：强制 completed annotation 才允许导出，与正式规则冲突。
+  - 新建 `.project-log/task-list.md`，列出 T00–T12，明确 done / wrong / todo 与验收标准。
+- Next steps: T01 commit 备份 → T02 重构统一 QUALIFIED 导出门禁。
+
+## 2026-07-20 CST — 统一质检合格数据导出业务逻辑收口
+
+- Type: business logic decision
+- Status: confirmed, implementation pending
+- Objective: 消除“普通导出”与“带标注训练集导出”是否应为两个入口的歧义，确定 QC -> 标注 -> 训练数据消费的统一数据集语义。
+- Decision: 保留一套统一的质检合格数据导出。范围为 active scope 内全部 `final_dataset_status = QUALIFIED` Episode；标注完成度作为 Episode 增强字段导出，不构成排除未标注 Episode 的第二道门禁。
+- Business logic impact:
+  - 训练数据集卡片改为“质检合格 / 完成标注”，完成标注须同时满足 `work_status=completed` 与当前 immutable revision 存在。
+  - 未完成标注的数据导出基础 QC/资产信息，`annotation_completed=false`，annotation/revision/Schema/payload 为 `null`。
+  - 已完成项导出 immutable revision、Schema 和 `task_outcome`；`failed` 默认训练包含，`uncertain` 完成但默认训练排除。
+  - `DatasetExportJob` + `dataset_export_items` 保存每条 Episode 的历史快照；导出 worker 不得重读当前草稿。
+  - 主训练产物为 JSONL + manifest + Schema 快照，CSV 仅供审计；LeRobot 经转换器产生。
+- Problems encountered: 先前实验曾将现有唯一导出接口收紧为已完成标注门禁，会破坏既有普通 QC 合格数据导出语义，因此未提交。
+- Resolution: 已确认采用统一导出与可选标注增强模型；实验代码必须重构或撤销后才能继续实现。
+- Verification: 已审阅并更新 `annotation-v1-final-decisions.md`、`annotation-v1.md`、`annotation-sub-goals-v1.md`、`main.md`、`constraints.md`、`decision-records.md` 与 `current-session.md`。
+- Unverified items: API、数据表 migration、导出 worker、前端列/卡片和真实 PostgreSQL/MinIO 链路尚未实现。
+- Next steps: 将未提交的错误门禁实验重构为统一导出；新增 job/item 快照 schema、JSONL manifest 输出、行级标注状态和回归测试。
+
 ## 2026-07-18 CST
 
 - Type: feature

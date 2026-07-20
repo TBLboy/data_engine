@@ -626,6 +626,8 @@ export interface DatasetTaskSummary {
   propagatedFailCount: number
   overrideManualPassFailCount: number
   exportableEpisodeCount: number
+  annotationCompletedEpisodeCount: number
+  annotationPendingEpisodeCount: number
 }
 
 export interface DatasetBatchRow {
@@ -670,6 +672,22 @@ export interface DatasetExportJob {
   taskTypeId: string
   exportFormat: string
   episodeCount: number
+  filters: {
+    qualificationGate?: string[]
+    taskTypeId?: string
+    batchIds?: string[]
+    episodeCount?: number
+    annotationRevisionSnapshots?: Array<{
+      episode_id: string
+      annotation_task_id: string
+      annotation_revision_id: number
+      annotation_revision_no: number
+      annotation_revision_hash: string
+      annotation_schema_id: string
+      annotation_schema_version: number
+      annotation_schema_hash: string
+    }>
+  }
   createdBy: string | null
   createdAt: string | null
 }

@@ -2168,12 +2168,25 @@ def dataset_export_episodes(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """导出合格 episode 清单."""
+    """导出通过 QC 且已完成最终标注 revision 的 episode 清单."""
     from app.services.dataset_service import DatasetExportService
     fmt = payload.get('format', 'csv')
     batch_ids = payload.get('batchIds') or None
-    content, mime_type, count = DatasetExportService.export_episodes(db, task_type_id, fmt, batch_ids=batch_ids)
-    DatasetExportService.record_export(db, task_type_id, fmt, count, created_by=current_user.name)
+    try:
+        content, mime_type, count, filters = DatasetExportService.prepare_export(
+            db, task_type_id, fmt, batch_ids=batch_ids
+        )
+        DatasetExportService.record_export(
+            db,
+            task_type_id,
+            fmt,
+            count,
+            created_by=current_user.name,
+            filters=filters,
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return StreamingResponse(
         io.BytesIO(content),
         media_type=mime_type,

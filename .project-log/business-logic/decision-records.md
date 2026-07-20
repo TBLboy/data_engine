@@ -44,6 +44,23 @@
   - 初始 VLM 标注可自动写入空白草稿；所有重生成结果必须先展示候选差异，再由用户显式应用。
 - Full spec: `.project-log/business-logic/annotation-v1-final-decisions.md`
 
+### 2026-07-20 — 统一质检合格数据导出与标注增强字段
+
+- Decision: 训练数据集管理页面与 API 保持一套“质检合格数据导出”能力。导出范围固定为 active scope 中全部 `final_dataset_status = QUALIFIED` Episode；标注完成不是第二道导出门禁，而是每条 Episode 随同导出的可选增强信息。
+- Context: 旧文档把“普通数据导出”和“带标注训练集导出”描述为两类产品能力，但现有页面、接口和用户操作均只有一套导出入口。直接把既有导出接口收紧为“必须完成标注”会破坏数据盘点、迁移和非语言训练的既有用途；拆成两个入口则会使同一 QC 合格资产出现不必要的双重产品概念。
+- Reason: 以 QC 合格 Episode 作为唯一资产集合，标注作为可追溯增强字段，既保留统一资产视图，也允许下游训练按标注状态、outcome 与 Schema 精确过滤。未完成标注的数据不会被误丢弃，已完成标注的数据也不会与基础资产分离。
+- Implementation detail:
+  - 页面核心卡片显示“质检合格 / 完成标注”及标注覆盖率；表格增加是否完成标注和可诊断状态。
+  - 统一导出包含全部 QC 合格 Episode。未完成项输出基础 QC/资产信息以及 `annotation_completed=false`；完成项输出 immutable revision、Schema、payload、`task_outcome` 和 `training_default_included`。
+  - `failed` 默认进入训练子集；`uncertain` 视为完成标注但默认不进入训练子集，需下游显式选择。
+  - 导出使用 `DatasetExportJob` + `dataset_export_items` 固化所有 Episode 的当时快照；完成标注项绑定 revision 与 Schema，未完成项保存状态及空标注引用。`filters_json` 仅保存筛选条件。
+  - 训练主产物为 JSONL 数据包及 manifest/Schema 快照；CSV 作为人工审计格式；LeRobot 通过转换器适配。
+- Alternatives considered:
+  - 将既有导出直接收紧为仅已完成标注：拒绝，会破坏普通 QC 合格数据用途。
+  - 将普通导出和带标注导出拆成两个用户入口：拒绝，当前产品采用统一资产集合和单入口导出。
+- Impacted nodes: D2、G、E
+- Status: active; implementation pending
+
 ### 2026-07-18 — VLM 初始标注改为后台流水线默认触发
 
 - Decision: 新合格 Episode 不再等待 reviewer 逐条点击“自动标注”。后台按固定周期扫描满足资格且尚无初始 generation job 的 Episode，默认在北京时间午夜后的低峰窗口按 TaskType 批量创建初始 VLM job。`admin` / `qc_manager` 可按 TaskType、Batch 或筛选范围手动批量启动、补漏、失败重试和重跑；reviewer 仅可对本人工作池批量补漏，不承担逐条启动职责。

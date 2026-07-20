@@ -144,8 +144,9 @@ async function doExport(format: string) {
     link.click()
     URL.revokeObjectURL(url)
     ElMessage.success('导出完成')
-  } catch {
-    ElMessage.error('导出失败')
+  } catch (error) {
+    const message = error instanceof Error && error.message ? error.message : '导出失败'
+    ElMessage.error(message.includes('没有满足导出门禁') ? message : '导出失败')
   } finally {
     exportLoading.value = false
   }
@@ -276,7 +277,17 @@ onMounted(async () => {
               <el-descriptions-item label="推断合格 (未抽检)">{{ summary.inferredPassCount }}</el-descriptions-item>
               <el-descriptions-item label="连带不合格 (批次驳回)">{{ summary.propagatedFailCount }}</el-descriptions-item>
               <el-descriptions-item label="人工合格但批次驳回">{{ summary.overrideManualPassFailCount }}</el-descriptions-item>
+              <el-descriptions-item label="已完成标注">{{ summary.annotationCompletedEpisodeCount }}</el-descriptions-item>
+              <el-descriptions-item label="待完成标注">{{ summary.annotationPendingEpisodeCount }}</el-descriptions-item>
             </el-descriptions>
+            <el-alert
+              v-if="summary.annotationPendingEpisodeCount > 0"
+              type="warning"
+              :closable="false"
+              show-icon
+              title="导出门禁未满足：所有 QUALIFIED Episode 必须先完成标注任务。"
+              style="margin-top: 14px"
+            />
           </el-card>
         </el-col>
       </el-row>
